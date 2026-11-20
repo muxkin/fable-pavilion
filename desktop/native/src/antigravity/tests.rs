@@ -587,8 +587,10 @@ fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_pat
     let listed = export::list_workspace_files(std::slice::from_ref(&workspace), "");
     assert_eq!(listed, vec![json!({"name":"main.rs","path":"src/main.rs"})]);
 
+    let report_uri = url::Url::from_file_path(&report).unwrap();
+    let outside_uri = url::Url::from_file_path(&outside_file).unwrap();
     let steps = vec![
-        json!({"plannerResponse":{"response":format!("See [report]({}) and [outside]({})", report.display(), outside_file.display())}}),
+        json!({"plannerResponse":{"response":format!("See [report]({report_uri}) and [outside]({outside_uri})")}}),
         json!({"type":"CORTEX_STEP_TYPE_VIEW_FILE","viewFile":{"absolutePath":workspace.join("src/main.rs")}}),
         json!({"type":"CORTEX_STEP_TYPE_VIEW_FILE","viewFile":{"absolutePath":workspace.join(".env")}}),
     ];
