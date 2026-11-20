@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" content="#ffffff" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/app-icons/wuyou-32.png" vite-ignore />
+    <link rel="apple-touch-icon" sizes="192x192" href="/app-icons/wuyou-192.png" vite-ignore />
+    <link rel="manifest" href="/manifest.webmanifest" vite-ignore />
+    <title>子虚亭 · Fable Pavilion</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      #app-startup {
+        --entry-bg: #fff;
+        --entry-text: #24343a;
+        --entry-accent: #2b665d;
+        --entry-on-accent: #fff;
+        --entry-rule: #74948b;
+        min-height: 100vh;
+        min-height: 100dvh;
+        padding: 56px 22px 28px;
+        padding: clamp(40px, 14dvh, 150px) 22px 28px;
+        box-sizing: border-box;
+        background: var(--entry-bg);
+        color: var(--entry-text);
+        font:
+          16px/1.55 system-ui,
+          sans-serif;
+        text-align: center;
+      }
+      @media (prefers-color-scheme: dark) {
+        #app-startup {
+          --entry-bg: #172329;
+          --entry-text: #f6f2ea;
+          --entry-accent: #8cc9bb;
+          --entry-on-accent: #102e29;
+          --entry-rule: #8b9f9b;
+          color-scheme: dark;
+        }
+      }
+      #app-startup > section {
+        max-width: 660px;
+        margin-inline: auto;
+      }
+      #app-startup h1 {
+        margin: 0 0 12px;
+        font:
+          700 clamp(32px, 6vw, 64px)/1.2 'Noto Serif CJK SC',
+          'Songti SC',
+          SimSun,
+          serif;
+      }
+      #app-startup p {
+        margin: 12px 0;
+      }
+      #app-startup [hidden] {
+        display: none !important;
+      }
+      .startup-choices {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-top: clamp(20px, 5dvh, 44px);
+      }
+      .startup-choices > :first-child {
+        grid-column: 1 / -1;
+      }
+      #app-startup :is(button, .startup-file) {
+        min-height: 48px;
+        box-sizing: border-box;
+        padding: 9px 15px;
+        border: 1px solid var(--entry-rule);
+        border-radius: 12px;
+        background: var(--entry-bg);
+        color: inherit;
+        font:
+          650 16px/1.4 system-ui,
+          sans-serif;
+        cursor: pointer;
+      }
+      #app-startup button:disabled,
+      .startup-file:has(input:disabled) {
+        opacity: 0.62;
+        cursor: default;
+      }
+      #app-startup [data-lite-scan] {
+        min-height: 60px;
+        font-size: 19px;
+        border: 0;
+        background: var(--entry-accent);
+        color: var(--entry-on-accent);
+      }
+      #app-startup :is([data-lite-recovery], [data-lite-full]) {
+        margin-block: 8px;
+        border: 0;
+        color: var(--entry-accent);
+        text-decoration: underline;
+      }
+      .startup-file {
+        position: relative;
+        display: grid;
+        place-items: center;
+      }
+      .startup-file input {
+        position: absolute;
+        inset: 0;
+        margin: 0;
+        width: 100%;
+        cursor: inherit;
+        opacity: 0;
+      }
+      .startup-file:focus-within {
+        outline: 2px solid var(--entry-accent);
+        outline-offset: 2px;
+      }
+      #app-startup [data-lite-action] :is(video, img) {
+        max-width: 100%;
+        max-height: 42dvh;
+        display: block;
+        margin: 16px auto;
+        border-radius: 12px;
+      }
+      #app-startup [data-lite-action] input:not([type='file']) {
+        max-width: 100%;
+        box-sizing: border-box;
+        padding: 9px;
+        font: inherit;
+      }
+      #app-startup .lite-match-code {
+        display: block;
+        font:
+          700 25px/1.4 ui-monospace,
+          monospace;
+        letter-spacing: 0.1em;
+      }
+      #app-startup [data-lite-action] button + button {
+        margin-inline-start: 8px;
+      }
+      #app-startup [data-startup-status] {
+        font-size: 14px;
+      }
+      @media (max-width: 600px) {
+        .startup-choices {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <main id="app-startup" aria-labelledby="startup-heading">
+        <section>
+          <h1 id="startup-heading">登录子虚亭</h1>
+          <p>使用已登录的设备快速登录。</p>
+          <div class="startup-choices" data-lite-choices>
+            <button type="button" data-lite-scan disabled>扫描登录二维码</button>
+            <label class="startup-file" data-lite-album>
+              从相册导入
+              <input type="file" accept="image/*" aria-label="导入邀请二维码图片" disabled />
+            </label>
+            <button type="button" data-lite-app disabled>出示本机登录码</button>
+          </div>
+          <p data-lite-help>在已登录设备的「登录与安全」中出示二维码</p>
+          <button type="button" data-lite-recovery disabled>恢复账号</button>
+          <button type="button" data-lite-full disabled hidden>打开完整登录页</button>
+          <div data-lite-action></div>
+          <p data-startup-status role="status">正在连接…</p>
+          <p data-lite-closed hidden>本站暂不开放注册</p>
+          <button type="button" data-startup-retry hidden>重试连接</button>
+          <noscript><p>请启用 JavaScript 以使用加密登录。</p></noscript>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

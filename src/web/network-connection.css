@@ -1,0 +1,81 @@
+.app-shell .conversation-header .network-connection {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ui-muted);
+}
+
+.app-shell .conversation-header .network-connection:hover,
+.app-shell .conversation-header .network-connection:focus-visible {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.app-shell .conversation-header .network-connection[data-quality='direct'] {
+  color: light-dark(#08763f, #5bda99);
+}
+
+.app-shell .conversation-header .network-connection[data-quality='relay'] {
+  color: light-dark(#215c9b, #80b8fa);
+}
+
+.app-shell .conversation-header .network-connection[data-quality='poor'] {
+  color: light-dark(#8c6000, #f2c651);
+}
+
+.app-shell .conversation-header .network-connection[data-quality='offline'] {
+  color: var(--danger);
+}
+
+.network-connection-dialog {
+  max-width: 28rem;
+}
+
+.network-connection-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 12px 20px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.network-connection-details dt {
+  color: var(--ui-muted);
+}
+
+.network-connection-details dd {
+  margin: 0;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.network-connection-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.network-connection-section h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.network-connection-endpoints dd {
+  overflow-wrap: anywhere;
+}
+
+.network-connection-endpoints code {
+  font-size: 0.92em;
+}
+
+.network-connection-endpoints small {
+  display: block;
+  margin-top: 2px;
+  color: var(--ui-muted);
+}

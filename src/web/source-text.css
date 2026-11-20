@@ -1,0 +1,47 @@
+.source-text pre {
+  box-sizing: border-box;
+  inline-size: max-content;
+  min-inline-size: 100%;
+}
+.source-text pre,
+.source-text pre > code {
+  white-space: pre;
+}
+.source-text pre > code {
+  display: block;
+}
+.source-text--wrap pre {
+  inline-size: 100%;
+}
+.source-text--wrap:not(.source-text--numbered) :is(pre, pre > code),
+.source-text--wrap pre > code > .line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.source-text--numbered pre > code {
+  counter-reset: source-line;
+}
+/* Keep newline text nodes between inline-blocks so source selection retains blank lines. */
+.source-text--numbered pre > code > .line {
+  display: inline-block;
+  box-sizing: border-box;
+  position: relative;
+  min-block-size: 1lh;
+  inline-size: 100%;
+  padding-inline-start: var(--source-line-gutter);
+  vertical-align: top;
+}
+.source-text--numbered pre > code > .line::before {
+  counter-increment: source-line;
+  content: counter(source-line);
+  content: counter(source-line) / '';
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 0;
+  inline-size: calc(var(--source-line-gutter) - 1ch);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+  user-select: none;
+  pointer-events: none;
+}

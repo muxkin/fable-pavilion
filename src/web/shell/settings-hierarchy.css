@@ -1,0 +1,313 @@
+.settings-hierarchy,
+.account-profile-page {
+  --settings-width: 760px;
+  --settings-inset: 22px;
+  --settings-rule: color-mix(in srgb, var(--pavilion-ornament, var(--outline)) 54%, var(--line));
+}
+.app-shell .settings-hierarchy > .page-header,
+.account-profile-page > .page-header {
+  width: min(100%, var(--settings-width));
+  max-width: var(--settings-width);
+  margin-inline: auto;
+  padding: 22px var(--settings-inset) 18px;
+}
+.app-shell .settings-hierarchy > .page-header h1,
+.app-shell.shell-detail .settings-hierarchy > .page-header h1,
+.app-shell.shell-detail .account-profile-page > .page-header h1 {
+  margin: 0;
+  font-family: var(--pavilion-heading, serif);
+  font-size: 30px;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+.app-shell .settings-hierarchy .settings-hierarchy-content {
+  box-sizing: border-box;
+  width: min(100%, var(--settings-width));
+  min-width: 0;
+  margin: 0 auto;
+  padding: 10px var(--settings-inset) 34px;
+}
+.app-shell .settings-hierarchy .login-security-content {
+  width: min(100%, var(--settings-width));
+  padding: 10px var(--settings-inset) 34px;
+}
+.app-shell .settings-hierarchy .settings-profile-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 112px;
+  margin: 0 0 22px;
+  padding: 10px 0 24px;
+  border-bottom: 1px solid var(--settings-rule);
+}
+.app-shell .settings-hierarchy .settings-profile-card > .im-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  font-size: 28px;
+}
+.settings-profile-copy {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  text-align: left;
+}
+.app-shell .settings-hierarchy .settings-profile-copy strong {
+  font-family: var(--pavilion-heading, serif);
+  font-size: 23px;
+  font-weight: 650;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  letter-spacing: 0;
+}
+.settings-profile-copy small {
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.settings-profile-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-left: 14px;
+  border-left: 1px solid var(--settings-rule);
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.settings-section {
+  min-width: 0;
+  margin-bottom: 23px;
+}
+.settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 8px;
+  color: color-mix(in srgb, var(--pavilion-ornament, var(--muted)) 65%, var(--ink));
+  font-family: var(--pavilion-heading, serif);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.settings-section-title::after {
+  content: '';
+  flex: 1;
+  min-width: 24px;
+  height: 1px;
+  background: var(--settings-rule);
+}
+.app-shell .settings-hierarchy .settings-nav-row,
+.app-shell .settings-hierarchy .settings-nav-row:last-child {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) max-content 16px;
+  align-items: center;
+  column-gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  padding: 13px 0;
+  border: 0;
+  border-bottom: 1px solid var(--settings-rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+.app-shell .settings-hierarchy .settings-nav-row > .surface-icon {
+  display: grid;
+  grid-column: 1;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--accent);
+  background: transparent;
+}
+.app-shell .settings-hierarchy .settings-nav-row > .settings-nav-copy {
+  display: grid;
+  grid-column: 2;
+  gap: 3px;
+  min-width: 0;
+}
+.settings-nav-copy strong {
+  color: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.settings-nav-copy small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.app-shell .settings-hierarchy .settings-nav-row > .settings-nav-accessory {
+  grid-column: 3;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.app-shell .settings-hierarchy .settings-nav-row > svg:last-child {
+  grid-column: 4;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+.app-shell .settings-hierarchy .settings-nav-row:hover:not(:disabled) {
+  color: var(--accent);
+}
+.settings-usage-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-usage-pending > span {
+  width: 15px;
+  height: 15px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: settings-usage-spin 1.5s linear infinite;
+}
+.settings-inline-notice {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.settings-logout {
+  display: block;
+  min-height: 48px;
+  margin: 12px auto 0;
+  padding: 10px 20px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 600;
+}
+.settings-resource-content .im-resources {
+  padding-top: 8px;
+  border-top: 0;
+}
+.account-profile-page {
+  width: min(100%, var(--settings-width));
+  margin: 0 auto;
+}
+.account-profile-page .account-profile-content {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 20px var(--settings-inset) 34px;
+}
+.account-profile-content .im-profile-heading > div {
+  min-width: 0;
+}
+.account-profile-content .im-profile-heading :is(h2, p),
+.account-profile-content .im-user-identity code {
+  overflow-wrap: anywhere;
+}
+.account-profile-content .im-avatar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.account-profile-content .im-inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+.account-profile-content .im-inline-form label {
+  min-width: 0;
+}
+.account-profile-content .im-inline-form > button {
+  min-height: 46px;
+  padding: 10px 17px;
+}
+.credentials-section {
+  margin-bottom: 26px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--settings-rule);
+}
+.credentials-section-title {
+  margin: 0 0 12px;
+  color: var(--ink);
+  font-family: var(--pavilion-heading, serif);
+  font-size: 22px;
+  line-height: 1.5;
+}
+.credentials-description {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.credentials-password-form {
+  max-width: 520px;
+}
+.credentials-password-form input {
+  min-height: 46px;
+  font-size: 16px;
+}
+.credentials-password-form > button.primary {
+  min-height: 46px;
+  margin-top: 6px;
+}
+.credentials-link-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  margin-bottom: 12px;
+  padding: 12px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font-size: 15px;
+  line-height: 1.6;
+}
+.credentials-link-row > svg:first-child {
+  color: var(--accent);
+}
+@keyframes settings-usage-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (min-width: 741px) {
+  .settings-hierarchy,
+  .account-profile-page {
+    --settings-inset: 32px;
+  }
+}
+@media (max-width: 359px) {
+  .settings-profile-link {
+    padding-left: 8px;
+    border-left: 0;
+  }
+  .settings-profile-link > span {
+    display: none;
+  }
+  .app-shell .settings-hierarchy .settings-profile-card {
+    gap: 12px;
+  }
+  .app-shell .settings-hierarchy .settings-profile-copy strong {
+    font-size: 21px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-usage-pending > span {
+    animation: none;
+  }
+}

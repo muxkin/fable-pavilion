@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>子虚亭适配器</title>
+  <link rel="icon" type="image/png" href="/app-icon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="icon-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8m-4-4v4"/></symbol>
+    <symbol id="icon-key" viewBox="0 0 24 24"><path d="M14.5 3a6.5 6.5 0 0 0-6.1 8.8L3 17.2V21h3.8l1.7-1.7v-2h2l1.7-1.7A6.5 6.5 0 1 0 14.5 3Z"/><circle cx="16" cy="8" r="1"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20.5 9a9 9 0 0 0-15-4L3 7m0-4v4h4M3.5 15a9 9 0 0 0 15 4l2.5-2m0 4v-4h-4"/></symbol>
+    <symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2Z"/></symbol>
+    <symbol id="icon-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 7h14M5 17h14"/></symbol>
+    <symbol id="icon-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v5c0 5-4 8-8 10-4-2-8-5-8-10V6Z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="icon-code" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="7" cy="12" r=".7"/><circle cx="12" cy="12" r=".7"/><circle cx="17" cy="12" r=".7"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="1.5"/><path d="M16 8V3H4v13h4"/></symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="icon-stack" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5Zm-9 9 9 5 9-5m-18 5 9 5 9-5"/></symbol>
+    <symbol id="icon-back" viewBox="0 0 24 24"><path d="m14 5-7 7 7 7"/></symbol>
+    <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="icon-eye-off" viewBox="0 0 24 24"><path d="m3 3 18 18M9 5.5a12 12 0 0 1 3-.5c6.5 0 10 7 10 7a18 18 0 0 1-3.5 4.5M6 6.5A19 19 0 0 0 2 12s3.5 7 10 7a12 12 0 0 0 5-1M10 10a3 3 0 0 0 4 4"/></symbol>
+  </svg>
+  <main>
+    <header class="heading">
+      <span class="brand-icon"><img src="/app-icon.png" width="54" height="54" alt=""></span>
+      <h1>子虚亭适配器</h1>
+      <span id="version" class="version"></span>
+    </header>
+    <p id="notice" class="notice" role="status">正在读取适配器状态…</p>
+    <div id="panel" class="management-layout" hidden>
+      <nav class="management-nav" role="tablist" aria-label="适配器设置">
+        <button id="tab-connection" type="button" role="tab" aria-selected="true" aria-controls="connection-view"><svg class="icon" aria-hidden="true"><use href="#icon-monitor"/></svg><span>连接</span></button>
+        <button id="tab-security" type="button" role="tab" aria-selected="false" aria-controls="security-view" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#icon-key"/></svg><span>账号备份</span></button>
+        <button id="tab-runtime" type="button" role="tab" aria-selected="false" aria-controls="runtime-view" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg><span>运行与更新</span></button>
+      </nav>
+      <div class="management-content">
+        <div id="connection-view" role="tabpanel" aria-labelledby="tab-connection">
+          <section class="panel-row" aria-labelledby="connection-title">
+            <div class="section-heading"><h2 id="connection-title">连接服务</h2><span id="phase" class="status" role="status"></span></div>
+            <section id="adapter-account" class="connection-account" aria-label="电脑授权" hidden>
+              <span class="connection-account-icon"><svg class="icon" aria-hidden="true"><use href="#icon-user"/></svg></span>
+              <div class="connection-account-copy"><strong id="adapter-account-name"></strong><p id="adapter-account-identity" hidden></p></div>
+              <div class="connection-account-actions"><span id="adapter-account-state" class="account-state" role="status" hidden></span><button id="authorize" class="primary" type="button" hidden>授权电脑</button></div>
+            </section>
+            <form id="connect" hidden>
+              <div id="service-address"><label for="origin">服务地址</label><input id="origin" name="origin" type="url" placeholder="https://…" autocomplete="url" spellcheck="false" maxlength="2048" required></div>
+              <p id="sign-in-hint">在服务网站登录账号，然后确认授权这台电脑。</p>
+              <div class="actions"><button id="sign-in" type="submit" class="primary" aria-describedby="sign-in-hint">登录并授权这台电脑</button><button id="edit-origin" type="button" hidden>修改服务地址</button></div>
+            </form>
+            <div id="connected" hidden>
+              <dl class="service-meta"><dt class="visually-hidden">服务地址</dt><dd id="origin-value" class="break"></dd></dl>
+              <div class="actions"><a id="workbench" class="button" target="_blank" rel="noopener noreferrer">打开工作台</a><button id="change" class="text-action" type="button">切换服务</button></div>
+            </div>
+          </section>
+          <details id="other-connection-methods" class="panel-row">
+            <summary>其他连接方式</summary>
+            <div class="details-body">
+              <button id="bind-paired-account" type="button" hidden>关联账号</button>
+              <section id="legacy-enrollment" aria-labelledby="legacy-title" hidden>
+                <h3 id="legacy-title">使用接入密钥</h3>
+                <form id="legacy-connect-form"><label for="enrollment">接入密钥</label><input id="enrollment" name="enrollment" type="password" maxlength="512" autocomplete="off" required><button id="legacy-connect" type="submit">连接服务</button></form>
+              </section>
+              <section id="pair-section" aria-labelledby="pair-title" hidden>
+                <h3 id="pair-title">手机配对</h3><p>用手机扫描二维码，打开后连接这台电脑。</p>
+                <div id="pair-code" class="pair-code" hidden><img id="qr" width="184" height="184" alt="连接这台电脑的配对二维码" hidden><div><label for="pair-link">配对链接</label><input id="pair-link" class="break" readonly><p id="pair-expiry" class="muted"></p><button id="copy" type="button">复制链接</button></div></div>
+                <button id="pair" type="button" class="accent-outline">生成配对码</button>
+              </section>
+            </div>
+          </details>
+        </div>
+        <section id="security-view" class="offline-security" role="tabpanel" aria-labelledby="tab-security" hidden>
+          <div id="security-main">
+            <header class="offline-heading"><h2>秘钥簿</h2><p>在本机管理账号与登录凭据。</p></header>
+            <p id="security-notice" class="security-notice" role="status" hidden></p>
+            <div id="security-selector" class="security-selector" hidden><label for="security-account">对应账号</label><select id="security-account"></select></div>
+            <div id="security-empty" class="security-empty" hidden><svg class="icon" aria-hidden="true"><use href="#icon-user"/></svg><h3>还没有保存账号</h3><p id="security-empty-description">同步已登录的子虚亭账号，即可在本机查看动态码。凭据会自动加密保存，无需另设口令。</p><button id="sync-keybook" class="primary" type="button">同步账号凭据</button></div>
+            <div id="security-account-content" hidden>
+              <section class="offline-account" aria-label="对应账号">
+                <div class="offline-account-details"><svg class="icon" aria-hidden="true"><use href="#icon-user"/></svg><div><strong id="security-name"></strong><p id="security-identity"></p></div><svg class="icon" aria-hidden="true"><use href="#icon-globe"/></svg><p id="security-origin" class="break"></p></div>
+                <div class="offline-protection"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg><span id="security-protection-label"></span></div>
+              </section>
+              <section class="offline-secret-row" aria-labelledby="offline-code-title">
+                <div class="offline-secret-label"><svg class="icon" aria-hidden="true"><use href="#icon-code"/></svg><h3 id="offline-code-title">登录动态码</h3></div>
+                <div class="offline-code-value"><span id="offline-code" class="secret-mask" aria-label="动态码已隐藏">••• •••</span><span id="offline-timer" class="offline-timer" hidden><svg viewBox="0 0 40 40" aria-hidden="true"><circle class="timer-track" cx="20" cy="20" r="17"/><circle id="offline-timer-ring" class="timer-progress" cx="20" cy="20" r="17" pathLength="100"/></svg><span id="offline-seconds"></span></span></div>
+                <div class="offline-secret-actions"><button id="view-code" class="accent-outline compact" type="button">查看</button><button id="copy-code" class="icon-action" type="button" aria-label="复制动态码" hidden><svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg></button></div>
+              </section>
+              <section class="offline-secret-row recovery-row" aria-labelledby="offline-recovery-title">
+                <div class="offline-secret-label"><svg class="icon" aria-hidden="true"><use href="#icon-key"/></svg><h3 id="offline-recovery-title">账号恢复码</h3></div>
+                <span id="offline-recovery" class="secret-mask" aria-label="恢复码已隐藏">••••••••</span>
+                <div class="offline-secret-actions"><button id="view-recovery" class="accent-outline compact" type="button">查看</button><button id="copy-recovery" class="icon-action" type="button" aria-label="复制恢复码" hidden><svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg></button></div>
+              </section>
+              <div class="offline-help"><p><svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg><span>使用动态码时，请保持电脑时间准确。</span></p></div>
+              <footer class="offline-updated"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg><span>最近更新</span><time id="security-updated"></time></footer>
+            </div>
+            <div class="keybook-footer-actions"><button id="manage-backup" class="accent-outline compact" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#icon-stack"/></svg>管理秘钥簿</button></div>
+            <section id="backup-management" class="backup-management" aria-labelledby="keybook-management-title" hidden>
+              <h3 id="keybook-management-title">管理秘钥簿</h3>
+              <p id="managed-account" class="managed-account"></p>
+              <p id="security-protection-detail"></p>
+              <p id="recovery-source" class="recovery-source" hidden></p>
+              <div id="keybook-account-actions" class="keybook-management-actions"><button id="edit-recovery" type="button">补充恢复码</button><button id="remove-entry" class="danger-action" type="button">移除此条目</button><button id="sync-keybook-again" type="button">同步账号凭据</button></div><div id="legacy-protection-actions" class="keybook-management-actions" hidden><button id="unlock-keybook" type="button">解锁秘钥簿</button><button id="automatic-backup" class="accent-outline" type="button">取消额外口令</button><button id="lock-backup" type="button">锁定秘钥簿</button></div>
+              <form id="manual-recovery-form" class="manual-recovery-form" hidden>
+                <h4>保存账号恢复码</h4>
+                <p id="recovery-editor-account" class="managed-account"></p>
+                <label for="manual-recovery">完整账号恢复码</label>
+                <div class="passphrase-field"><input id="manual-recovery" name="recoveryCode" type="password" autocomplete="off" spellcheck="false" maxlength="256" aria-describedby="manual-recovery-help" required><button id="show-manual-recovery" class="icon-action" type="button" aria-label="显示输入的恢复码"><svg class="icon" aria-hidden="true"><use href="#icon-eye"/></svg></button></div>
+                <p id="manual-recovery-help">输入你保存的完整账号恢复码，不是 6 位动态码。手动保存会替换此账号在本机记录的恢复码，不会修改账号密码或云端凭据。</p>
+                <p id="manual-recovery-notice" class="security-notice" role="status" hidden></p>
+                <div class="actions"><button id="save-manual-recovery" class="primary" type="submit">保存到本机</button><button id="cancel-manual-recovery" type="button">取消</button></div>
+              </form>
+            </section>
+            <p class="keybook-local-note">保存后的凭据断网可用，无需登录子虚亭。</p>
+          </div>
+          <section id="security-protection-form" class="offline-protection-form" aria-labelledby="protection-title" hidden>
+            <header class="protection-heading"><button id="protection-back" class="icon-action" type="button" aria-label="返回秘钥簿"><svg class="icon" aria-hidden="true"><use href="#icon-back"/></svg></button><h2 id="protection-title">解锁旧版秘钥簿</h2></header>
+            <p id="protection-description">输入此前设置的本地口令，解锁已有凭据。解锁后可取消额外口令，改为自动本机加密。</p>
+            <div id="protection-account" class="protection-account" hidden><svg class="icon" aria-hidden="true"><use href="#icon-user"/></svg><div><strong id="protection-account-name"></strong><p id="protection-account-id"></p></div></div>
+            <form id="backup-passphrase-form">
+              <label for="backup-passphrase">本地秘钥簿口令</label><div class="passphrase-field"><input id="backup-passphrase" name="passphrase" type="password" autocomplete="current-password" minlength="12" maxlength="256" required><button class="icon-action passphrase-visibility" type="button" aria-label="显示本地秘钥簿口令" data-input="backup-passphrase"><svg class="icon" aria-hidden="true"><use href="#icon-eye"/></svg></button></div>
+              <p class="protection-local-hint"><svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg><span>这是旧版设置的额外口令，不是子虚亭账号密码。</span></p>
+              <p id="passphrase-notice" class="security-notice" role="status" hidden></p><button id="save-passphrase" class="primary" type="submit">解锁秘钥簿</button><button id="cancel-passphrase" type="button">返回</button>
+            </form>
+          </section>
+        </section>
+        <div id="runtime-view" role="tabpanel" aria-labelledby="tab-runtime" hidden>
+          <section class="panel-row" aria-labelledby="update-title"><h2 id="update-title">更新</h2><p id="update-state" role="status"></p><div class="actions"><button id="check" type="button">检查更新</button><button id="install" type="button" class="primary" hidden>立即更新</button></div></section>
+          <section class="panel-row" aria-labelledby="runtime-title"><h2 id="runtime-title">运行</h2><form id="startup-form" hidden><label class="startup-control"><span>登录后自动启动</span><input id="startup" type="checkbox" role="switch"></label></form><details class="diagnostics-panel"><summary>设置和诊断</summary><div class="details-body"><form id="update-form" hidden><label class="checkbox"><input id="automatic" type="checkbox"> 自动安装已签名的更新</label><label for="update-base">自定义更新地址 <span class="muted">可选</span></label><input id="update-base" type="url" placeholder="留空以使用默认更新源" maxlength="4096" spellcheck="false"><button type="submit">保存更新设置</button></form><dl class="diagnostics"><div><dt>本机历史</dt><dd id="history"></dd></div><div><dt>受管 Agent</dt><dd id="agents"></dd></div><div><dt>设备通道</dt><dd>Noise 加密 · WebSocket</dd></div></dl><div class="actions"><button id="copy-diagnostics" type="button">复制诊断</button><button id="quit" type="button">退出适配器</button></div><textarea id="diagnostics-text" aria-label="诊断信息" readonly hidden></textarea></div></details></section>
+        </div>
+      </div>
+    </div>
+    <dialog id="remove-entry-dialog" class="keybook-dialog" aria-labelledby="remove-entry-title" aria-describedby="remove-entry-description">
+      <h2 id="remove-entry-title">移除此条目？</h2>
+      <p id="remove-entry-account" class="managed-account"></p>
+      <p id="remove-entry-description">只从此设备的秘钥簿移除，不会删除账号，也不影响云端数据、其他设备或电脑授权。</p>
+      <p id="remove-entry-notice" class="security-notice" role="status" hidden></p>
+      <div class="actions"><button id="cancel-remove-entry" type="button" autofocus>取消</button><button id="confirm-remove-entry" class="danger-action" type="button">移除本机条目</button></div>
+    </dialog>
+    <footer id="adapter-footer">关闭此页面后，适配器会继续在后台运行。</footer>
+  </main>
+</body>
+</html>

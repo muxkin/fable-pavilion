@@ -1,0 +1,19 @@
+.qr-scanner .qr-scanner-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: var(--pair-control-height, 44px);
+  line-height: 1.4;
+  text-align: center;
+}
+.qr-scanner-action > svg {
+  display: block;
+  flex: 0 0 auto;
+}
+.qr-scanner-action-label {
+  min-width: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}

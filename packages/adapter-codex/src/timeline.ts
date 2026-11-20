@@ -1,0 +1,297 @@
+import { timelineEvent, turnTiming } from './timeline-events.js';
+import { codexPermissionState } from './codex-permissions.js';
+import { userAttachments } from './user-content.js';
+import { asyncRequests, asyncQuestionRequest, userMessageText } from './async-questions.js';
+import type { Message, ThreadView, ConversationRequest } from '../../../src/shared/types.js';
+import {
+  codexAnswer,
+  codexNativeMemory,
+  isCodexGeneratedUserContext,
+  codexVisibleUserInput,
+} from '../../../src/shared/codex-transcript.js';
+import { itemMedia, mediaReference } from '../../../src/server/content-media.js';
+import { normalizeRequest } from './approvals.js';
+
+type Json = Record<string, any>;
+/** Desktop canonical history consists of ordered islands referencing entities. */
+export function orderedEntities(value: any): Json[] {
+  if (Array.isArray(value)) return value.filter((x) => x && typeof x === 'object');
+  if (!value || typeof value !== 'object') return [];
+  if (value.kind === 'canonical') return orderedEntities(value.history);
+  const entities = value.entitiesByKey;
+  if (!entities || !Array.isArray(value.islands)) return [];
+  const seen = new Set<string>();
+  const result: Json[] = [];
+  for (const island of value.islands)
+    for (const entry of island.entries ?? []) {
+      const key = entry.value;
+      if (typeof key === 'string' && !seen.has(key) && entities[key]) {
+        seen.add(key);
+        result.push(entities[key]);
+      }
+    }
+  return result;
+}
+export function turnsOf(state: Json): Json[] {
+  return state.turnHistory?.kind === 'canonical'
+    ? orderedEntities(state.turnHistory)
+    : orderedEntities(state.turns);
+}
+export function textOf(content: any): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((x) => ['text', 'input_text', 'output_text'].includes(x?.type) && typeof x.text === 'string')
+    .map((x) => x.text)
+    .join('\n');
+}
+function userInputOf(item: Json, input = item.content ?? item.input ?? item.text) {
+  return codexVisibleUserInput(
+    input,
+    item.internal_chat_message_metadata_passthrough ?? item.internalChatMessageMetadataPassthrough,
+  );
+}
+export function skillsOf(content: any): string[] {
+  return Array.isArray(content)
+    ? content.filter((i) => i?.type === 'skill' && typeof i.name === 'string').map((i) => i.name)
+    : [];
+}
+export function pluginsOf(content: any): string[] {
+  return Array.isArray(content)
+    ? content
+        .filter((i) => i?.type === 'mention' && typeof i.name === 'string' && i.path?.startsWith('plugin://'))
+        .map((i) => i.name)
+    : [];
+}
+export function requestsOf(state: Json): ConversationRequest[] {
+  const rows = Array.isArray(state.requests) ? state.requests : Object.values(state.requests ?? {});
+  const items = turnsOf(state).flatMap((turn) => orderedEntities(turn.items));
+  return [
+    ...rows
+      .filter((request: any) => !request.completed)
+      .map((request: any) => normalizeRequest(request, items)),
+    ...asyncRequests(
+      turnsOf(state).map((turn) => ({
+        id: turn.turnId ?? turn.id,
+        input: textOf(turn.params?.input),
+        items: orderedEntities(turn.items),
+      })),
+      textOf,
+    ),
+  ];
+}
+export function messagesOf(state: Json, full = false): Message[] {
+  const messages: Message[] = [];
+  for (const turn of turnsOf(state)) {
+    const turnStart = messages.length;
+    const turnId = turn.turnId ?? turn.id;
+    const items = orderedEntities(turn.items);
+    let finalReply: Message | undefined;
+    // The opening input belongs before the assistant, including partial snapshots.
+    const openingInput = turn.params && userInputOf(turn.params, turn.params.input);
+    const opening = textOf(openingInput);
+    const openingMedia = itemMedia(openingInput);
+    if (
+      (opening || openingMedia.length) &&
+      !isCodexGeneratedUserContext(opening) &&
+      !items.some((item) => {
+        if (item.type !== 'userMessage') return false;
+        const input = userInputOf(item);
+        const text = textOf(input);
+        return !isCodexGeneratedUserContext(text) && (!!text || itemMedia(item).length > 0);
+      })
+    ) {
+      messages.push({
+        id: `${turnId}:input`,
+        role: 'user',
+        text: userMessageText(opening),
+        attachments: userAttachments(opening, openingMedia),
+        turnId,
+        clientMessageId: turn.params?.clientUserMessageId,
+        skills: skillsOf(openingInput),
+        plugins: pluginsOf(openingInput),
+      });
+    }
+    for (const [index, item] of items.entries()) {
+      const type = item.type;
+      if (type === 'reasoning' || (type === 'subAgentActivity' && item.kind === 'interacted')) continue;
+      const event = timelineEvent(item, `${turnId}:${index}`, turnId);
+      if (event) {
+        messages.push(event);
+        continue;
+      }
+      const user = type === 'userMessage' || type === 'steeringUserMessage';
+      const input = user ? userInputOf(item) : undefined;
+      const media = itemMedia(item);
+      for (const [number, source] of (user ? [] : media).entries())
+        messages.push({
+          id: `${item.id ?? `${turnId}:${index}`}:media:${number}`,
+          role: type === 'imageView' ? 'tool' : 'assistant',
+          text: `![${type === 'imageView' ? '查看的图片' : '会话附件'}](<${mediaReference(source).replace(/</g, '%3C').replace(/>/g, '%3E')}>)`,
+          turnId,
+        });
+      let role: Message['role'];
+      let text = '';
+      let attachments: Message['attachments'];
+      let codex: Message['codex'];
+      if (user) {
+        role = 'user';
+        const raw = textOf(input);
+        if (!isCodexGeneratedUserContext(raw)) {
+          text = userMessageText(raw);
+          attachments = userAttachments(raw, media);
+        }
+      } else if (type === 'agentMessage') {
+        role = 'assistant';
+        const answer = codexAnswer(textOf(item.text ?? item.content), turn.status === 'inProgress');
+        text = answer.text;
+        codex = answer.codex ?? codexNativeMemory(item.memoryCitation ?? item.memory_citation);
+        const question = asyncQuestionRequest(item, turnId);
+        if (question)
+          text += `${text ? '\n\n' : ''}${question.questions!.map((q) => q.question).join('\n\n')}`;
+      } else if (
+        ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch'].includes(type)
+      ) {
+        role = 'tool';
+        text =
+          type === 'commandExecution'
+            ? `命令 · ${String(item.command ?? '').slice(0, 240)}`
+            : `工具 · ${item.tool ?? type}`;
+        text += ` · ${item.status ?? '执行中'}`;
+      } else if (type === 'imageGeneration' || (type === 'imageView' && media.length)) continue;
+      else if (type === 'userInputResponse') {
+        role = 'tool';
+        text = '问题回答';
+      } else {
+        role = 'tool';
+        text = `${type ?? '活动'} · ${item.status ?? '已记录'}`;
+      }
+      if (text || attachments?.length || codex) {
+        const message: Message = {
+          id: String(item.id ?? `${turnId}:${index}`),
+          role,
+          text,
+          codex,
+          attachments,
+          skills: role === 'user' ? skillsOf(input ?? openingInput) : undefined,
+          plugins: role === 'user' ? pluginsOf(input ?? openingInput) : undefined,
+          turnId,
+          clientMessageId:
+            item.clientId ??
+            item.clientUserMessageId ??
+            (type === 'userMessage' ? turn.params?.clientUserMessageId : undefined),
+          phase: item.phase,
+          deferred: !full && role === 'tool' ? true : undefined,
+          changes:
+            full && type === 'fileChange' && Array.isArray(item.changes)
+              ? item.changes.map((c: any) => ({
+                  path: String(c.path ?? ''),
+                  kind: String(c.kind?.type ?? c.kind ?? 'update'),
+                  diff: String(c.diff ?? ''),
+                }))
+              : undefined,
+          output:
+            full && type === 'commandExecution'
+              ? String(item.aggregatedOutput ?? item.output ?? '')
+              : undefined,
+          details:
+            full && role === 'tool'
+              ? JSON.stringify(
+                  item,
+                  (key, value) =>
+                    [
+                      'encrypted_content',
+                      'reasoning',
+                      'reasoningText',
+                      'summary',
+                      'token',
+                      'accessToken',
+                    ].includes(key)
+                      ? undefined
+                      : key === 'data' && typeof value === 'string' && value.length > 4096
+                        ? '[附件单独展示]'
+                        : value,
+                  2,
+                )
+              : undefined,
+        };
+        messages.push(message);
+        if (user) finalReply = undefined;
+        if (type === 'agentMessage' && (item.phase === 'final_answer' || !item.phase)) finalReply = message;
+      }
+    }
+    if (finalReply && turn.status === 'completed' && typeof turnId === 'string')
+      finalReply.turnBoundary = true;
+    if (typeof turnId === 'string') {
+      const timing = turn.status === 'inProgress'
+        ? turnTiming(turnId, turn.startedAt)
+        : turnTiming(turnId, undefined, turn.durationMs);
+      if (timing) {
+        const firstOutput = messages.slice(turnStart).findIndex((message) => message.role !== 'user');
+        messages.splice(firstOutput < 0 ? messages.length : turnStart + firstOutput, 0, timing);
+      }
+    }
+  }
+  return messages.slice(-500).map((message) => {
+    if (full || (message.text.length <= 100000 && (message.details?.length ?? 0) <= 100000)) return message;
+    return {
+      ...message,
+      text: message.text.slice(0, 100000),
+      details: message.details?.slice(0, 100000),
+      truncated: true,
+    };
+  });
+}
+export function normalizedView(state: Json, revision: number, writable: boolean): ThreadView {
+  const turns = turnsOf(state);
+  const active = turns.findLast((t) => t.status === 'inProgress');
+  const runtimeStatus = state.threadRuntimeStatus?.type ?? (active ? 'active' : 'idle');
+  const activeTurnId = active?.turnId ?? active?.id ?? null;
+  const last = active ? orderedEntities(active.items).at(-1) : undefined;
+  const running = ['inProgress', 'in_progress', 'running'].includes(last?.status);
+  let codexActivity: ThreadView['codexActivity'];
+  if (active) {
+    if (running && ['contextCompaction', 'ContextCompaction'].includes(last?.type))
+      codexActivity = 'compacting';
+    else if (last?.type === 'agentMessage' && last.phase === 'final_answer') codexActivity = 'responding';
+    else if (running && ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch'].includes(last?.type))
+      codexActivity = 'tool';
+    else codexActivity = 'thinking';
+  }
+
+  const pendingRequests = Array.isArray(state.requests)
+    ? state.requests.length
+    : Object.keys(state.requests ?? {}).length;
+  const canSend = writable && runtimeStatus === 'idle' && !active && pendingRequests === 0;
+  return {
+    id: state.id,
+    title: state.title ?? '未命名会话',
+    cwd: state.cwd ?? '',
+    updatedAt: typeof state.updatedAt === 'number' ? state.updatedAt : Date.parse(state.updatedAt) || 0,
+    revision,
+    owner: true,
+    synchronized: true,
+    messages: messagesOf(state),
+    activeTurnId,
+    codexActivity,
+    runtimeStatus,
+    model: state.latestModel ?? null,
+    reasoningEffort: state.latestReasoningEffort ?? null,
+    serviceTier: state.latestThreadSettings?.serviceTier ?? null,
+    controls: codexPermissionState(state.latestThreadSettings),
+    pendingRequests,
+    requests: requestsOf(state),
+    mode: state.latestCollaborationMode?.mode ?? 'default',
+    canSend,
+    canInterrupt: writable && !!activeTurnId,
+    reason: !writable
+      ? '当前连接仅允许查看'
+      : pendingRequests
+        ? '任务正在等待回答或审批；可用操作见会话卡片'
+        : runtimeStatus === 'active' || active
+          ? '任务运行中；追加指令会进入当前任务，也可以中断'
+          : runtimeStatus !== 'idle'
+            ? '桌面会话尚未就绪'
+            : null,
+  };
+}

@@ -1,0 +1,26 @@
+name: Publish adapter release packages
+on:
+  push:
+    tags: ['adapters-v*']
+permissions:
+  contents: write
+  actions: read
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Retrieve the exact build already verified on all three systems
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          run_id=$(gh api "repos/$GH_REPO/actions/workflows/compatibility.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=30" --jq ".workflow_runs | map(select(.head_sha == \"$GITHUB_SHA\" and .conclusion == \"success\")) | first | .id // empty")
+          test -n "$run_id" || { echo "No successful three-system verification for this commit"; exit 1; }
+          gh run download "$run_id" --name verified-build --dir verified
+          cd verified/dist/adapters
+          sha256sum --check SHA256SUMS
+      - name: Publish independently installable packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" verified/dist/adapters/*.tgz verified/dist/adapters/SHA256SUMS --title "$GITHUB_REF_NAME" --notes "Independent SDK, Codex and DSH packages, using the exact artifacts verified on Linux, macOS and Windows. Install locally with npm run adapter -- install /path/to/release.tgz; upgrade a configured instance explicitly. Native Agents are never managed by the plugin host."

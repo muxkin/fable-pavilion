@@ -1,0 +1,270 @@
+.login-security-content {
+  --pavilion-rule: color-mix(in srgb, var(--pavilion-ornament, var(--outline)) 54%, var(--line));
+  width: min(100%, 620px);
+  margin-inline: auto;
+  padding: 24px 24px 40px;
+}
+.login-security-intro {
+  margin: 0 0 24px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.security-section + .security-section {
+  margin-top: 24px;
+}
+.security-section-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 14px;
+  font: 650 19px/1.4 var(--pavilion-heading, serif);
+}
+.security-section-title::after {
+  content: '';
+  height: 1px;
+  flex: 1;
+  background: var(--pavilion-rule, var(--line));
+}
+.security-overview,
+.security-devices {
+  min-width: 0;
+}
+.login-code-panel {
+  border: 1px solid var(--pavilion-rule, var(--outline));
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+.login-code-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.login-code-heading h3 {
+  font-size: 17px;
+  margin: 0;
+}
+.login-code-default {
+  font-size: 10px;
+  color: var(--on-soft);
+  background: var(--soft);
+  border-radius: 20px;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+.login-code-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 0 6px 6px;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  min-height: 34px;
+}
+.login-code-hint {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.login-code-display {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  justify-content: space-between;
+  margin-top: 14px;
+  min-height: 46px;
+}
+.login-code-digits {
+  font:
+    500 39px/1.2 system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  letter-spacing: 0.055em;
+  white-space: nowrap;
+  font-variant-numeric: lining-nums tabular-nums;
+  font-feature-settings:
+    'lnum' 1,
+    'tnum' 1;
+  font-kerning: none;
+}
+.login-code-countdown {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  white-space: nowrap;
+  border-left: 1px solid var(--line);
+  padding-left: 15px;
+}
+.login-code-ring {
+  width: 37px;
+  height: 37px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.login-code-ring svg {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+  fill: none;
+  stroke-width: 2.8;
+}
+.login-code-ring .ring-track {
+  stroke: var(--line);
+}
+.login-code-ring .ring-progress {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+.login-code-ring b {
+  font-size: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.login-authenticator-link {
+  display: block;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  margin-top: 18px;
+  font-size: 13px;
+}
+.security-recovery-content h3 {
+  margin: 0 0 17px;
+  font: 650 22px/1.45 var(--pavilion-heading, serif);
+}
+.security-action-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 18px 17px;
+  margin: 0 0 12px;
+  color: var(--ink);
+  text-align: left;
+  border: 1px solid var(--pavilion-rule, var(--outline));
+  border-radius: 13px;
+  background: var(--pavilion-control, transparent);
+}
+.security-action-row > svg:first-child {
+  flex: 0 0 auto;
+}
+.security-action-row > span {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+.security-action-row strong {
+  font-size: 16px;
+  font-weight: 600;
+}
+.security-action-row small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.security-action-row:hover {
+  background: var(--surface-hover);
+}
+.security-quiet-actions {
+  margin-top: 0;
+  border: 1px solid var(--pavilion-rule, var(--line));
+  border-radius: 13px;
+  overflow: hidden;
+}
+.security-quiet-actions button {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 16px;
+  min-height: 56px;
+  width: 100%;
+  text-align: left;
+  color: var(--ink);
+  font-size: 16px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--pavilion-rule, var(--line));
+  border-radius: 0;
+}
+.security-quiet-actions button:last-child {
+  border-bottom: 0;
+}
+.security-quiet-actions button > span {
+  flex: 1;
+}
+.security-scan-content {
+  display: grid;
+  gap: 20px;
+}
+.security-scan-content > p,
+.security-recovery-content p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.8;
+  margin: 0 0 23px;
+}
+.security-devices .im-trusted-list {
+  margin-block: 24px;
+}
+.security-devices .im-trusted-enroll {
+  margin-block: 20px;
+}
+.security-devices .login-code-panel {
+  margin-top: 25px;
+}
+@media (max-width: 370px) {
+  .login-security-content {
+    padding: 28px 18px 48px;
+  }
+  .login-code-panel {
+    padding: 16px 13px;
+  }
+  .login-code-digits {
+    font-size: 33px;
+  }
+  .login-code-display {
+    gap: 9px;
+  }
+  .login-code-countdown {
+    padding-left: 9px;
+    gap: 5px;
+    font-size: 10px;
+  }
+  .login-code-toggle {
+    font-size: 11px;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .login-code-ring .ring-progress {
+    transition: stroke-dasharray 0.35s linear;
+  }
+}
+
+.security-quiet-actions button small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.external-authenticator-qr {
+  display: block;
+  margin-inline: auto;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}

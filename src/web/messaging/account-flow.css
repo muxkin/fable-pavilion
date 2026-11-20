@@ -1,0 +1,257 @@
+.pavilion-flow {
+  --flow-inset: clamp(30px, 7vw, 112px);
+  --flow-top: clamp(68px, 14vh, 140px);
+  --flow-control: clamp(46px, 6vh, 62px);
+  --flow-rule: color-mix(in srgb, var(--pavilion-ornament, var(--outline)) 39%, var(--line));
+  background-color: var(--canvas);
+}
+
+.module-page.pavilion-flow {
+  max-width: none;
+  margin: 0;
+  border-inline: 0;
+}
+
+.pavilion-flow > .page-header {
+  background: transparent;
+}
+
+.account-security-page.pavilion-flow {
+  padding: 0;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  :is(#root > .pavilion-flow, .app-shell .pavilion-flow) {
+  background:
+    linear-gradient(
+      90deg,
+      var(--canvas) 0 35%,
+      color-mix(in srgb, var(--canvas) 95%, transparent) 43%,
+      color-mix(in srgb, var(--canvas) 55%, transparent) 56%,
+      transparent 77%
+    ),
+    var(--pavilion-scene) right center / cover no-repeat var(--canvas);
+}
+
+.pavilion-flow-content {
+  box-sizing: border-box;
+  width: min(38vw, 546px);
+  min-width: min(320px, calc(100% - var(--flow-inset) - 24px));
+  max-width: calc(100% - var(--flow-inset) - 24px);
+  margin-inline-start: var(--flow-inset);
+  padding-block: var(--flow-top) 32px;
+  display: grid;
+  gap: clamp(19px, 3.1vh, 33px);
+  color: var(--ink);
+}
+
+.pavilion-flow-title {
+  margin: 0;
+  font-family: var(--pavilion-heading, 'Noto Serif CJK SC', 'Songti SC', SimSun, serif);
+  font-size: clamp(33px, 3.5vw, 55px);
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.pavilion-flow-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: clamp(15px, 1.26vw, 20px);
+  line-height: 1.65;
+}
+
+.account-entry {
+  gap: clamp(20px, 3.25vh, 34px);
+}
+
+.account-entry-header {
+  display: flex;
+  align-items: center;
+  gap: clamp(13px, 1.7vw, 26px);
+}
+
+.account-entry-header h1:focus {
+  outline: none;
+}
+
+.account-entry-icon {
+  flex: none;
+  width: clamp(46px, 4.6vw, 72px);
+  height: auto;
+  border-radius: 24%;
+}
+
+.account-entry-header .account-security-symbol {
+  flex: none;
+  width: clamp(46px, 4.6vw, 72px);
+  aspect-ratio: 1;
+}
+
+.account-entry-methods {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  margin-block-start: clamp(4px, 0.8vh, 9px);
+  padding: 3px;
+  border: 1px solid var(--flow-rule);
+  border-radius: 13px;
+}
+
+.account-entry-methods button {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: clamp(6px, 0.85vw, 13px);
+  min-width: 0;
+  min-height: calc(var(--flow-control) - 12px);
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  font-size: clamp(14px, 1.2vw, 19px);
+  font-weight: 650;
+}
+
+.account-entry-methods button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.account-entry-methods button[aria-pressed='true'],
+.account-entry-methods button[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.account-entry .im-form {
+  gap: clamp(15px, 2.8vh, 28px);
+}
+
+.account-entry .im-form label {
+  gap: clamp(7px, 1vh, 10px);
+  color: var(--ink);
+  font-size: clamp(14px, 1.15vw, 18px);
+}
+
+.account-entry .im-form input:not([type='file']) {
+  min-height: calc(var(--flow-control) - 6px);
+  background: color-mix(in srgb, var(--surface) 77%, transparent);
+  border-color: var(--flow-rule);
+  border-radius: 11px;
+  color: var(--ink);
+  font-size: clamp(15px, 1.12vw, 18px);
+}
+
+.account-entry .im-form input:not([type='file']):focus {
+  border-color: var(--accent);
+}
+
+.account-entry .im-form button.primary {
+  min-height: var(--flow-control);
+  border-radius: 11px;
+  font-size: clamp(15px, 1.23vw, 20px);
+}
+
+.account-entry-form > button.primary {
+  margin-block-start: clamp(2px, 2.25vh, 22px);
+}
+
+.account-qr-options {
+  display: grid;
+  gap: clamp(14px, 2vh, 21px);
+}
+
+.account-qr-options > button {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 9px;
+  min-height: var(--flow-control);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+  border-color: var(--flow-rule);
+  border-radius: 11px;
+}
+
+.account-qr-options > button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.account-qr-display {
+  padding-block-start: 16px;
+  border-top: 1px solid var(--flow-rule);
+}
+
+.account-entry-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.account-entry-links button {
+  min-height: 44px;
+  padding: 4px 0;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  font-size: clamp(14px, 1.16vw, 18px);
+  font-weight: 650;
+}
+
+.account-entry-links button + button {
+  position: relative;
+  margin-inline-start: 5px;
+  padding-inline-start: 16px;
+}
+
+.account-entry-links button + button::before {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 0;
+  width: 1px;
+  height: 1em;
+  background: var(--flow-rule);
+  transform: translateY(-50%);
+}
+
+.account-entry-retry {
+  padding-block: 0 24px;
+}
+
+@media (max-width: 740px) {
+  .pavilion-flow {
+    --flow-inset: 22px;
+    --flow-top: clamp(39px, 8.8vh, 77px);
+    --flow-control: 48px;
+  }
+
+  .pavilion-flow-content {
+    width: min(calc(100% - 2 * var(--flow-inset)), 510px);
+    min-width: 0;
+    max-width: none;
+    gap: 17px;
+  }
+
+  :is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+    :is(#root > .pavilion-flow, .app-shell .pavilion-flow) {
+    background:
+      linear-gradient(
+        to bottom,
+        var(--canvas) 0 57%,
+        color-mix(in srgb, var(--canvas) 93%, transparent) 66%,
+        color-mix(in srgb, var(--canvas) 55%, transparent) 82%,
+        transparent 100%
+      ),
+      linear-gradient(to right, var(--canvas), transparent 47%),
+      var(--pavilion-scene) right bottom / auto clamp(240px, 38dvh, 425px) no-repeat var(--canvas);
+  }
+
+  .account-entry-methods button {
+    min-height: 44px;
+  }
+
+  .account-entry .im-form {
+    gap: 15px;
+  }
+}

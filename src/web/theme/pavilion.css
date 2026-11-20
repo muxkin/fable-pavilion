@@ -1,0 +1,209 @@
+/* Pavilion artwork follows the selected preset and stays in decorative layers. */
+[data-theme='pavilion-light'],
+[data-preview-theme='pavilion-light'] {
+  --pavilion-scene: url('./assets/moon-white.webp');
+  --pavilion-page-edge-veil: 49%;
+  --pavilion-page-mobile-veil: 60%;
+  --pavilion-chat-header-veil: 28%;
+  --pavilion-chat-editor-veil: 69%;
+  --pavilion-ornament: #997332;
+  --pavilion-ornament-opacity: 0.22;
+}
+[data-theme='pavilion-dark'],
+[data-preview-theme='pavilion-dark'] {
+  --pavilion-scene: url('./assets/night-pavilion.webp');
+  --pavilion-page-edge-veil: 52%;
+  --pavilion-page-mobile-veil: 64%;
+  --pavilion-chat-header-veil: 42%;
+  --pavilion-chat-editor-veil: 78%;
+  --pavilion-ornament: #d8b36a;
+  --pavilion-ornament-opacity: 0.32;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) {
+  --pavilion-heading: 'Noto Serif CJK SC', 'Songti SC', SimSun, serif;
+}
+
+/* Anchor the painting to the shell, whose size does not depend on the active route or gutter. */
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) :is(.app-shell, #root > .module-page) {
+  background:
+    linear-gradient(
+      90deg,
+      var(--surface),
+      color-mix(in srgb, var(--surface) 91%, transparent) 42%,
+      color-mix(in srgb, var(--surface) 79%, transparent) 65%,
+      color-mix(in srgb, var(--surface) var(--pavilion-page-edge-veil), transparent)
+    ),
+    var(--pavilion-scene) right center / cover no-repeat var(--surface);
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  .app-shell
+  :is(.module-page, .directory-sidebar, .workbench-home, .workspace-module > .app, .sidebar, .im-chat, .chat) {
+  background: transparent;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .sidebar-head h1,
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .appearance-intro h2,
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .about-content h2 {
+  font-family: var(--pavilion-heading);
+  letter-spacing: 0;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .app-shell .thread-button.selected {
+  background: var(--soft);
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .composer-box {
+  background: var(--surface-raised);
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .workspace-empty {
+  flex: 1;
+  margin: 0;
+  background: transparent;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .workspace-empty-prompt {
+  display: none;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  .app-shell
+  :is(.workspace-module > .app.has-thread > .chat, .im-chat) {
+  position: relative;
+  isolation: isolate;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  .app-shell
+  :is(.workspace-module > .app.has-thread > .chat, .im-chat)
+  > .conversation-header {
+  background: color-mix(in srgb, var(--surface) var(--pavilion-chat-header-veil), transparent);
+  border-bottom-color: color-mix(in srgb, var(--line) 66%, transparent);
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  .app-shell
+  :is(.workspace-module > .app.has-thread > .chat, .im-chat)
+  > :is(.composer, .im-compose-wrap) {
+  background: transparent;
+  border-top-color: transparent;
+}
+
+/* Keep the bottom safe-area gutter inside the same painting on IM detail routes. */
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  .app-shell
+  .im-page.im-wide:has(.im-messages-layout.has-chat) {
+  --pavilion-im-footer-gutter: max(24px, env(safe-area-inset-bottom));
+  --pavilion-im-footer-padding: 14px;
+  padding-block-end: 0;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .app-shell .im-chat > .im-compose-wrap {
+  padding-block-end: calc(
+    max(var(--pavilion-im-footer-padding, 14px), env(safe-area-inset-bottom)) +
+      var(--pavilion-im-footer-gutter, 0px)
+  );
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  .app-shell
+  :is(.workspace-module > .app.has-thread > .chat, .im-chat)
+  > :is(.composer, .im-compose-wrap)
+  .composer-box {
+  background: linear-gradient(
+    110deg,
+    color-mix(in srgb, var(--surface-raised) 94%, transparent),
+    color-mix(in srgb, var(--surface-raised) var(--pavilion-chat-editor-veil), transparent)
+  );
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: 0 4px 16px var(--shadow);
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  .app-shell
+  :is(.workspace-module > .app.has-thread > .chat, .im-chat)
+  > :is(.composer, .im-compose-wrap)
+  .composer-box:focus-within {
+  border-color: var(--accent);
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  .app-shell
+  :is(.workspace-module > .app.has-thread > .chat, .im-chat)::before,
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .appearance-intro::after {
+  content: '';
+  position: absolute;
+  inset: 0 12px auto auto;
+  inline-size: clamp(110px, 18vw, 240px);
+  block-size: clamp(68px, 13vw, 170px);
+  background-color: var(--pavilion-ornament);
+  opacity: var(--pavilion-ornament-opacity);
+  mask: url('./assets/cloud-lattice.webp') top right / 100% auto no-repeat;
+  pointer-events: none;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+  .app-shell
+  :is(.workspace-module > .app.has-thread > .chat, .im-chat)::before {
+  z-index: -1;
+  inset-block-start: 72px;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .appearance-intro {
+  position: relative;
+  isolation: isolate;
+}
+
+:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .appearance-intro::after {
+  z-index: -1;
+  inset: -10px -3px auto auto;
+  inline-size: clamp(92px, 18vw, 172px);
+  block-size: min(82px, 20vw);
+}
+
+.theme-preview:is([data-preview-theme='pavilion-light'], [data-preview-theme='pavilion-dark'])
+  .theme-preview-chat {
+  background:
+    linear-gradient(90deg, var(--surface) 12%, transparent 100%),
+    var(--pavilion-scene) right center / cover no-repeat;
+}
+
+@media (min-width: 880px) {
+  :is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .theme-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  [data-theme='pavilion-dark'] {
+    --pavilion-chat-editor-veil: 59%;
+  }
+
+  :is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) :is(.app-shell, #root > .module-page) {
+    background:
+      linear-gradient(
+        to bottom,
+        var(--surface) 44%,
+        color-mix(in srgb, var(--surface) 86%, transparent) 67%,
+        color-mix(in srgb, var(--surface) var(--pavilion-page-mobile-veil), transparent)
+      ),
+      var(--pavilion-scene) right bottom / 132% auto no-repeat var(--surface);
+  }
+
+  :is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+    .app-shell
+    :is(.workspace-module > .app.has-thread > .chat, .im-chat)::before {
+    opacity: calc(var(--pavilion-ornament-opacity) * 0.65);
+    inset-block-start: 66px;
+    inset-inline-end: 5px;
+  }
+
+  :is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
+    .app-shell
+    .im-page.im-wide:has(.im-messages-layout.has-chat) {
+    --pavilion-im-footer-gutter: 0px;
+    --pavilion-im-footer-padding: 8px;
+  }
+}

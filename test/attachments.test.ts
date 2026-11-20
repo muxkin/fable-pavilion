@@ -1,0 +1,87 @@
+import { expect, it } from 'vitest';
+import type { Root } from 'mdast';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import {
+  attachmentInfo,
+  attachmentName,
+  attachmentPath,
+  remarkFileCitations,
+} from '../src/shared/attachments';
+import { attachmentLinks } from '../src/server/media';
+
+it('uses decrypted filenames to classify encrypted attachments without changing their URL', () => {
+  const path = '/api/im/conversations/fixture/files/file-id/encrypted.pocket';
+  expect(attachmentInfo(path, '计算结果.csv')).toMatchObject({ kind: '电子表格', previewable: true });
+  expect(attachmentInfo(path, '报告.pdf')).toMatchObject({ kind: 'PDF 文档', previewable: true });
+  expect(attachmentInfo(path, '页面.html').previewable).toBe(false);
+  expect(attachmentInfo('dsh-image:fixture', '图片').media).toBe('image');
+  expect(attachmentInfo(path).name).toBe('encrypted.pocket');
+});
+
+it.each(
+  [':', '::'].flatMap((prefix) =>
+    ['docx', 'xlsx', 'pdf', 'tar.gz', 'txt', 'custom'].map((extension) => [prefix, extension]),
+  ),
+)('recognizes %s native citations for %s files, including Chinese names and spaces', (prefix, extension) => {
+  const name = `结果 修正版.${extension}`;
+  const path = `/home/user/${name}`;
+  const source = `下载：${prefix}codex-file-citation{path="${path}" purpose="output"}。`;
+  const markdown = unified().use(remarkParse).use(remarkFileCitations);
+  const tree = markdown.runSync(markdown.parse(source)) as any;
+  expect(tree.children[0].children).toEqual([
+    { type: 'text', value: '下载：' },
+    {
+      type: 'link',
+      url: path,
+      children: [{ type: 'text', value: name }],
+      data: { hProperties: { 'data-file-citation': 'true' } },
+    },
+    { type: 'text', value: '。' },
+  ]);
+  expect(attachmentLinks(source)).toEqual([path]);
+  expect(attachmentName('C:\\研究\\结果.docx')).toBe('结果.docx');
+  expect(attachmentPath(encodeURI(path))).toBe(path);
+  expect(attachmentPath(`file://${encodeURI(path)}`)).toBe(path);
+});
+
+it('leaves code, HTML, unsafe schemes and incomplete file citations inert', () => {
+  const directive = ':codex-file-citation{path="/private/document.docx" purpose="output"}';
+  for (const source of [
+    `\`${directive}\``,
+    `\`\`\`text\n${directive}\n\`\`\``,
+    `<div>\n${directive}\n</div>`,
+    ':codex-file-citation{path="javascript:alert(1)"}',
+    ':codex-file-citation{path="https://example.com/file.docx"}',
+    ':codex-file-citation{path="/private/document.docx"',
+    ':codex-file-citation{path="/one.docx" path="/two.docx"}',
+  ])
+    expect(attachmentLinks(source)).toEqual([]);
+  expect(attachmentLinks(`[${directive}](https://example.com)`)).toEqual(['https://example.com']);
+});
+
+it('renders adjacent citations when quoted filenames contain braces', () => {
+  const paths = ["/library/相图 {Sc, Ti} at 800°C's.pdf", '/library/参考 "样品" {Ti}.pdf'];
+  const source =
+    `:codex-file-citation{path="${paths[0]}" purpose="source"}` +
+    `::codex-file-citation{purpose='source' path='${paths[1]}'}`;
+  const markdown = unified().use(remarkParse).use(remarkFileCitations);
+  const tree = markdown.runSync(markdown.parse(source)) as Root;
+  expect(tree.children[0]).toMatchObject({
+    type: 'paragraph',
+    children: paths.map((path) => ({
+      type: 'link',
+      url: path,
+      children: [{ type: 'text', value: attachmentName(path) }],
+      data: { hProperties: { 'data-file-citation': 'true' } },
+    })),
+  });
+  expect(attachmentLinks(source)).toEqual(paths);
+});
+
+it('still finds a valid citation after an incomplete one', () => {
+  const path = '/library/相图 {Sc, Ti}.pdf';
+  const incomplete = ':codex-file-citation{path="/private/unfinished {name}.pdf"';
+  expect(attachmentLinks(`${incomplete} :codex-file-citation{path="${path}"}`)).toEqual([path]);
+  expect(attachmentLinks(`\`:codex-file-citation{path="${path}"}\``)).toEqual([]);
+});

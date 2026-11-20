@@ -1,0 +1,416 @@
+import { attachmentName } from '../shared/attachments.js';
+import { AttachmentCache } from './attachment-cache.js';
+import { controlAction } from '../shared/controls.js';
+import { extname, isAbsolute, join, relative, sep } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { DEFAULT_BACKEND } from '../shared/backends.js';
+import { requireCapability } from './backends/registry.js';
+import { resolveBackend, type BackendDependencies } from './backends/resolve.js';
+import { z } from 'zod';
+import { CoreRouter } from './core-router.js';
+import type { Config } from './config.js';
+import type { Store } from './store.js';
+import { Operations } from './operations.js';
+import { MediaService, authorizeFile, resolveAttachmentPath } from './media.js';
+import { Uploads, uploadSpec } from './uploads.js';
+import { FileService } from './file-service.js';
+import { creationBody } from './control-schemas.js';
+import { responseBody } from './control-schemas.js';
+import {
+  uuid,
+  conversationId,
+  params,
+  pageQuery,
+  sendBody,
+  queueBody,
+  removeQueueBody,
+  stopBody,
+  steerBody,
+  settingsBody,
+} from './control-schemas.js';
+
+/** One business dispatcher, independent of HTTP, WebSocket and WebRTC. */
+export function createGatewayCore(config: Config, deps: { store: Store } & BackendDependencies) {
+  const { store } = deps;
+  const desktop = resolveBackend(config, deps),
+    history = desktop.history;
+  const backendId = desktop.id;
+  // Preserve the original Codex upload namespace; other instances get private directories.
+  const scopedConfig =
+    backendId === DEFAULT_BACKEND
+      ? config
+      : { ...config, stateDir: join(config.stateDir, 'backends', backendId) };
+  const app = new CoreRouter();
+  const attachmentCache = new AttachmentCache(join(scopedConfig.stateDir, 'attachment-cache-v1'));
+  const operations = new Operations(desktop, store, backendId);
+  const submit = operations.submit.bind(operations);
+  operations.submit = (...args) => {
+    const kind = args[3];
+    if (kind !== 'rename' && kind !== 'fork')
+      requireCapability(desktop, kind === 'control' ? 'settings' : kind === 'queue-remove' ? 'queue' : kind);
+    return submit(...args);
+  };
+  const media = new MediaService({ ...scopedConfig, media: undefined });
+  const uploads = new Uploads({ ...scopedConfig, media: undefined });
+  const files = new FileService(scopedConfig, uploads);
+  async function messageInput(body: z.infer<typeof sendBody>, device: string, thread: string) {
+    await desktop.validateSelection(thread, body.skillIds ?? [], body.pluginIds ?? []);
+    return JSON.stringify({
+      text: body.text,
+      attachments: await uploads.attachments(body.uploadIds ?? [], device, thread),
+      skillIds: body.skillIds ?? [],
+      pluginIds: body.pluginIds ?? [],
+    });
+  }
+  app.get('/api/session', async (req) => ({
+    device: req.device,
+    backend: desktop.info(),
+    status: desktop.status(),
+  }));
+  app.post('/api/logout', async (req, reply) => {
+    const device = req.device;
+    store.revoke(device.id);
+    return { ok: true };
+  });
+  app.get('/api/status', async () => desktop.status());
+  app.get('/api/threads/:id/content', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const { messageId } = z
+      .object({ messageId: z.string().min(1).max(500) })
+      .strict()
+      .parse(req.query);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    const message = await desktop.fullMessage(id, messageId);
+    if (!message) return reply.code(404).send({ error: '该内容不在当前会话快照中，请重新打开会话' });
+    return { message };
+  });
+  app.post('/api/threads/:id/media', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const { path } = z
+      .object({ path: z.string().min(1).max(4096) })
+      .strict()
+      .parse(req.body);
+    const thread = await history.get(id);
+    if (!thread) return reply.code(404).send({ error: '找不到此会话' });
+    try {
+      if (path.startsWith('pocket-inline:')) {
+        const source = await desktop.inlineMedia(id, path);
+        if (!source) {
+          const cached = await attachmentCache.lookup(id, path);
+          if (cached) return files.describe(cached, req.device.id, id);
+          throw Error('内嵌附件暂不可用');
+        }
+        const link = await media.inline(source, req.device.id);
+        const grant = await media.grant(link.url.split('/').at(-1)!, req.device.id);
+        if (!grant) throw Error();
+        await attachmentCache.remember(id, path, grant.file).catch(() => {});
+        return files.describe(grant.file, req.device.id, id, grant.mimeType);
+      }
+      let file: string,
+        fromCache = false;
+      const nativeRoot = join(config.stateDir, 'native-uploads');
+      const requested = resolveAttachmentPath(path, thread.cwd);
+      const nativePath = relative(nativeRoot, requested);
+      if (nativePath && !isAbsolute(nativePath) && nativePath !== '..' && !nativePath.startsWith('..' + sep)) {
+        // Files from the previous Rust gateway keep their original device and conversation ownership.
+        const [uploadId, filename, extra] = nativePath.split(sep);
+        const manifest = backendId === DEFAULT_BACKEND && !extra && uuid.safeParse(uploadId).success
+          ? store.completedNativeUpload(uploadId, req.device.id, id)
+          : undefined;
+        if (!manifest) throw Error('附件不属于当前设备和会话');
+        const saved = JSON.parse(manifest);
+        const { name, size, sha256 } = uploadSpec.parse({ name: saved.name, size: saved.size, sha256: saved.sha256 });
+        const ext = extname(name);
+        const stored = 'attachment' + (/^\.[A-Za-z0-9]{1,16}$/.test(ext) ? ext : '');
+        if (filename !== stored || await realpath(requested) !== join(await realpath(nativeRoot), uploadId, stored))
+          throw Error('旧版附件路径无效');
+        const result = await files.describe(requested, req.device.id, id);
+        if (result.size !== size || result.sha256 !== sha256) throw Error('旧版附件校验失败');
+        return { ...result, name };
+      }
+      try {
+        file =
+          (await uploads.reference(path, req.device.id, id)) ??
+          (desktop.attachment
+            ? await desktop.attachment(id, path)
+            : await authorizeFile(path, thread.cwd, [
+                ...(desktop.view(id)?.messages ?? []),
+                ...(await history.page(id)).messages,
+              ]));
+      } catch (error) {
+        const cached = await attachmentCache.lookup(id, path);
+        if (!cached) throw error;
+        file = cached;
+        fromCache = true;
+      }
+      const link = await media.resolve(file, req.device.id);
+      if (!fromCache) await attachmentCache.remember(id, path, file).catch(() => {});
+      const grant = await media.grant(link.url.split('/').at(-1)!, req.device.id);
+      return {
+        ...(await files.describe(file, req.device.id, id, grant?.mimeType)),
+        name: attachmentName(path),
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        return reply
+          .code(404)
+          .send({ error: '原附件文件已被移动或删除，且没有可恢复的缓存；请在电脑端重新发送。' });
+      return reply
+        .code(403)
+        .send({ error: '附件暂不可访问：请确认原文件仍存在，且已在当前会话中发送；也可以重新加载' });
+    }
+  });
+  app.post('/api/threads/:id/uploads', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    requireCapability(desktop, 'attachments');
+    if (desktop.maxUploadBytes && req.body?.size > desktop.maxUploadBytes)
+      return reply.code(400).send({ error: '文件超过此实例的附件大小限制' });
+    return files.begin(req.body, req.device.id, id);
+  });
+  const uploadParams = params.extend({ uploadId: uuid });
+  app.post('/api/threads/:id/uploads/:uploadId/chunk', async (req) => {
+    const { id, uploadId } = uploadParams.parse(req.params);
+    const { offset } = z.object({ offset: z.coerce.number().int().nonnegative() }).parse(req.query);
+    if (!Buffer.isBuffer(req.body)) throw new z.ZodError([]);
+    return uploads.chunk(uploadId, req.device.id, id, offset, req.body);
+  });
+  app.post('/api/threads/:id/uploads/:uploadId/complete', async (req) => {
+    const { id, uploadId } = uploadParams.parse(req.params);
+    return uploads.finish(uploadId, req.device.id, id);
+  });
+  app.get('/api/threads/:id/controls', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    if (!desktop.controls) return reply.code(404).send({ error: '此实例没有会话控制目录' });
+    if (id === 'new') return desktop.controls(id);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    const release = await desktop.acquire(id);
+    try {
+      await desktop.waitForView(id);
+      return await desktop.controls(id);
+    } finally {
+      release();
+    }
+  });
+  app.post('/api/threads/:id/control', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const body = z.object({ requestId: uuid, control: controlAction }).strict().parse(req.body);
+    if (!desktop.controls || !(await history.get(id)))
+      return reply.code(404).send({ error: '会话控制不可用' });
+    return reply
+      .code(202)
+      .send(
+        operations.submit(
+          req.device.id,
+          id,
+          body.requestId,
+          'control',
+          JSON.stringify({ control: body.control }),
+        ),
+      );
+  });
+  app.post('/api/threads/:id/rename', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const { requestId, title } = z
+      .object({
+        requestId: uuid,
+        title: z
+          .string()
+          .trim()
+          .min(1)
+          .max(160)
+          .regex(/^[^\x00-\x1f\x7f]+$/),
+      })
+      .strict()
+      .parse(req.body);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    if (!desktop.status().capabilities.renameThread)
+      return reply.code(409).send({ error: '当前桌面暂不可改名' });
+    return reply
+      .code(202)
+      .send(operations.submit(req.device.id, id, requestId, 'rename', JSON.stringify({ title })));
+  });
+  app.post('/api/threads/:id/fork', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const { requestId, lastTurnId } = z
+      .object({ requestId: uuid, lastTurnId: conversationId.optional() })
+      .strict()
+      .parse(req.body);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    if (!desktop.status().capabilities[lastTurnId === undefined ? 'forkThread' : 'forkFromTurn'])
+      return reply.code(409).send({ error: '当前桌面暂不可创建会话分支' });
+    return reply
+      .code(202)
+      .send(operations.submit(req.device.id, id, requestId, 'fork', JSON.stringify({ lastTurnId })));
+  });
+  app.get('/api/threads/:id/references', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const { q } = z.object({ q: z.string().max(500).default('') }).parse(req.query);
+    if (!desktop.fileReferences || !(await history.get(id)))
+      return reply.code(404).send({ error: '文件目录不可用' });
+    return { files: await desktop.fileReferences(id, q) };
+  });
+  app.post('/api/threads/:id/export', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    if (!desktop.exportLog || !(await history.get(id)))
+      return reply.code(404).send({ error: '日志导出不可用' });
+    return files.describe(await desktop.exportLog(id), req.device.id, id, 'application/zip');
+  });
+  app.get('/api/models', async () => desktop.models());
+  app.get(
+    '/api/usage',
+    async () =>
+      desktop.usage?.() ?? {
+        available: false,
+        updatedAt: Date.now(),
+        buckets: [],
+        reason: '此实例尚未提供用量信息',
+      },
+  );
+  app.get('/api/threads/:id/skills', async (req) => ({
+    skills: await desktop.skills(params.parse(req.params).id),
+  }));
+  app.get('/api/threads/:id/plugins', async (req) => ({
+    plugins: await desktop.plugins(params.parse(req.params).id),
+  }));
+  app.post('/api/threads/:id/responses', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const body = responseBody.parse(req.body);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    const { requestId, ...response } = body;
+    return reply
+      .code(202)
+      .send(operations.submit(req.device.id, id, requestId, 'respond', JSON.stringify(response)));
+  });
+  app.post('/api/threads/:id/settings', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const body = settingsBody.parse(req.body);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    await desktop.validateSettings(body);
+    const { requestId, ...settings } = body;
+    return reply
+      .code(202)
+      .send(operations.submit(req.device.id, id, requestId, 'settings', JSON.stringify(settings)));
+  });
+  app.get('/api/projects', async () => history.projects());
+  app.get('/api/threads', async (req) => {
+    const query = pageQuery
+      .extend({
+        project: z.string().min(1).max(200).optional(),
+        q: z.string().trim().max(120).optional(),
+      })
+      .parse(req.query);
+    return history.list(query.cursor, 30, query.project, query.q);
+  });
+  app.get('/api/threads/:id/history', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const thread = await history.get(id);
+    if (!thread) return reply.code(404).send({ error: '找不到此会话' });
+    const summary = thread;
+    return { thread: summary, ...(await history.page(id, pageQuery.parse(req.query).cursor)) };
+  });
+  app.get('/api/threads/:id', async (req, reply) => {
+    const thread = await history.get(params.parse(req.params).id);
+    if (!thread) return reply.code(404).send({ error: '找不到此会话' });
+    const summary = thread;
+    return { thread: summary };
+  });
+  app.get('/api/threads/:id/projects', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    if (id !== 'new' && !(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    return { projects: (await desktop.projects(id)).map(({ id, name }) => ({ id, name })) };
+  });
+  app.post('/api/threads/:id/create', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const { requestId, ...value } = creationBody.parse(req.body);
+    if (id !== 'new' && !(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    const rules = desktop.info().presentation?.creation;
+    if (
+      rules &&
+      ((value.permission !== undefined && rules.permission !== 'select') ||
+        (value.agentPreset !== undefined && !rules.preset) ||
+        (value.plan !== undefined && !rules.plan))
+    )
+      return reply.code(409).send({ error: '此实例的原生创建接口不支持这些设置' });
+    await desktop.validateCreation(value);
+    return reply
+      .code(202)
+      .send(operations.submit(req.device.id, id, requestId, 'create', JSON.stringify(value)));
+  });
+  app.post('/api/threads/:id/open', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const { requestId } = z.object({ requestId: uuid }).strict().parse(req.body);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    return reply.code(202).send(operations.submit(req.device.id, id, requestId, 'open', ''));
+  });
+  app.post('/api/threads/:id/messages', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const body = sendBody.parse(req.body);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    const device = req.device;
+    return reply
+      .code(202)
+      .send(
+        operations.submit(device.id, id, body.requestId, 'send', await messageInput(body, device.id, id)),
+      );
+  });
+  for (const kind of ['queue', 'queue-remove'] as const)
+    app.post(`/api/threads/:id/${kind}`, async (req, reply) => {
+      const { id } = params.parse(req.params);
+      if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+      const { requestId, ...value } = (kind === 'queue' ? queueBody : removeQueueBody).parse(req.body);
+      return reply
+        .code(202)
+        .send(operations.submit(req.device.id, id, requestId, kind, JSON.stringify(value)));
+    });
+  app.post('/api/threads/:id/interrupt', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const body = stopBody.parse(req.body);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    return reply
+      .code(202)
+      .send(operations.submit(req.device.id, id, body.requestId, 'interrupt', body.expectedTurnId));
+  });
+  app.post('/api/threads/:id/steer', async (req, reply) => {
+    const { id } = params.parse(req.params);
+    const { requestId, uploadIds, ...value } = steerBody.parse(req.body);
+    if (!(await history.get(id))) return reply.code(404).send({ error: '找不到此会话' });
+    let attachments;
+    try {
+      attachments = await uploads.attachments(uploadIds ?? [], req.device.id, id);
+    } catch {
+      return reply.code(400).send({ error: '附件不可用，请重新添加到当前会话' });
+    }
+    return reply
+      .code(202)
+      .send(
+        operations.submit(
+          req.device.id,
+          id,
+          requestId,
+          'steer',
+          JSON.stringify(attachments.length ? { ...value, attachments } : value),
+        ),
+      );
+  });
+  app.get('/api/operations/:id', async (req, reply) => {
+    const result = store.operation(params.parse(req.params).id, req.device.id, backendId);
+    return result ?? reply.code(404).send({ error: '找不到此操作' });
+  });
+  app.get('/api/threads/:id/operations', async (req) =>
+    store.recent(req.device.id, params.parse(req.params).id, backendId),
+  );
+
+  return {
+    router: app,
+    operations,
+    uploads,
+    media,
+    files,
+    status: () => desktop.status(),
+    close: () => {
+      operations.close();
+      files.close();
+    },
+  };
+}

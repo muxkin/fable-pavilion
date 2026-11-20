@@ -1,0 +1,132 @@
+import { AdapterProxy } from '../src/server/adapters/proxy.js';
+import { readAdapterPackage } from '../src/server/adapters/package.js';
+import { mkdir } from 'node:fs/promises';
+import { BackendRegistry } from '../src/server/backends/registry.js';
+import { CodexBackend } from '../packages/adapter-codex/src/backend.js';
+import { DshBackend } from '../packages/adapter-dsh/src/backend.js';
+import { DshFixtureConnection } from '../packages/adapter-dsh/test/fixture.js';
+/** Isolated automated test fixture; never uses the user's real desktop/state. */
+import { resolve, join } from 'node:path';
+import { writeFile, rm } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
+import { fixtureConfig, historyFixture, FakeTransport, THREAD, state } from '../test/helpers.js';
+import { Store } from '../src/server/store.js';
+import { HistoryIndex } from '../packages/adapter-codex/src/history.js';
+import { DesktopAdapter } from '../packages/adapter-codex/src/desktop.js';
+import { HostService } from '../src/server/host-service.js';
+import { buildRelay } from '../src/server/relay.js';
+import { createIdentity } from '../src/shared/secure-channel.js';
+import { allocateLocalPort } from './lib/messaging-smoke.js';
+const config = fixtureConfig();
+historyFixture(config);
+const bind = process.env.TEST_BIND ?? '127.0.0.1';
+config.port = await allocateLocalPort(bind, process.env.TEST_PORT);
+config.origin = `http://${bind}:${config.port}`;
+config.webRoot = resolve(process.env.TEST_WEB_ROOT ?? 'dist/web');
+config.p2p = { enabled: process.env.TEST_DIRECT !== '0', stunUrls: [] };
+config.relay = { origin: config.origin, enrollment: 'fixture-only-enrollment-secret-32-chars' };
+const file = join(config.desktopRoot, 'fixture.txt');
+await writeFile(file, 'private-file-fixture\n'.repeat(100000));
+const audio = join(config.desktopRoot, 'fixture.wav');
+const samples = 48000 * 20,
+  wav = Buffer.alloc(44 + samples * 2);
+wav.write('RIFF');
+wav.writeUInt32LE(wav.length - 8, 4);
+wav.write('WAVEfmt ', 8);
+wav.writeUInt32LE(16, 16);
+wav.writeUInt16LE(1, 20);
+wav.writeUInt16LE(1, 22);
+wav.writeUInt32LE(48000, 24);
+wav.writeUInt32LE(96000, 28);
+wav.writeUInt16LE(2, 32);
+wav.writeUInt16LE(16, 34);
+wav.write('data', 36);
+wav.writeUInt32LE(samples * 2, 40);
+await writeFile(audio, wav);
+const native = new FakeTransport();
+native.current = state({ cwd: config.desktopRoot });
+native.current.turnHistory.history.entitiesByKey.one.items.push({
+  type: 'agentMessage',
+  id: 'attachment',
+  text: `[测试附件](${file})`,
+});
+native.current.turnHistory.history.entitiesByKey.one.items.push({
+  type: 'agentMessage',
+  id: 'audio',
+  text: `[测试音频](${audio})`,
+});
+const db = new DatabaseSync(join(config.codexHome, 'state_5.sqlite'));
+db.prepare('UPDATE threads SET cwd=?').run(config.desktopRoot);
+db.close();
+const store = new Store(config.stateDir),
+  history = new HistoryIndex(config.codexHome),
+  desktop = new DesktopAdapter(config, () => native);
+const registry = new BackendRegistry().register(new CodexBackend(config, desktop, history));
+if (process.env.TEST_DSH === '1')
+  for (const id of ['dsh-one', 'dsh-two'])
+    registry.register(
+      new DshBackend(
+        { id, name: id, url: 'http://127.0.0.1:7777', token: 'fixture', version: '0.2.1-rc.5' },
+        join(config.stateDir, id),
+        false,
+        new DshFixtureConnection(THREAD, id),
+      ),
+    );
+if (process.env.TEST_ADAPTER_PACKAGE) {
+  const stateDirectory = join(config.stateDir, 'third-agent');
+  await mkdir(stateDirectory, { recursive: true });
+  registry.register(
+    new AdapterProxy(readAdapterPackage(process.env.TEST_ADAPTER_PACKAGE), {
+      id: 'third-agent',
+      name: '第三方测试 Agent',
+      stateDirectory,
+      readOnly: false,
+      config: {},
+    }),
+  );
+}
+const identity = await createIdentity(),
+  host = new HostService(config, identity, { store, registry });
+const relay = await buildRelay({
+  origin: config.origin,
+  webRoot: config.webRoot,
+  assetOrigin: null,
+  enrollmentSecret: config.relay.enrollment,
+  uploadOrigins: [],
+  // Synthetic fixture only. Production services never receive a fallback authentication key.
+  messaging: { totpKey: process.env.TEST_TOTP_KEY ?? Buffer.alloc(32, 42).toString('base64url') },
+});
+await relay.app.listen({ port: config.port, host: bind });
+await registry.start();
+host.start();
+const pair = store.mintPairing();
+if (process.env.TEST_WRITE_FIXTURE === '1') {
+  await mkdir('.implementation', { recursive: true });
+  await writeFile(
+    '.implementation/fixture.json',
+    JSON.stringify({
+      origin: config.origin,
+      hostId: identity.peerId,
+      code: pair.code,
+      threadId: THREAD,
+      file,
+      stateDir: config.stateDir,
+    }),
+    { mode: 0o600 },
+  );
+}
+console.log(`Isolated v2 fixture ready on ${bind}:${config.port}`);
+let closing = false;
+async function close() {
+  if (closing) return;
+  closing = true;
+  host.stop();
+  await registry.stop();
+  store.close();
+  await relay.app.close();
+  await rm(config.desktopRoot, { recursive: true, force: true });
+}
+process.on('SIGTERM', () => void close());
+process.on('SIGINT', () => void close());
+
+export { registry, config, host, relay, store, native, close, file };

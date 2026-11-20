@@ -1,0 +1,206 @@
+.security-onboarding {
+  --pavilion-rule: color-mix(in srgb, var(--pavilion-ornament, var(--outline)) 54%, var(--line));
+}
+.security-onboarding .security-onboarding-content {
+  display: block;
+  width: min(100%, 490px);
+  min-width: 0;
+  max-width: 490px;
+  margin: 0 auto;
+  padding: 22px 24px 30px;
+}
+.security-setup-steps {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  margin: 0 0 22px;
+  list-style: none;
+}
+.security-setup-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.security-setup-steps li > span {
+  width: 29px;
+  height: 29px;
+  border: 1px solid var(--pavilion-rule, var(--line));
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+}
+.security-setup-steps li[aria-current] {
+  color: var(--accent);
+  font-weight: 600;
+}
+.security-setup-steps li[aria-current] > span {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.security-onboarding-content > .pavilion-flow-title {
+  font-size: 27px;
+  margin: 0 0 10px;
+}
+.security-onboarding-content > .pavilion-flow-description {
+  font-size: 14px;
+  line-height: 1.8;
+  margin-bottom: 16px;
+}
+.security-onboarding .recovery-code-box {
+  background: transparent;
+  border-color: var(--pavilion-rule, var(--line));
+  padding: 20px 18px;
+}
+.security-onboarding .recovery-code-box label {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+.security-onboarding .recovery-code-box textarea {
+  font-size: 18px;
+  line-height: 1.9;
+  letter-spacing: 0.035em;
+  min-height: 90px;
+}
+.security-onboarding .recovery-actions button {
+  min-height: 44px;
+  border-color: var(--pavilion-rule, var(--line));
+  background: transparent;
+}
+.security-onboarding .recovery-confirm {
+  margin-top: 6px;
+  padding-inline: 2px;
+  background: transparent;
+  font-size: 15px;
+  gap: 11px;
+}
+.security-setup-footnote {
+  font-size: 12px;
+  line-height: 1.8;
+  text-align: center;
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+.authenticator-qr-region {
+  width: 232px;
+  height: 232px;
+  margin: 0 auto;
+  border: 1px solid var(--pavilion-rule, var(--line));
+  border-radius: 15px;
+  background: #fff;
+  overflow: hidden;
+}
+.authenticator-qr-region img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.authenticator-concealed {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  align-items: center;
+  justify-content: center;
+  padding: 15px;
+  text-align: center;
+  font-size: 13px;
+  color: #34504b;
+}
+.authenticator-concealed button {
+  font-size: 12px;
+  color: #34504b;
+}
+.authenticator-compatibility {
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 0 14px;
+  color: var(--muted);
+}
+.authenticator-manual {
+  border: 1px solid var(--pavilion-rule, var(--line));
+  border-radius: 12px;
+  padding: 13px;
+  margin-bottom: 14px;
+}
+.authenticator-manual summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.authenticator-manual code {
+  display: block;
+  overflow-wrap: anywhere;
+  margin: 14px 0;
+  font-size: 13px;
+  letter-spacing: 0.07em;
+}
+.authenticator-manual button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.authenticator-confirm {
+  gap: 12px;
+}
+.authenticator-confirm input {
+  text-align: center;
+  font-size: 25px;
+  letter-spacing: 0.4em;
+  font-variant-numeric: tabular-nums;
+}
+.authenticator-confirm .primary,
+.authenticator-confirm .secondary {
+  min-height: 45px;
+  font-size: 14px;
+}
+@media (max-width: 740px) {
+  .security-onboarding .security-onboarding-content {
+    padding: 20px 22px 26px;
+  }
+  .authenticator-qr-region {
+    width: 216px;
+    height: 216px;
+  }
+}
+@media (max-width: 360px) {
+  .security-onboarding .security-onboarding-content {
+    padding: 20px 18px 26px;
+  }
+  .security-setup-steps li {
+    font-size: 11px;
+    gap: 6px;
+  }
+  .security-setup-steps {
+    gap: 8px;
+  }
+  .security-onboarding-content > .pavilion-flow-title {
+    font-size: 25px;
+  }
+  .security-onboarding .recovery-code-box textarea {
+    font-size: 16px;
+  }
+}
+.security-recovery-renewed {
+  margin: -8px 0 20px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--accent);
+}

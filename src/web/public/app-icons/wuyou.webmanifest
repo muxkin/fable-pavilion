@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "子虚亭 · Fable Pavilion",
+  "short_name": "子虚亭",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fffcf5",
+  "theme_color": "#fffcf5",
+  "icons": [
+    { "src": "/app-icons/wuyou-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "/app-icons/wuyou-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" }
+  ]
+}
