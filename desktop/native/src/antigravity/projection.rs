@@ -492,6 +492,33 @@ pub(super) fn project_values(data: &Value) -> Result<Value> {
     Ok(json!(values))
 }
 
+pub(super) fn project_workspace_uris(data: &Value) -> HashMap<String, Vec<Value>> {
+    let mut map = HashMap::new();
+    let Some(rows) = data["projects"].as_array() else {
+        return map;
+    };
+    for project in rows {
+        let Some(id) = project["id"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+        else {
+            continue;
+        };
+        let uris: Vec<Value> = project["projectResources"]["resources"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|resource| resource["gitFolder"]["folderUri"].as_str())
+            .filter(|uri| !uri.is_empty() && !uri.chars().any(char::is_control))
+            .map(|uri| json!(uri))
+            .collect();
+        if !uris.is_empty() {
+            map.insert(id.to_owned(), uris);
+        }
+    }
+    map
+}
+
 pub(super) fn summary_with_projects(id: &str, summary: &Value, projects: &Value) -> Value {
     let mut value = summary_value(id, summary);
     if let Some(project) = projects

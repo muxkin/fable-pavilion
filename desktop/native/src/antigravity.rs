@@ -90,6 +90,7 @@ pub struct Backend {
     subscriptions: Arc<Mutex<HashMap<String, Weak<Subscription>>>>,
     oversized_history: Arc<Mutex<VecDeque<OversizedHistory>>>,
     project_catalog: Arc<tokio::sync::Mutex<Option<(std::time::Instant, Value)>>>,
+    project_uris: Arc<tokio::sync::Mutex<HashMap<String, Vec<Value>>>>,
     model_catalog: Arc<tokio::sync::Mutex<Option<(std::time::Instant, Vec<NativeModel>)>>>,
 }
 
@@ -161,6 +162,7 @@ impl Backend {
             subscriptions: Default::default(),
             oversized_history: Default::default(),
             project_catalog: Default::default(),
+            project_uris: Default::default(),
             model_catalog: Default::default(),
         })
     }
@@ -408,6 +410,11 @@ impl Backend {
         let Ok(projects) = self.project_catalog(false).await else {
             return Vec::new();
         };
+        if let Some(uris) = self.project_uris.lock().await.get(project)
+            && !uris.is_empty()
+        {
+            return uris.clone();
+        }
         let Some(path) = projects
             .as_array()
             .into_iter()
@@ -485,6 +492,8 @@ impl Backend {
             )
             .await?;
         let projects = project_values(&data)?;
+        let uris = project_workspace_uris(&data);
+        *self.project_uris.lock().await = uris;
         *cache = Some((std::time::Instant::now(), projects.clone()));
         Ok(projects)
     }

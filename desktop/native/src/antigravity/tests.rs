@@ -272,8 +272,15 @@ fn enriches_native_project_identity_without_inferring_membership_from_folder_nam
     let unassigned = summary_with_projects("thread", &summary, &projects);
     assert!(unassigned["projectId"].is_null());
     assert!(unassigned["projectName"].is_null());
-    assert_eq!(project_values(&json!({})).unwrap(), json!([]));
+    assert!(project_values(&json!({})).unwrap() == json!([]));
     assert!(project_values(&json!({"projects":{}})).is_err());
+
+    let encoded_uri = "file:///C:/Users/RUNNER%7E1/AppData/Local/Temp/project";
+    let uris = project_workspace_uris(&json!({"projects":[{
+        "id":"win-project","name":"Win",
+        "projectResources":{"resources":[{"gitFolder":{"folderUri":encoded_uri}}]}
+    }]}));
+    assert_eq!(uris.get("win-project"), Some(&vec![json!(encoded_uri)]));
 }
 
 #[tokio::test]
