@@ -60,6 +60,7 @@
     "test:im-calls": "node --import tsx scripts/im-calls-smoke.ts",
     "test:trusted-device": "node --import tsx scripts/trusted-device-smoke.ts",
     "build:frontend-release": "node scripts/frontend-release/build.mjs",
+    "test:frontend-release": "node scripts/frontend-release/browser-smoke.mjs",
     "desktop:native:build": "node scripts/desktop/native-build.mjs",
     "desktop:native:package": "node scripts/desktop/native-package.mjs",
     "desktop:native:smoke": "node --import tsx scripts/desktop/native-antigravity-smoke.ts"

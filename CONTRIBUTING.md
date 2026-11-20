@@ -2,6 +2,8 @@
 
 项目服务端与前端使用 **Node.js 24+**，桌面适配器与官方插件使用 **Rust**（工具链版本见 `desktop/native/rust-toolchain.toml`）。
 
+> 开始改动前，请先阅读 [工程规范与开发红线](docs/dev/engineering-guidelines.md)（包含安全边界、模块化要求、测试隔离与文档目录约束，适用于所有贡献者与 AI 编码助手）。
+
 ## 提交前检查
 
 提交代码前请运行基础检查套件：

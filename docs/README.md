@@ -23,6 +23,7 @@
 
 ## 架构与开发
 
+- [工程规范与开发红线](dev/engineering-guidelines.md)：安全去定制边界、模块拆分要求、测试卫生、文档规范与提交前强制验证清单（面向人类贡献者与 AI 助手）。
 - [系统架构与通信协议](dev/architecture.md)：VPS/Cloudflare 共享核心边界、设备协议 v2（Noise / WebRTC / WSS / 同步缓存）与 Vue 3 前端模块结构。
 - [适配器插件与开发](dev/adapter-plugins.md)：纯 Rust 原生插件协议（JSON-RPC 2.0）、Codex/DSH/Antigravity 官方插件能力矩阵、多实例配置与源码构建。
 - [即时消息 API 与 Agent 接入](dev/messaging-api.md)：人类与 Agent 统一账户、字符串 UID、加密 HTTP API、CLI、流式回复、交互卡片与原生运行器协议。

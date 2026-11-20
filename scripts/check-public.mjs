@@ -44,6 +44,11 @@ const docLeakPattern =
   /\b(?:calcblog|CALCBLOG_AI_AUTO_LOG|tailscale|Remote-Agent-Control)\b|local\/native-account-release|\.implementation\/|本会话未提供/i;
 const personalSitePattern = /\b(?:kai\x6doe|maomao\x67ao)\b/i;
 const buildIgnoreFiles = new Set(['android/.gitignore', 'desktop/native/.gitignore']);
+const smokeIndex = [
+  ...files.filter((file) => file === 'package.json' || file.startsWith('.github/workflows/')),
+]
+  .map((file) => git(['show', `:${file}`]).toString('utf8'))
+  .join('\n');
 const findings = [];
 for (const file of files) {
   if (
@@ -54,6 +59,10 @@ for (const file of files) {
     file.startsWith('src/web/public/downloads/android/')
   )
     findings.push([file, 'private or generated path']);
+  if (/^docs\/[^/]+\.md$/i.test(file) && file !== 'docs/README.md')
+    findings.push([file, 'place docs under docs/{guide,deploy,dev}/ instead of flat docs/ root']);
+  if (/^scripts\/(?!lib\/).*-smoke\.[^/]+$/.test(file) && !smokeIndex.includes(file))
+    findings.push([file, 'unreferenced smoke script must be wired into package.json or CI']);
   const bytes = git(['show', `:${file}`]);
   if (/\.(png|webp|jpg|jpeg|ico|icns|woff2?)$/i.test(file)) continue;
   const content = bytes.toString('utf8');
