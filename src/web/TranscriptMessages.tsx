@@ -69,7 +69,7 @@ export const TranscriptMessages = tsxComponent(function TranscriptMessages(_prop
           <ToolActivityGroup
             key={group.key}
             count={group.messages.length}
-            label={codex ? summarizeToolActivity(group.messages) : undefined}
+            label={summarizeToolActivity(group.messages)}
             inline={codex}
           >
             {() => <>{group.messages.map(render)}</>}
@@ -94,12 +94,10 @@ export const TranscriptMessages = tsxComponent(function TranscriptMessages(_prop
       }
       return render(first);
     };
-    const footers = codex
-      ? codexTurnFooters(
-          groups.map((group) => group.messages[0]),
-          activeTurnId,
-        )
-      : null;
+    const footers = codexTurnFooters(
+      groups.map((group) => group.messages[0]),
+      activeTurnId,
+    );
     return groups.flatMap((group, index) => {
       const entry = renderGroup(group);
       const reply = footers?.get(index);
@@ -118,7 +116,7 @@ export const TranscriptMessages = tsxComponent(function TranscriptMessages(_prop
                   const { message } = await deviceSession.api<{ message: Message }>(
                     transcriptContentPath(threadId, reply.id),
                   );
-                  const complete = codexDisplayMessage(message);
+                  const complete = codex ? codexDisplayMessage(message) : message;
                   if (!complete?.text || complete.truncated) throw Error('无法获取完整回复');
                   return complete.text;
                 }

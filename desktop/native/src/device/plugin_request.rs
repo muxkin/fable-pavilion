@@ -28,6 +28,7 @@ pub(super) struct PluginRequest {
     plan: Option<bool>,
     expected_queue_fingerprint: Option<String>,
     message_id: Option<String>,
+    draft_id: Option<Uuid>,
     upload_ids: Option<Vec<Uuid>>,
     skill_ids: Option<Vec<String>>,
     plugin_ids: Option<Vec<String>>,
@@ -38,14 +39,15 @@ impl PluginRequest {
         self,
         method: &str,
         adapter: &dyn Adapter,
-        resolve: impl FnOnce(&[Uuid]) -> Result<Vec<VerifiedUpload>>,
-    ) -> Result<(Uuid, Write)> {
+        resolve: impl FnOnce(Option<Uuid>, &[Uuid]) -> Result<Vec<VerifiedUpload>>,
+    ) -> Result<(Uuid, Write, Option<conversations::DraftUploads>)> {
         let skills = self.skill_ids.unwrap_or_default();
         let plugin_ids = self.plugin_ids.unwrap_or_default();
         ensure!(
             skills.len() <= 10
                 && plugin_ids.len() <= 10
-                && ((skills.is_empty() && plugin_ids.is_empty()) || method == "message.send")
+                && ((skills.is_empty() && plugin_ids.is_empty())
+                    || matches!(method, "message.send" | "thread.create"))
                 && skills.iter().chain(&plugin_ids).all(|name| {
                     (1..=200).contains(&name.encode_utf16().count())
                         && !name.chars().any(char::is_control)
@@ -56,13 +58,24 @@ impl PluginRequest {
         let uploads = self.upload_ids.as_deref().unwrap_or_default();
         ensure!(
             uploads.len() <= 10
-                && (uploads.is_empty() || matches!(method, "message.send" | "turn.steer")),
-            "DSH 附件参数无效"
+                && (uploads.is_empty()
+                    || matches!(method, "message.send" | "turn.steer" | "thread.create"))
+                && (self.draft_id.is_none() || method == "thread.create")
+                && (method != "thread.create" || uploads.is_empty() || self.draft_id.is_some()),
+            "插件附件参数无效"
         );
         let files = if uploads.is_empty() {
             Vec::new()
         } else {
-            resolve(uploads)?
+            resolve(self.draft_id, uploads)?
+        };
+        let draft_uploads = if method == "thread.create" && !uploads.is_empty() {
+            self.draft_id.map(|id| conversations::DraftUploads {
+                id,
+                uploads: uploads.to_vec(),
+            })
+        } else {
+            None
         };
         let text = |input: Option<String>, limit: usize| {
             let value = input.unwrap_or_default();
@@ -208,14 +221,17 @@ impl PluginRequest {
                 );
                 Write::Create {
                     title,
-                    prompt: text(self.prompt, 16_000)?,
+                    prompt: prompt_text(self.prompt)?,
                     project,
                     settings,
+                    files,
+                    skills,
+                    plugin_ids,
                 }
             }
             _ => anyhow::bail!("DSH 请求参数无效"),
         };
-        Ok((self.request_id, action))
+        Ok((self.request_id, action, draft_uploads))
     }
 }
 

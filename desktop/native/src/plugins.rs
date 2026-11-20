@@ -122,6 +122,12 @@ pub(crate) enum Write {
         project: Option<String>,
         #[serde(default, skip_serializing_if = "CreationSettings::is_empty")]
         settings: CreationSettings,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<VerifiedUpload>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skills: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        plugin_ids: Vec<String>,
     },
     Settings(ModelSettings),
     Control(Control),
@@ -226,7 +232,11 @@ pub(crate) struct GoalRef {
 impl Write {
     pub(crate) fn dispatch_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_secs(match self {
-            Self::Send { files, .. } | Self::Steer { files, .. } if !files.is_empty() => 180,
+            Self::Send { files, .. } | Self::Steer { files, .. } | Self::Create { files, .. }
+                if !files.is_empty() =>
+            {
+                180
+            }
             _ => 45,
         })
     }

@@ -166,6 +166,131 @@ pub(super) fn download(home: &Path, thread: &str, media: &Value) -> Result<Sourc
     })
 }
 
+const MAX_CITED_FILE: u64 = 256 * 1024 * 1024;
+
+fn parse_reference_path(reference: &str) -> Option<PathBuf> {
+    let trimmed = reference.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+        return None;
+    }
+    if trimmed.starts_with("file:") {
+        return url::Url::parse(trimmed).ok()?.to_file_path().ok();
+    }
+    Some(PathBuf::from(trimmed))
+}
+
+fn collect_cited_paths(steps: &[Value], workspace_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut cited = Vec::new();
+    let mut push_raw = |raw: &str| {
+        if let Some(path) = parse_reference_path(raw) {
+            if path.is_absolute() {
+                if let Ok(canon) = path.canonicalize() {
+                    cited.push(canon);
+                }
+            } else {
+                for root in workspace_roots {
+                    if let Ok(canon) = root.join(&path).canonicalize() {
+                        cited.push(canon);
+                    }
+                }
+            }
+        }
+    };
+    for step in steps {
+        if let Some(response) = step.get("plannerResponse") {
+            let text = response["modifiedResponse"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or(response["response"].as_str())
+                .unwrap_or("");
+            for link in crate::history_media::links(text) {
+                push_raw(&link);
+            }
+        }
+        for (section, field) in [
+            ("viewFile", "absolutePathUri"),
+            ("viewFile", "absolutePath"),
+            ("writeToFile", "targetFile"),
+            ("writeToFile", "targetFileUri"),
+            ("replaceFileContent", "targetFile"),
+            ("replaceFileContent", "targetFileUri"),
+            ("multiReplaceFileContent", "targetFile"),
+            ("multiReplaceFileContent", "targetFileUri"),
+            ("generateImage", "imagePath"),
+            ("generateImage", "outputPath"),
+        ] {
+            if let Some(raw) = step[section][field].as_str() {
+                push_raw(raw);
+            }
+        }
+        if let Some(paths) = step["notifyUser"]["pathsToReview"].as_array() {
+            for item in paths {
+                if let Some(raw) = item.as_str() {
+                    push_raw(raw);
+                }
+            }
+        }
+    }
+    cited
+}
+
+pub(super) fn download_cited(
+    home: &Path,
+    thread: &str,
+    workspace_roots: &[PathBuf],
+    steps: &[Value],
+    reference: &str,
+) -> Result<Source> {
+    let parsed = parse_reference_path(reference).ok_or(MissingAttachment)?;
+    let mut allowed_roots = Vec::new();
+    if let Ok(brain) = home.join("brain").join(thread).canonicalize() {
+        allowed_roots.push(brain);
+    }
+    for root in workspace_roots {
+        if let Ok(canon) = root.canonicalize() {
+            allowed_roots.push(canon);
+        }
+    }
+    let candidate = if parsed.is_absolute() {
+        parsed.canonicalize().map_err(|_| MissingAttachment)?
+    } else {
+        allowed_roots
+            .iter()
+            .find_map(|root| root.join(&parsed).canonicalize().ok())
+            .ok_or(MissingAttachment)?
+    };
+    ensure!(
+        allowed_roots.iter().any(|root| candidate.starts_with(root)),
+        "文件不在当前 Antigravity 会话工作区或制品目录内"
+    );
+    ensure!(
+        !super::export::is_secret_path(&candidate),
+        "敏感文件不允许下载"
+    );
+    let cited = collect_cited_paths(steps, workspace_roots);
+    ensure!(
+        cited.iter().any(|path| path == &candidate),
+        "文件未在当前 Antigravity 会话中引用"
+    );
+    let file = File::open(&candidate).map_err(|_| MissingAttachment)?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file() && (1..=MAX_CITED_FILE).contains(&metadata.len()),
+        "Antigravity 文件尺寸无效"
+    );
+    let name = candidate
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty() && !matches!(*n, "." | ".."))
+        .unwrap_or("attachment")
+        .to_owned();
+    Ok(Source {
+        file,
+        name,
+        expected: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

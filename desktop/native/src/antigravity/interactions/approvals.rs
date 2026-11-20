@@ -107,6 +107,104 @@ impl<'a> CommandApproval<'a> {
     }
 }
 
+const FILE_WRITE_ACTIONS: &[&str] = &[
+    "write_file",
+    "edit_file",
+    "file_write",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "create_file",
+    "modify_file",
+];
+
+pub(super) struct FileApproval<'a> {
+    permission: &'a Value,
+    target_path: &'a str,
+    change_kind: &'static str,
+}
+
+impl<'a> FileApproval<'a> {
+    pub(super) fn read(step: &'a Value, target: &Target) -> Option<Self> {
+        if step["status"] != WAITING
+            || !matches!(
+                step["type"].as_str(),
+                Some(
+                    "CORTEX_STEP_TYPE_GENERIC"
+                        | "CORTEX_STEP_TYPE_WRITE_TO_FILE"
+                        | "CORTEX_STEP_TYPE_REPLACE_FILE_CONTENT"
+                        | "CORTEX_STEP_TYPE_MULTI_REPLACE_FILE_CONTENT"
+                )
+            )
+            || !pending_interaction(step)
+        {
+            return None;
+        }
+        let source = &step["metadata"]["sourceTrajectoryStepInfo"];
+        if source["trajectoryId"] != target.trajectory_id
+            || source["stepIndex"].as_u64() != Some(u64::from(target.step_index))
+        {
+            return None;
+        }
+        let permission = &step["requestedInteraction"]["permission"];
+        let action = permission["resource"]["action"].as_str()?;
+        if !FILE_WRITE_ACTIONS.contains(&action)
+            || permission.to_string().len() > 100_000
+            || permission.get("approvalScopeFilter").is_some_and(|scopes| {
+                scopes.as_array().is_none_or(|scopes| {
+                    !scopes.is_empty() && !scopes.iter().any(|scope| scope == ONCE)
+                })
+            })
+        {
+            return None;
+        }
+        if [step["generic"]["args"].get("BypassSandbox")]
+            .into_iter()
+            .flatten()
+            .any(|flag| flag != false && flag != "false")
+        {
+            return None;
+        }
+        let target_path = visible_text(&permission["resource"]["target"], 4_096, false)?;
+        let change_kind = if matches!(action, "write_file" | "file_write" | "create_file") {
+            "create"
+        } else {
+            "update"
+        };
+        Some(Self {
+            permission,
+            target_path,
+            change_kind,
+        })
+    }
+
+    pub(super) fn view(&self, target: &Target, actionable: bool) -> Value {
+        json!({
+            "id": target.id(),
+            "kind": "file",
+            "title": "Antigravity 文件修改审批",
+            "description": self.target_path,
+            "changes": [{"path": self.target_path, "kind": self.change_kind}],
+            "turnId": target.turn_id,
+            "fingerprint": crate::state::hash(&json!([target.trajectory_id,target.step_index,target.turn_id,"file-permission",self.permission]).to_string()),
+            "decisions": ["accept", "decline"],
+            "actionable": actionable,
+        })
+    }
+
+    pub(super) fn reply(&self, target: &Target, answer: &Response) -> Result<Value> {
+        let allow = match answer.decision.as_deref() {
+            Some("accept") => true,
+            Some("decline") => false,
+            _ => bail!("Antigravity 文件审批只允许接受本次或拒绝"),
+        };
+        Ok(json!({
+            "trajectoryId": target.trajectory_id,
+            "stepIndex": target.step_index,
+            "permission": {"allow": allow, "scope": ONCE},
+        }))
+    }
+}
+
 fn visible_text(value: &Value, limit: usize, allow_multiline: bool) -> Option<&str> {
     bounded_text(value, limit).filter(|text| {
         !text.chars().any(|ch| {
@@ -206,5 +304,29 @@ mod tests {
         trajectory["steps"][1]["runCommand"]["commandLine"] = json!("printf 'changed input'");
         assert_eq!(views(&trajectory, false)[0]["kind"], "unsupported");
         assert!(response(&trajectory, &answer).is_err());
+    }
+
+    #[test]
+    fn file_approval_supports_one_time_write_and_edit_permissions() {
+        let trajectory = json!({"trajectoryId":TRAJECTORY,"cascadeId":CASCADE,"steps":[null,{
+            "type":"CORTEX_STEP_TYPE_REPLACE_FILE_CONTENT","status":WAITING,
+            "metadata":{"executionId":"fixture-turn","sourceTrajectoryStepInfo":{"trajectoryId":TRAJECTORY,"cascadeId":CASCADE,"stepIndex":1}},
+            "requestedInteraction":{"permission":{"resource":{"action":"replace_file_content","target":"/work/src/lib.rs"},"approvalScopeFilter":[ONCE]}},
+        }]});
+        let shown = &views(&trajectory, false)[0];
+        assert_eq!(shown["kind"], "file");
+        assert_eq!(shown["title"], "Antigravity 文件修改审批");
+        assert_eq!(shown["description"], "/work/src/lib.rs");
+        assert_eq!(shown["changes"][0]["path"], "/work/src/lib.rs");
+        assert_eq!(shown["changes"][0]["kind"], "update");
+        assert_eq!(shown["decisions"], json!(["accept", "decline"]));
+        assert_eq!(views(&trajectory, true)[0]["actionable"], false);
+        let accepted = response(&trajectory, &reply(shown, "accept")).unwrap();
+        assert_eq!(
+            accepted,
+            json!({"trajectoryId":TRAJECTORY,"stepIndex":1,"permission":{"allow":true,"scope":ONCE}})
+        );
+        let denied = response(&trajectory, &reply(shown, "decline")).unwrap();
+        assert_eq!(denied["permission"], json!({"allow":false,"scope":ONCE}));
     }
 }

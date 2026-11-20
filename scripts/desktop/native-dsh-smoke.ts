@@ -217,13 +217,22 @@ try {
 
   try {
     const { backends } = await session.rpc<{
-      backends: { id: string; connected: boolean; adapterVersion?: string }[];
+      backends: {
+        id: string;
+        connected: boolean;
+        adapterVersion?: string;
+        presentation?: { creation?: { attachments?: boolean; tools?: boolean } };
+      }[];
     }>(apiCall('/backends'));
     assert.deepEqual(
       backends.map(({ id, connected }) => [id, connected]),
       instances.map(({ id }) => [id, true]),
     );
     assert(backends.every((entry) => entry.adapterVersion), 'Expected the independent DSH plugin');
+    assert.equal(backends.find(({ id }) => id === one.id)?.presentation?.creation?.attachments, true);
+    assert.equal(backends.find(({ id }) => id === one.id)?.presentation?.creation?.tools, true);
+    const oneStatus = await rpc<{ capabilities: { renameThread?: boolean } }>(one.id, '/status');
+    assert.equal(oneStatus.capabilities.renameThread, true, 'Writable DSH did not advertise renameThread');
     const appearancePath = `/backends/${one.id}/appearance`;
     const customized = await session.rpc<{ revision: number; values: { name: string } }>(
       apiCall(appearancePath, 'POST', { revision: 0, patch: { name: 'DSH 测试外观' } }),
@@ -861,6 +870,11 @@ try {
     await wait(() => views.get(one.id)?.thread.model === dshModelId('drop'));
 
     phase = 'project grouping and thread creation';
+    assert.equal(views.get(one.id)?.thread.projectId, 'work-dsh-one');
+    assert.equal(views.get(one.id)?.thread.projectName, 'Workspace dsh-one');
+    assert.deepEqual(await rpc(one.id, '/threads/new/skills?creation=1&projectId=work-dsh-one'), {
+      skills: [{ id: 'fixture-skill', name: 'fixture-skill', description: 'Fixture skill', source: 'DSH' }],
+    });
     const grouped = await rpc<{ threads: { id: string; projectId: string }[] }>(
       one.id,
       '/threads?project=work-dsh-one',
@@ -870,6 +884,26 @@ try {
       projects: [{ id: 'work-dsh-one', name: 'Workspace dsh-one', count: 1 }],
       total: 1,
       ungrouped: 0,
+    });
+    const createDraftId = randomUUID();
+    const createAttachment = Buffer.from('dsh create attachment bytes');
+    const createDigest = hash(createAttachment);
+    const createUpload = await rpc<{ id: string }>(one.id, `/threads/new:${createDraftId}/uploads`, 'POST', {
+      name: 'create.txt',
+      size: createAttachment.length,
+      sha256: createDigest,
+      hashes: [createDigest],
+    });
+    await session.request(
+      'file',
+      { fileId: createUpload.id, backendId: one.id, threadId: `new:${createDraftId}`, action: 'write', index: 0 },
+      createAttachment,
+    );
+    await session.request('file', {
+      fileId: createUpload.id,
+      backendId: one.id,
+      threadId: `new:${createDraftId}`,
+      action: 'finish',
     });
     const create = randomUUID();
     await rpc(one.id, '/threads/new/create', 'POST', {
@@ -882,9 +916,26 @@ try {
       permission: 'restricted',
       agentPreset: 'custom',
       plan: true,
+      draftId: createDraftId,
+      uploadIds: [createUpload.id],
+      skillIds: ['fixture-skill'],
     });
     const completed = (await operation(create, 'completed')) as { resultThreadId?: string };
     assert.equal(completed.resultThreadId, 'created-' + create);
+    const createdPrompt = one.calls.find(
+      ({ method, request }) => method === 'session/prompt' && request.sessionId === 'created-' + create,
+    );
+    assert(createdPrompt, 'Missing creation session/prompt call');
+    assert(
+      (createdPrompt.request.content as { type: string; text?: string }[]).some(
+        (part) => part.type === 'text' && part.text === '/fixture-skill\ninitial',
+      ),
+      'Creation skill prompt did not reach DSH',
+    );
+    assert(
+      (createdPrompt.request.content as { type: string }[]).some((part) => part.type === 'file'),
+      'Creation attachment did not reach DSH',
+    );
     assert.equal(one.created.get('created-' + create), 'new session');
     assert.deepEqual(one.projections.get('created-' + create), {
       modelSelection: { next: { provider: 'fixture', model: 'advanced', reasoningEffort: 'high' } },

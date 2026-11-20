@@ -390,7 +390,13 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
                       }}
                     >
                       <Icon name="download" size={19} />
-                      <span>{working === 'export' ? '正在导出…' : '下载日志 ZIP'}</span>
+                      <span>
+                        {working === 'export'
+                          ? '正在导出…'
+                          : backend?.product === 'antigravity'
+                            ? '导出会话日志'
+                            : '下载日志 ZIP'}
+                      </span>
                     </button>
                   )}
                 </>

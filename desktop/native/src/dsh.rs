@@ -337,10 +337,16 @@ impl Dsh {
             prompt,
             project,
             mut settings,
+            files,
+            skills,
+            plugin_ids,
         } = action
         else {
             unreachable!()
         };
+        if self.validate_selection(&skills, &plugin_ids).is_err() {
+            return Delivery::Rejected("DSH 技能选项无效");
+        }
         let Ok(selection) = self.creation_selection(&settings).await else {
             return Delivery::Rejected("DSH 新会话设置不可用");
         };
@@ -386,8 +392,28 @@ impl Dsh {
                 _ => return Delivery::Uncertain,
             }
         }
+        let prompt = match self.skill_prompt(id, prompt, skills).await {
+            Ok(prompt) => prompt,
+            Err(_) => return Delivery::Uncertain,
+        };
+        let content = if files.is_empty() {
+            json!([{"type":"text","text":prompt}])
+        } else {
+            let limits = self
+                .projections(id)
+                .await
+                .map(|p| p["imageLimits"].clone())
+                .unwrap_or(Value::Null);
+            match self
+                .prompt_content(session, id, &prompt, files, &limits)
+                .await
+            {
+                Ok(content) => json!(content),
+                Err(_) => return Delivery::Uncertain,
+            }
+        };
         match self.exchange(session, "session/prompt", json!({"request":{
-            "sessionId":id,"requestId":request,"mode":"queue","content":[{"type":"text","text":prompt}]
+            "sessionId":id,"requestId":request,"mode":"queue","content":content
         }})).await {
             Ok(value) if value["accepted"] == true => Delivery::Completed(Some(id.to_owned())),
             _ => Delivery::Uncertain,
@@ -469,6 +495,15 @@ impl Dsh {
             Ok::<_, anyhow::Error>((follow, Timeline::snapshot(id, frame, bytes)?))
         })
         .await??;
+        let project = self.workspaces().await.ok().and_then(|workspaces| {
+            workspaces
+                .into_iter()
+                .find(|w| w.session_ids.iter().any(|session_id| session_id == id))
+                .map(|w| (w.workspace_id, w.title))
+        });
+        if let Some((pid, pname)) = &project {
+            timeline.set_project(pid.clone(), pname.clone());
+        }
         let mut events: Option<(Arc<Hub>, watch::Receiver<u64>)> = None;
         loop {
             *revision += 1;
@@ -496,6 +531,9 @@ impl Dsh {
                 };
                 if frame["type"] == "snapshot" {
                     timeline = Timeline::snapshot(id, frame, bytes)?;
+                    if let Some((pid, pname)) = &project {
+                        timeline.set_project(pid.clone(), pname.clone());
+                    }
                     break;
                 }
                 if timeline.advance(id, frame, bytes)? {
@@ -793,8 +831,15 @@ pub(crate) fn render(records: &[Value], full: bool) -> Vec<Value> {
             }
             Some("tool/call") => {
                 if let Some(id) = data["callId"].as_str() {
-                    messages.insert(seq, json!({"id":format!("tool-{id}"),"role":"tool",
-                        "text":capped(&data["name"],200),"details":capped(&data["arguments"],limit),"turnId":turn}));
+                    let name = capped(&data["name"], 200);
+                    let actions =
+                        crate::tool_activity::named_tool_action_by_name(name, &data["arguments"]);
+                    messages.insert(
+                        seq,
+                        json!({"id":format!("tool-{id}"),"role":"tool",
+                        "text":name,"details":capped(&data["arguments"],limit),"turnId":turn,
+                        "toolActions":actions}),
+                    );
                 }
             }
             Some(kind @ ("user/message" | "assistant/message" | "tool/result")) => {
@@ -849,6 +894,21 @@ pub(crate) fn render(records: &[Value], full: bool) -> Vec<Value> {
     }
     let mut messages: Vec<_> = messages.into_values().rev().take(500).collect();
     messages.reverse();
+    let mut last_assistant_by_turn: HashMap<String, usize> = HashMap::new();
+    for (index, message) in messages.iter().enumerate() {
+        if message["role"] == "assistant"
+            && message["text"].as_str().is_some_and(|t| !t.is_empty())
+        {
+            let key = message["turnId"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("msg-{index}"));
+            last_assistant_by_turn.insert(key, index);
+        }
+    }
+    for index in last_assistant_by_turn.into_values() {
+        messages[index]["turnBoundary"] = json!(true);
+    }
     messages
 }
 
@@ -907,7 +967,7 @@ impl Adapter for Dsh {
         }
         json!({"id":self.id,"name":self.name,"product":"dsh","version":self.version,"connected":connected,
         "profile":"rust-native","capabilities":capabilities,"presentation":{
-            "description":"DSH Web","creation":{"empty":true,"permission":if self.read_only {"native"} else {"select"},"preset":!self.read_only,"plan":!self.read_only},
+            "description":"DSH Web","creation":{"empty":true,"attachments":!self.read_only,"tools":!self.read_only,"permission":if self.read_only {"native"} else {"select"},"preset":!self.read_only,"plan":!self.read_only},
             "plan":if self.read_only {"none"} else {"control"},"fileReferences":true,"exportLog":true,"nativeCommands":!self.read_only,
         }})
     }
@@ -928,7 +988,7 @@ impl Adapter for Dsh {
             None
         };
         json!({"connected":connected,"writesEnabled":writable,"supportedVersion":self.version == "0.2.1-rc.5",
-            "reason":reason,"capabilities":{"send":writable,"steer":writable,"interrupt":writable,"newThread":writable,"queue":writable,"modelSettings":writable,"approvals":writable,"questions":writable,"openThread":writable}})
+            "reason":reason,"capabilities":{"send":writable,"steer":writable,"interrupt":writable,"newThread":writable,"renameThread":writable,"queue":writable,"modelSettings":writable,"approvals":writable,"questions":writable,"openThread":writable}})
     }
     async fn read(&self, method: &str, params: &Value, query: &Value) -> Result<Option<Value>> {
         match method {
@@ -985,6 +1045,27 @@ impl Adapter for Dsh {
                 .map(Some);
         }
         if method == "skills.list" {
+            if query["creation"] == "1" || id == "new" {
+                let project = query["projectId"].as_str().filter(|p| !p.is_empty());
+                let candidate = self
+                    .catalog()
+                    .await
+                    .ok()
+                    .and_then(|(rows, _)| {
+                        rows.iter()
+                            .find(|row| {
+                                project.is_none_or(|p| row["projectId"].as_str() == Some(p))
+                            })
+                            .or_else(|| rows.iter().find(|row| row["id"].as_str() == Some(id)))
+                            .or_else(|| rows.first())
+                            .and_then(|row| row["id"].as_str().map(str::to_owned))
+                    });
+                let skills = match candidate {
+                    Some(session_id) => self.skills(&session_id).await.unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                return Ok(Some(json!({"skills":skills})));
+            }
             return self
                 .skills(id)
                 .await

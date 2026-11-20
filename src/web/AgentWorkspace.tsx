@@ -1931,6 +1931,8 @@ export default tsxComponent(function AgentWorkspace(_props: {
                       creation={presentation?.creation}
                       requireProject={antigravity}
                       canAttachAfterCreation={canAttach}
+                      imageUploadTypes={imagesOnly ? antigravityImages : undefined}
+                      allowPlugins={backend?.product !== 'dsh'}
                       active={newOpen}
                       defaultProject={newProject}
                       knownProjects={projects.projects}

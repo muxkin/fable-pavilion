@@ -461,6 +461,70 @@ try {
     await waitFor(() => latest?.canSend === true, 'Command decision did not close the request');
   }
 
+  phase = 'one-time file approval';
+  for (const decision of ['decline', 'accept'] as const) {
+    const previousApprovals: number = fixture.calls.approval;
+    fixture.requestFileApproval(decision === 'accept');
+    await waitFor(
+      () => latest?.requests?.some((request: any) => request.kind === 'file' && request.actionable),
+      'Native file approval was not projected',
+    );
+    const approval: { id: string; turnId: string; fingerprint: string; changes?: { path: string; kind: string }[] } =
+      latest!.requests[0];
+    assert.equal(approval.changes?.[0]?.kind, 'update');
+    const requestId = randomUUID();
+    await session.rpc(
+      scoped(`/threads/${threadId}/responses`, 'POST', {
+        targetRequestId: approval.id,
+        expectedTurnId: approval.turnId,
+        expectedFingerprint: approval.fingerprint,
+        decision,
+        requestId,
+      }),
+    );
+    await waitFor(
+      async () => (await operation(requestId)).state === 'completed',
+      `File approval ${decision} did not complete`,
+    );
+    assert.equal(fixture.calls.approval, previousApprovals + 1);
+    await waitFor(() => latest?.canSend === true, 'File approval did not close the request');
+  }
+
+  phase = 'workspace file references, cited artifact download, and sanitized log export';
+  const references = await session.rpc<{ files: { name: string; path: string }[] }>(
+    scoped(`/threads/${threadId}/references?q=demo`),
+  );
+  assert.deepEqual(references.files, [{ name: 'demo.ts', path: 'src/demo.ts' }]);
+  const allRefs = await session.rpc<{ files: { name: string; path: string }[] }>(
+    scoped(`/threads/${threadId}/references`),
+  );
+  assert(!allRefs.files.some((f) => f.name === '.env'), 'Secret .env leaked into workspace references');
+  fixture.citeArtifact();
+  const artifactManifest = await session.rpc<{ id: string; name: string }>(
+    scoped(`/threads/${threadId}/media`, 'POST', { path: fixture.citedArtifact }),
+  );
+  assert.equal(artifactManifest.name, 'artifact.md');
+  const exportManifest = await session.rpc<{ id: string; name: string }>(
+    scoped(`/threads/${threadId}/export`, 'POST'),
+  );
+  assert.equal(exportManifest.name, `antigravity-${threadId}.json`);
+  const exportBulk = await connect();
+  try {
+    const exported = await exportBulk.request('file', {
+      backendId,
+      threadId,
+      fileId: exportManifest.id,
+      action: 'read',
+      index: 0,
+    });
+    const exportText = Buffer.from(exported.bytes!).toString('utf8');
+    assert(exportText.includes('fixture answer'), 'Export missing visible assistant response');
+    assert(!exportText.includes('private synthetic reasoning'), 'Export leaked private thinking');
+    assert(!exportText.includes('private synthetic signature'), 'Export leaked private signature');
+  } finally {
+    exportBulk.close();
+  }
+
   phase = 'send and duplicate send';
   const skillList = await session.rpc<{ skills: { id: string; name: string }[] }>(
     scoped(`/threads/${threadId}/skills`),
@@ -749,13 +813,51 @@ try {
   await waitFor(() => latest?.activeTurnId === null, 'Completed turn was not synchronized');
 
   const createId = randomUUID();
-  phase = 'create with first-message model and duplicate create';
+  const createDraftId = randomUUID();
+  phase = 'create with first-message model, image, tools and duplicate create';
+  const createSkills = await session.rpc<{ skills: { id: string; name: string }[] }>(
+    scoped(`/threads/new/skills?creation=1&projectId=${projectId}`),
+  );
+  const createPlugins = await session.rpc<{ plugins: { id: string; name: string }[] }>(
+    scoped(`/threads/new/plugins?creation=1&projectId=${projectId}`),
+  );
+  assert.equal(createSkills.skills.length, 1);
+  assert.equal(createPlugins.plugins.length, 1);
+  const createImageHash = createHash('sha256').update(fixtureImage).digest('hex');
+  const createUpload = await session.rpc<{ id: string }>(
+    scoped(`/threads/new:${createDraftId}/uploads`, 'POST', {
+      name: 'create-photo.png',
+      size: fixtureImage.length,
+      sha256: createImageHash,
+      hashes: [createImageHash],
+    }),
+  );
+  const createBulk = await connect();
+  try {
+    await createBulk.request(
+      'file',
+      { backendId, threadId: `new:${createDraftId}`, fileId: createUpload.id, action: 'write', index: 0 },
+      fixtureImage,
+    );
+    await createBulk.request('file', {
+      backendId,
+      threadId: `new:${createDraftId}`,
+      fileId: createUpload.id,
+      action: 'finish',
+    });
+  } finally {
+    createBulk.close();
+  }
   const create = scoped('/threads/new/create', 'POST', {
     requestId: createId,
     prompt: 'fixture create once',
     projectId,
     title: '原生测试会话',
     model: 'fixture-next',
+    draftId: createDraftId,
+    uploadIds: [createUpload.id],
+    skillIds: [createSkills.skills[0].id],
+    pluginIds: [createPlugins.plugins[0].id],
   });
   await session.rpc(create);
   await waitFor(

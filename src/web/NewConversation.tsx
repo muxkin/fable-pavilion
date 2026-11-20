@@ -36,6 +36,8 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
   creation?: BackendPresentation['creation'];
   requireProject?: boolean;
   canAttachAfterCreation?: boolean;
+  imageUploadTypes?: readonly string[];
+  allowPlugins?: boolean;
   disabled: boolean;
   active: boolean;
   onCreate: (input: NewConversationInput) => void;
@@ -103,6 +105,8 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
     creation,
     requireProject = false,
     canAttachAfterCreation = true,
+    imageUploadTypes,
+    allowPlugins = true,
     disabled,
     active,
     onCreate,
@@ -280,11 +284,23 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
 
     async function addFiles(files: FileList | File[] | null) {
       if (!files?.length || disabled || !restored || !canAttach || uploadingState.value) return;
-      if (draftState.value.uploads.length + files.length > 10) {
+      const list = Array.from(files);
+      if (
+        imageUploadTypes &&
+        list.some((file) => {
+          const genericType = !file.type || file.type === 'application/octet-stream';
+          return genericType
+            ? !/\.(?:png|jpe?g|webp|gif)$/i.test(file.name)
+            : !imageUploadTypes.includes(file.type);
+        })
+      ) {
+        setUploadError('此会话只能添加 PNG、JPEG、WebP 或 GIF 图片');
+        return;
+      }
+      if (draftState.value.uploads.length + list.length > 10) {
         setUploadError('每条消息最多 10 个附件');
         return;
       }
-      const list = Array.from(files);
       const jobs = uploadItems(list);
       setUploadError('');
       setUploadJobs(jobs);
@@ -450,6 +466,7 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
             }
             disabled={disabled}
             onUpload={canAttach ? addFiles : undefined}
+            imageUploadTypes={imageUploadTypes}
             uploadDisabled={!restored}
             uploading={uploading}
             uploadItems={uploadJobs}
@@ -515,7 +532,7 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
                           </button>
                         </header>
                         <ComposerToolEntries
-                          plugins
+                          plugins={allowPlugins}
                           disabled={disabled}
                           onChoose={(kind) => {
                             close();

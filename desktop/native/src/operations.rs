@@ -203,14 +203,20 @@ impl Store {
         backend: &str,
         id: Uuid,
         thread: &str,
+        draft: Option<(&str, &DraftUploads)>,
     ) -> Result<()> {
-        let changed = self.db.execute(
+        let tx = self.db.transaction()?;
+        let changed = tx.execute(
             "UPDATE operations SET result_thread_id=?1,updated=?2
              WHERE backend_id=?3 AND id=?4 AND kind='create' AND state='dispatching'
                AND (result_thread_id IS NULL OR result_thread_id=?1)",
             params![thread, now(), backend, id.to_string()],
         )?;
         ensure!(changed == 1, "无法保存新会话标识");
+        if let Some((device, draft)) = draft {
+            link_plugin_create_uploads(&tx, backend, device, thread, draft)?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -322,8 +328,26 @@ fn link_create_uploads(
     thread: Uuid,
     draft: &DraftUploads,
 ) -> Result<()> {
-    let source = Scope::codex_draft(backend, draft.id);
-    let destination = Scope::codex(backend, thread);
+    link_draft_uploads(db, &Scope::codex_draft(backend, draft.id), &Scope::codex(backend, thread), device, draft)
+}
+
+fn link_plugin_create_uploads(
+    db: &Connection,
+    backend: &str,
+    device: &str,
+    thread: &str,
+    draft: &DraftUploads,
+) -> Result<()> {
+    link_draft_uploads(db, &Scope::codex_draft(backend, draft.id), &Scope::plugin(backend, thread), device, draft)
+}
+
+fn link_draft_uploads(
+    db: &Connection,
+    source: &Scope,
+    destination: &Scope,
+    device: &str,
+    draft: &DraftUploads,
+) -> Result<()> {
     let mut link = db.prepare(
         "INSERT INTO native_upload_thread_links (upload_id,thread)
          SELECT id,?1 FROM native_uploads WHERE id=?2 AND device=?3 AND thread=?4 AND complete=1

@@ -25,6 +25,7 @@ pub(crate) struct Timeline {
     bytes: usize,
     stream_revision: i64,
     attempt: Option<Attempt>,
+    project: Option<(String, String)>,
 }
 
 struct Durable {
@@ -51,7 +52,9 @@ struct Attempt {
     next: u64,
     committed: Option<i64>,
     text: BTreeMap<u64, String>,
+    reasoning: BTreeMap<u64, String>,
     bytes: usize,
+    reasoning_bytes: usize,
 }
 
 impl Attempt {
@@ -67,7 +70,9 @@ impl Attempt {
             next,
             committed: None,
             text: BTreeMap::new(),
+            reasoning: BTreeMap::new(),
             bytes: 0,
+            reasoning_bytes: 0,
         })
     }
 
@@ -80,11 +85,22 @@ impl Attempt {
         }
     }
 
+    fn append_reasoning(&mut self, index: u64, value: &str) {
+        let remaining = MAX_STREAM_TEXT.saturating_sub(self.reasoning_bytes);
+        let part = &value[..value.floor_char_boundary(remaining.min(value.len()))];
+        if !part.is_empty() {
+            self.reasoning.entry(index).or_default().push_str(part);
+            self.reasoning_bytes += part.len();
+        }
+    }
+
     fn chunk(&mut self, chunk: &Value) {
-        if chunk["type"] == "text-delta"
-            && let (Some(index), Some(text)) = (chunk["index"].as_u64(), chunk["text"].as_str())
-        {
-            self.append(index, text);
+        if let (Some(index), Some(text)) = (chunk["index"].as_u64(), chunk["text"].as_str()) {
+            match chunk["type"].as_str() {
+                Some("text-delta") => self.append(index, text),
+                Some("reasoning-delta") => self.append_reasoning(index, text),
+                _ => {}
+            }
         }
     }
 
@@ -149,7 +165,12 @@ impl Timeline {
             bytes,
             stream_revision: stream["revision"].as_i64().unwrap_or(-1),
             attempt,
+            project: None,
         })
+    }
+
+    pub(crate) fn set_project(&mut self, id: String, name: String) {
+        self.project = Some((id, name));
     }
 
     pub(crate) fn advance(&mut self, thread: &str, mut frame: Value, bytes: usize) -> Result<bool> {
@@ -332,9 +353,16 @@ impl Timeline {
     pub(crate) fn view(&self, id: &str, revision: u64, writable: bool) -> View {
         let streamed = self.attempt.as_ref().and_then(|attempt| {
             let text = attempt.text.values().cloned().collect::<String>();
-            (!text.is_empty()).then(|| json!({
-                "id":format!("stream-{}", attempt.id),"role":"assistant","text":text,"turnId":attempt.turn.to_string(),
-            }))
+            let reasoning = attempt.reasoning.values().cloned().collect::<String>();
+            (!text.is_empty() || !reasoning.is_empty()).then(|| {
+                let mut value = json!({
+                    "id":format!("stream-{}", attempt.id),"role":"assistant","text":text,"turnId":attempt.turn.to_string(),
+                });
+                if !reasoning.is_empty() {
+                    value["details"] = json!(reasoning);
+                }
+                value
+            })
         });
         let turn = self.durable.turn.clone().or_else(|| {
             self.attempt
@@ -342,6 +370,24 @@ impl Timeline {
                 .map(|attempt| attempt.turn.to_string())
         });
         let running = turn.is_some();
+        let activity = if !running {
+            None
+        } else if let Some(attempt) = &self.attempt {
+            if attempt.bytes > 0 {
+                Some("responding")
+            } else {
+                Some("thinking")
+            }
+        } else if self
+            .durable
+            .messages
+            .last()
+            .is_some_and(|m| m["role"] == "tool" && m["turnId"].as_str() == turn.as_deref())
+        {
+            Some("tool")
+        } else {
+            Some("thinking")
+        };
         let inbox = &self.projections["inbox"];
         let queue: Vec<_> = ["next-turn", "next-step"]
             .iter()
@@ -358,19 +404,28 @@ impl Timeline {
             .collect();
         let queue_fingerprint = inbox.is_object().then(|| hash(&json!(queue).to_string()));
         let selection = &self.projections["modelSelection"]["next"];
+        let (project_id, project_name) = match &self.project {
+            Some((id, name)) => (json!(id), json!(name)),
+            None => (Value::Null, Value::Null),
+        };
+        let mut thread = json!({
+            "id":id,"title":self.projections["title"].as_str().unwrap_or("新会话"),
+            "cwd":self.header["cwd"].as_str().unwrap_or_default(),
+            "updatedAt":self.header["createdAt"].as_i64().unwrap_or_default(),
+            "owner":writable,"synchronized":true,"runtimeStatus":if running {"running"} else {"idle"},
+            "revision":revision,"activeTurnId":turn,"model":dsh_settings::model(selection),
+            "reasoningEffort":dsh_settings::effort(selection),"mode":dsh_settings::mode(&self.projections),
+            "controls":dsh_settings::state(&self.projections),"pendingRequests":0,"requests":[],
+            "canSend":writable && !running,"canSteer":writable && running,"canInterrupt":writable && running,
+            "queuedMessages":queued,"queueFingerprint":queue_fingerprint,
+            "reason":if writable {Value::Null} else {json!("DSH 原生只读")},
+            "projectId":project_id,"projectName":project_name,
+        });
+        if let Some(activity) = activity {
+            thread["codexActivity"] = json!(activity);
+        }
         View {
-            thread: json!({
-                "id":id,"title":self.projections["title"].as_str().unwrap_or("新会话"),
-                "cwd":self.header["cwd"].as_str().unwrap_or_default(),
-                "updatedAt":self.header["createdAt"].as_i64().unwrap_or_default(),
-                "owner":writable,"synchronized":true,"runtimeStatus":if running {"running"} else {"idle"},
-                "revision":revision,"activeTurnId":turn,"model":dsh_settings::model(selection),
-                "reasoningEffort":dsh_settings::effort(selection),"mode":dsh_settings::mode(&self.projections),
-                "controls":dsh_settings::state(&self.projections),"pendingRequests":0,"requests":[],
-                "canSend":writable && !running,"canSteer":writable && running,"canInterrupt":writable && running,
-                "queuedMessages":queued,"queueFingerprint":queue_fingerprint,
-                "reason":if writable {Value::Null} else {json!("DSH 原生只读")},"projectId":null,"projectName":null,
-            }),
+            thread,
             messages: self.durable.messages.clone(),
             streamed,
             observations: self.durable.observations.clone(),

@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { basename, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 export type QuestionReceiptFault = 'committed' | 'uncommitted';
 
@@ -56,6 +57,15 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
     extraQuestionOptions,
   } = ANTIGRAVITY_FIXTURE_CONSTANTS;
   const nextInvocation = 'MESSAGE_DELIVERY_STRATEGY_NEXT_INVOCATION';
+  const workspaceDir = join(agentHome, 'workspace');
+  await mkdir(join(workspaceDir, 'src'), { recursive: true });
+  await writeFile(join(workspaceDir, 'src', 'demo.ts'), 'export const demo = 42;\n');
+  await writeFile(join(workspaceDir, '.env'), 'FIXTURE_SECRET=do-not-expose\n');
+  const workspaceUri = pathToFileURL(workspaceDir).href;
+  const brainDir = join(agentHome, 'brain', threadId);
+  await mkdir(brainDir, { recursive: true });
+  const citedArtifact = join(brainDir, 'artifact.md');
+  await writeFile(citedArtifact, '# Fixture Artifact\n');
 
   const calls = {
     send: 0,
@@ -395,7 +405,7 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
                 trajectoryId: nativeTrajectoryId(id),
                 stepCount: conversation.steps.length,
                 lastModifiedTime: '2026-11-19T06:00:00Z',
-                workspaces: [{ workspaceFolderAbsoluteUri: 'file:///fixture/project' }],
+                workspaces: [{ workspaceFolderAbsoluteUri: workspaceUri }],
                 trajectoryMetadata: { projectId },
               },
             ]),
@@ -419,12 +429,20 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
         return { projectIds: [projectId] };
       case 'ReadProjects':
         assert.deepEqual(body.ids, [projectId]);
-        return { projects: [{ id: projectId, name: 'Fixture project' }] };
+        return {
+          projects: [
+            {
+              id: projectId,
+              name: 'Fixture project',
+              projectResources: { resources: [{ gitFolder: { folderUri: workspaceUri } }] },
+            },
+          ],
+        };
       case 'GetCascadeModelConfigData':
         return quotaCatalog();
       case 'GetSlashCommands':
-        assert.equal(body.cascadeId, threadId);
-        assert.deepEqual(body.workspaceUris, ['file:///fixture/project']);
+        assert(body.cascadeId === threadId || body.cascadeId === '');
+        assert.deepEqual(body.workspaceUris, [workspaceUri]);
         return {
           commands: [
             { info: { name: 'help', type: 'SLASH_COMMAND_TYPE_SYSTEM' }, title: 'Help' },
@@ -434,7 +452,7 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
           ],
         };
       case 'GetAllPlugins':
-        assert.deepEqual(body, { workspaceUris: ['file:///fixture/project'] });
+        assert.deepEqual(body, { workspaceUris: [workspaceUri] });
         return {
           plugins: [
             {
@@ -516,6 +534,9 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
         if (text === 'fixture create once') {
           assert.equal(body.cascadeId, createdId);
           assert.deepEqual(body.cascadeConfig, { plannerConfig: { planModel: 'MODEL_FIXTURE_NEXT' } });
+          assert.equal(media.length, 1, 'Creation image did not reach Antigravity');
+          assert.deepEqual(body.items[1], { item: { slashCommand: { info: skillInfo, argumentValues: {} } } });
+          assert.deepEqual(body.items[2], { item: { plugin: nativePlugin } });
         }
         const expectedModel =
           !oldGateway && (text === 'fixture send once' || media[0]?.displayName === 'browser-fixture.png');
@@ -860,6 +881,36 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
         },
       });
     },
+    requestFileApproval(allow: boolean) {
+      const conversation = conversations.get(threadId)!;
+      assert.equal(conversation.running, false);
+      expectedCommandApproval = allow;
+      conversation.running = true;
+      conversation.steps.push({
+        type: 'CORTEX_STEP_TYPE_REPLACE_FILE_CONTENT',
+        status: 'CORTEX_STEP_STATUS_WAITING',
+        metadata: {
+          executionId: 'fixture-file-approval',
+          sourceTrajectoryStepInfo: { trajectoryId, cascadeId: threadId, stepIndex: conversation.steps.length },
+        },
+        requestedInteraction: {
+          permission: {
+            resource: { action: 'replace_file_content', target: join(workspaceDir, 'src', 'demo.ts') },
+            approvalScopeFilter: ['PERMISSION_SCOPE_ONCE'],
+          },
+        },
+      });
+    },
+    citeArtifact() {
+      const conversation = conversations.get(threadId)!;
+      conversation.steps.push({
+        type: 'CORTEX_STEP_TYPE_VIEW_FILE',
+        status: 'CORTEX_STEP_STATUS_DONE',
+        metadata: { executionId: 'history-execution' },
+        viewFile: { absolutePath: citedArtifact },
+      });
+    },
+    citedArtifact,
     startQueueTurn() {
       const conversation = conversations.get(threadId)!;
       conversation.running = true;

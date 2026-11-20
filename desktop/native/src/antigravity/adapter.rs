@@ -30,14 +30,29 @@ impl Adapter for Backend {
                 let projects = self.projects().await?;
                 Ok(Some(json!({"projects":projects})))
             }
+            "references.list" => export::file_references(
+                self,
+                thread_id(params)?,
+                query["q"].as_str().unwrap_or_default(),
+            )
+            .await
+            .map(Some),
             "skills.list" => {
-                let skills = self.skills(thread_id(params)?).await?;
+                let skills = if query["creation"] == "1" || params["id"] == "new" {
+                    self.creation_skills(query["projectId"].as_str()).await?
+                } else {
+                    self.skills(thread_id(params)?).await?
+                };
                 Ok(Some(
                     json!({"skills":skills.into_iter().map(|s| s.choice).collect::<Vec<_>>()}),
                 ))
             }
             "plugins.list" => {
-                let plugins = self.plugins(thread_id(params)?).await?;
+                let plugins = if query["creation"] == "1" || params["id"] == "new" {
+                    self.creation_plugins(query["projectId"].as_str()).await?
+                } else {
+                    self.plugins(thread_id(params)?).await?
+                };
                 Ok(Some(
                     json!({"plugins":plugins.into_iter().map(|plugin| plugin.choice).collect::<Vec<_>>()}),
                 ))
@@ -71,18 +86,32 @@ impl Adapter for Backend {
 
     async fn media(&self, thread: &str, reference: &str) -> Result<Media> {
         valid_id(thread)?;
-        let (step, index) = media::reference(reference)?;
-        let native_step = self.history_step(thread, step).await?.unwrap_or_default();
-        media::download(
-            &self.home,
-            thread,
-            &native_step["userInput"]["media"][index],
-        )
-        .map(Media::Download)
+        if reference.starts_with("antigravity-image:") {
+            let (step, index) = media::reference(reference)?;
+            let native_step = self.history_step(thread, step).await?.unwrap_or_default();
+            return media::download(
+                &self.home,
+                thread,
+                &native_step["userInput"]["media"][index],
+            )
+            .map(Media::Download);
+        }
+        let uris = self.conversation_workspaces(thread).await?;
+        let roots = export::workspace_roots(&uris);
+        let (daemon, _) = self.conversation(thread).await?;
+        let steps = if let Some(data) = self.readable_trajectory(&daemon, thread).await? {
+            data["trajectory"]["steps"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        media::download_cited(&self.home, thread, &roots, &steps, reference).map(Media::Download)
     }
 
-    async fn export_log(&self, _thread: &str) -> Result<crate::history_media::Source> {
-        anyhow::bail!("Antigravity 暂不支持导出原始日志")
+    async fn export_log(&self, thread: &str) -> Result<crate::history_media::Source> {
+        export::export_session(self, thread).await
     }
 
     fn subscribe(self: Arc<Self>, thread: &str) -> Result<Arc<Subscription>> {
@@ -331,9 +360,16 @@ impl Adapter for Backend {
                 prompt,
                 project,
                 settings,
+                files,
+                skills,
+                plugin_ids,
             } => {
-                if !valid_text(&prompt) {
-                    return Delivery::Rejected("请输入第一条消息（最多 16000 字符）");
+                if self.validate_selection(&skills, &plugin_ids).is_err() {
+                    return Delivery::Rejected("Antigravity 工具选项无效");
+                }
+                let text = prompt.trim();
+                if !(valid_text(text) || text.is_empty() && !files.is_empty()) {
+                    return Delivery::Rejected("请输入第一条消息（最多 16000 字符）或添加图片");
                 }
                 if title.as_deref().is_some_and(|s| !valid_title(s)) {
                     return Delivery::Rejected("会话名称无效");
@@ -366,6 +402,31 @@ impl Adapter for Backend {
                     };
                     config = json!({"plannerConfig":{"planModel":model}});
                 }
+                let Ok(images) = media::stage_uploads(&files).await else {
+                    return Delivery::Rejected("Antigravity 图片无效、已变化或超过 32 MiB");
+                };
+                let mut items = Vec::new();
+                if !text.is_empty() {
+                    items.push(json!({"text":text}));
+                }
+                if !skills.is_empty() {
+                    let Ok(catalog) = self.creation_skills(Some(&project)).await else {
+                        return Delivery::Rejected("Antigravity 技能目录暂不可用");
+                    };
+                    let Ok(selected) = selected_skills(&catalog, &skills) else {
+                        return Delivery::Rejected("所选技能已移除或当前项目不可用，请重新选择");
+                    };
+                    items.extend(selected);
+                }
+                if !plugin_ids.is_empty() {
+                    let Ok(catalog) = self.creation_plugins(Some(&project)).await else {
+                        return Delivery::Rejected("Antigravity 插件目录暂不可用");
+                    };
+                    let Ok(selected) = plugin_selection::selected(&catalog, &plugin_ids) else {
+                        return Delivery::Rejected("所选插件已移除或当前项目不可用，请重新选择");
+                    };
+                    items.extend(selected);
+                }
                 let result = self.dispatch("StartCascade", json!({"source":"CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT",
                     "trajectoryType":"CORTEX_TRAJECTORY_TYPE_CASCADE","projectEnvConfig":{"projectId":project,"defaultProjectEnvironment":{}}})).await;
                 let result = match result {
@@ -388,14 +449,18 @@ impl Adapter for Backend {
                         return Delivery::Uncertain;
                     }
                 }
-                match self
-                    .dispatch(
-                        "SendUserCascadeMessage",
-                        json!({"cascadeId":id,"items":[{"text":prompt.trim()}],
-                    "cascadeConfig":config,"clientMessageId":request}),
-                    )
-                    .await
-                {
+                let mut body = json!({
+                    "cascadeId": id,
+                    "items": items,
+                    "cascadeConfig": config,
+                    "clientMessageId": request,
+                });
+                if !images.media.is_empty() {
+                    body["media"] = json!(images.media);
+                }
+                let sent = self.dispatch("SendUserCascadeMessage", body).await;
+                drop(images);
+                match sent {
                     Ok(_) => Delivery::Completed(Some(id.to_owned())),
                     Err(_) => Delivery::Uncertain,
                 }

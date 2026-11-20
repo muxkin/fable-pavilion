@@ -169,7 +169,8 @@ export async function createDshFixture({ png, workspacePdf, sessionZip }: DshFix
     if (path.pathname === '/api/session/uploadFileBinary') {
       assert.equal(request.headers['content-type'], 'application/octet-stream');
       assert.equal(Number(request.headers['content-length']), body.length);
-      assert.equal(path.searchParams.get('sessionId'), 'shared');
+      const uploadSessionId = path.searchParams.get('sessionId') ?? '';
+      assert(uploadSessionId === 'shared' || instance.created.has(uploadSessionId));
       const name = path.searchParams.get('name')!;
       const file = { attachmentId: 'sha256:' + sha256(body), name, bytes: body.length };
       const receiptId = randomUUID();
@@ -187,7 +188,7 @@ export async function createDshFixture({ png, workspacePdf, sessionZip }: DshFix
     let value;
     switch (rpc.method) {
       case 'skills/list':
-        assert.equal(args.sessionId, 'shared');
+        assert(args.sessionId === 'shared' || instance.created.has(args.sessionId));
         value = {
           skills:
             instance === one

@@ -18,17 +18,20 @@ use std::{
 };
 use uuid::Uuid;
 
+mod adapter;
+mod export;
 mod history;
 mod interactions;
 mod media;
 mod plugin_selection;
-mod queue;
-mod adapter;
 mod projection;
+mod queue;
+mod steps;
 mod stream;
 #[cfg(test)]
 mod tests;
 use projection::*;
+use steps::{activity_state, messages};
 
 const SERVICE: &str = "exa.language_server_pb.LanguageServerService";
 const MAX_RESPONSE: usize = 32 * 1024 * 1024;
@@ -331,8 +334,8 @@ impl Backend {
         json!({"id":self.id,"product":"antigravity","name":self.name,
             "connected":connected,"version":daemon.map(|d| d.ls_version),"profile":"rust-native",
             "presentation":{"description":"Antigravity App 本地适配器",
-                "creation":{"empty":true,"permission":"native","preset":false,"plan":false,"notice":"沿用 Antigravity 项目权限"},
-                "plan":"none","fileReferences":false,"exportLog":false,"nativeCommands":false,"attachmentMode":"image"},
+                "creation":{"empty":true,"attachments":!self.read_only,"tools":!self.read_only,"permission":"native","preset":false,"plan":false,"notice":"沿用 Antigravity 项目权限"},
+                "plan":"none","fileReferences":true,"exportLog":true,"nativeCommands":false,"attachmentMode":"image"},
             "capabilities":capabilities})
     }
 
@@ -396,6 +399,51 @@ impl Backend {
                     .filter_map(|w| w["workspaceFolderAbsoluteUri"].as_str().map(|u| json!(u)))
                     .collect()
             }))
+    }
+
+    async fn creation_workspaces(&self, project: Option<&str>) -> Vec<Value> {
+        let Some(project) = project.filter(|s| !s.is_empty()) else {
+            return Vec::new();
+        };
+        let Ok(projects) = self.project_catalog(false).await else {
+            return Vec::new();
+        };
+        let Some(path) = projects
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|p| p["id"] == project)
+            .and_then(|p| p["path"].as_str())
+            .filter(|s| !s.is_empty())
+        else {
+            return Vec::new();
+        };
+        url::Url::from_file_path(path)
+            .ok()
+            .map(|uri| vec![json!(uri.to_string())])
+            .unwrap_or_default()
+    }
+
+    async fn creation_skills(&self, project: Option<&str>) -> Result<Vec<NativeSkill>> {
+        let workspace_uris = self.creation_workspaces(project).await;
+        let data = self
+            .call(
+                "GetSlashCommands",
+                json!({"cascadeId":"","workspaceUris":workspace_uris}),
+            )
+            .await?;
+        skill_catalog("new", &json!(workspace_uris), &data)
+    }
+
+    async fn creation_plugins(
+        &self,
+        project: Option<&str>,
+    ) -> Result<Vec<plugin_selection::NativePlugin>> {
+        let workspace_uris = self.creation_workspaces(project).await;
+        let data = self
+            .call("GetAllPlugins", json!({"workspaceUris":workspace_uris}))
+            .await?;
+        plugin_selection::catalog("new", &workspace_uris, &data)
     }
 
     async fn skills(&self, thread: &str) -> Result<Vec<NativeSkill>> {
@@ -711,6 +759,9 @@ impl Backend {
         } else {
             "unknown"
         });
+        if let Some(activity) = activity_state(steps, active) {
+            view["codexActivity"] = json!(activity);
+        }
         let catalog = if model.is_some() {
             self.model_catalog().await
         } else {
@@ -744,6 +795,11 @@ impl Backend {
             .any(|request| request["actionable"] == true && request["kind"] == "question")
         {
             Some("请先回答 Antigravity 的问题")
+        } else if requests
+            .iter()
+            .any(|request| request["actionable"] == true && request["kind"] == "file")
+        {
+            Some("请先处理 Antigravity 的文件修改审批")
         } else if requests.iter().any(|request| request["actionable"] == true) {
             Some("请先处理 Antigravity 的命令审批")
         } else if !requests.is_empty() {

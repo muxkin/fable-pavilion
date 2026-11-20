@@ -9,8 +9,8 @@
 | 插件标识 | 对应产品 | 说明与配置要点 |
 | --- | --- | --- |
 | `@agent-remote/adapter-codex` | Codex | 默认实例 ID 为 `codex-local`，自动发现本机状态目录与桌面连接；支持多实例配置（分别指定 `home`、`socket`、`appTools`、`cli`）。支持历史、实时控制、模型/权限/技能/插件、审批、提问、计划确认、用量查询及 Codex Voice。 |
-| `@agent-remote/adapter-dsh` | DSH Web | 连接已运行的 DSH Web 实例（配置 `url` 与访问 token 环境变量引用 `secrets.token`）。支持历史、实时流、审批、同步/补答提问、预设、权限、计划、目标管理、技能、反馈与 ZIP 日志导出。 |
-| `@agent-remote/adapter-antigravity` | Antigravity | 本机数据目录（默认 `~/.gemini/antigravity`）含 `daemon` 时自动发现为 `antigravity-local`。支持项目与会话同步、超大历史分页、新建/改名/中断/队列/追加、下一轮模型选择、技能与已启用插件选择、单选/多选/手填提问、单次命令审批、图片附件与模型组额度查询。 |
+| `@agent-remote/adapter-dsh` | DSH Web | 连接已运行的 DSH Web 实例（配置 `url` 与访问 token 环境变量引用 `secrets.token`）。支持历史、实时流与思考过程/活动状态、新建（含附件与技能）/改名、项目归属、工具活动摘要与回复复制、审批、同步/补答提问、预设、权限、计划、目标管理、工作区文件引用、技能、反馈与 ZIP 日志导出。 |
+| `@agent-remote/adapter-antigravity` | Antigravity | 本机数据目录（默认 `~/.gemini/antigravity`）含 `daemon` 时自动发现为 `antigravity-local`。支持项目与会话同步、超大历史分页、结构化工具步骤与代码 Diff、实时活动状态与回复复制、新建（含图片附件、技能与已启用插件）/改名/中断/队列/追加、下一轮模型选择、单选/多选/手填提问、单次命令与文件修改审批、图片与引用文件下载、工作区文件引用、脱敏 JSON 日志导出及模型组额度查询。 |
 
 > **运行原则**：插件只连接本机已运行或已存在的 Agent 实例，不负责启动或关闭原 Agent 进程；单实例异常或版本不兼容不会影响同一网关上的其他实例。插件以本机受信任代码运行，进程隔离提供故障遏制而非不可信代码沙箱。
 

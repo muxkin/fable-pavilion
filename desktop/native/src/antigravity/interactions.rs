@@ -73,6 +73,9 @@ pub(super) fn views(trajectory: &Value, read_only: bool) -> Vec<Value> {
                 if let Some(approval) = approvals::CommandApproval::read(step, &target) {
                     return Some(approval.view(&target, !read_only));
                 }
+                if let Some(file_approval) = approvals::FileApproval::read(step, &target) {
+                    return Some(file_approval.view(&target, !read_only));
+                }
             }
             Some(json!({
                 "id":format!("antigravity-{index}"),
@@ -96,8 +99,12 @@ pub(super) fn response(trajectory: &Value, answer: &Response) -> Result<Value> {
     if let Some(question) = questions::QuestionBatch::read(step) {
         return reply_to_question(&question, &target, answer);
     }
+    if let Some(approval) = approvals::CommandApproval::read(step, &target) {
+        verify(&approval.view(&target, true), answer)?;
+        return approval.reply(&target, answer);
+    }
     let approval =
-        approvals::CommandApproval::read(step, &target).context("Antigravity 请求已处理或过期")?;
+        approvals::FileApproval::read(step, &target).context("Antigravity 请求已处理或过期")?;
     verify(&approval.view(&target, true), answer)?;
     approval.reply(&target, answer)
 }

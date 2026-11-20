@@ -414,6 +414,9 @@ async fn readonly_rejects_writes_before_dispatch() {
             prompt: "hello".into(),
             project: Some("project".into()),
             settings: Default::default(),
+            files: Vec::new(),
+            skills: Vec::new(),
+            plugin_ids: Vec::new(),
         },
         None,
         &|_| panic!("read-only write must not create a thread"),
@@ -522,4 +525,104 @@ async fn handshake_availability_does_not_depend_on_reported_version() {
     assert_eq!(status["writesEnabled"], true);
     assert_eq!(status["desktopVersion"], "test-next-release");
     server.await.unwrap();
+}
+
+#[test]
+fn rich_step_projection_emits_diffs_tool_actions_turn_boundary_and_activity() {
+    let steps = vec![
+        json!({"metadata":{"executionId":"t1"},"userInput":{"items":[{"text":"fix bug"}]}}),
+        json!({"metadata":{"executionId":"t1"},"type":"CORTEX_STEP_TYPE_VIEW_FILE","status":"CORTEX_STEP_STATUS_DONE","viewFile":{"absolutePathUri":"file:///work/src/app.rs"}}),
+        json!({"metadata":{"executionId":"t1"},"type":"CORTEX_STEP_TYPE_GREP_SEARCH","status":"CORTEX_STEP_STATUS_DONE","grepSearch":{"query":"TODO","searchPath":"/work/src"}}),
+        json!({"metadata":{"executionId":"t1"},"type":"CORTEX_STEP_TYPE_REPLACE_FILE_CONTENT","status":"CORTEX_STEP_STATUS_DONE","replaceFileContent":{"targetFile":"/work/src/app.rs","targetContent":"old()","replacementContent":"new()"}}),
+        json!({"metadata":{"executionId":"t1"},"type":"CORTEX_STEP_TYPE_RUN_COMMAND","status":"CORTEX_STEP_STATUS_DONE","runCommand":{"commandLine":"cargo test","cwd":"/work","exitCode":0,"combinedOutput":{"full":"ok"}}}),
+        json!({"metadata":{"executionId":"t1"},"plannerResponse":{"response":"First draft"}}),
+        json!({"metadata":{"executionId":"t1"},"plannerResponse":{"response":"Done fixing bug"}}),
+    ];
+    let rendered = messages(&steps, 0, false);
+    assert_eq!(rendered.len(), 7);
+    assert_eq!(rendered[1]["toolActions"], json!(["read-file"]));
+    assert_eq!(rendered[1]["text"], "读取 app.rs");
+    assert_eq!(rendered[2]["toolActions"], json!(["search-files"]));
+    assert_eq!(rendered[3]["toolActions"], json!(["edit-file"]));
+    assert_eq!(rendered[3]["changes"][0]["path"], "/work/src/app.rs");
+    assert_eq!(rendered[3]["changes"][0]["diff"], "-old()\n+new()");
+    assert_eq!(rendered[4]["toolActions"], json!(["run-command"]));
+    assert!(rendered[4]["details"].as_str().unwrap().contains("退出码：0"));
+    assert_ne!(rendered[5]["turnBoundary"], true);
+    assert_eq!(rendered[6]["turnBoundary"], true);
+
+    assert_eq!(activity_state(&steps, false), None);
+    assert_eq!(activity_state(&steps, true), Some("responding"));
+    assert_eq!(activity_state(&steps[..1], true), Some("thinking"));
+    assert_eq!(activity_state(&steps[..5], true), Some("tool"));
+}
+
+#[test]
+fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let brain = dir.path().join("brain").join("thread-1");
+    let outside = dir.path().join("outside");
+    fs::create_dir_all(workspace.join("src")).unwrap();
+    fs::create_dir_all(workspace.join(".git")).unwrap();
+    fs::create_dir_all(&brain).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+
+    fs::write(workspace.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(workspace.join(".env"), "SECRET=1\n").unwrap();
+    fs::write(workspace.join("private.key"), "KEY\n").unwrap();
+    fs::write(workspace.join(".git/config"), "[core]\n").unwrap();
+    let report = brain.join("report.md");
+    fs::write(&report, "# Report\n").unwrap();
+    let outside_file = outside.join("secret.txt");
+    fs::write(&outside_file, "nope\n").unwrap();
+
+    let listed = export::list_workspace_files(std::slice::from_ref(&workspace), "");
+    assert_eq!(listed, vec![json!({"name":"main.rs","path":"src/main.rs"})]);
+
+    let steps = vec![
+        json!({"plannerResponse":{"response":format!("See [report]({}) and [outside]({})", report.display(), outside_file.display())}}),
+        json!({"type":"CORTEX_STEP_TYPE_VIEW_FILE","viewFile":{"absolutePath":workspace.join("src/main.rs")}}),
+        json!({"type":"CORTEX_STEP_TYPE_VIEW_FILE","viewFile":{"absolutePath":workspace.join(".env")}}),
+    ];
+    let cited_report = media::download_cited(
+        dir.path(),
+        "thread-1",
+        std::slice::from_ref(&workspace),
+        &steps,
+        &report.to_string_lossy(),
+    )
+    .unwrap();
+    assert_eq!(cited_report.name, "report.md");
+
+    let cited_src = media::download_cited(
+        dir.path(),
+        "thread-1",
+        std::slice::from_ref(&workspace),
+        &steps,
+        "src/main.rs",
+    )
+    .unwrap();
+    assert_eq!(cited_src.name, "main.rs");
+
+    assert!(
+        media::download_cited(
+            dir.path(),
+            "thread-1",
+            std::slice::from_ref(&workspace),
+            &steps,
+            ".env",
+        )
+        .is_err()
+    );
+    assert!(
+        media::download_cited(
+            dir.path(),
+            "thread-1",
+            std::slice::from_ref(&workspace),
+            &steps,
+            &outside_file.to_string_lossy(),
+        )
+        .is_err()
+    );
 }

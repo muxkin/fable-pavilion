@@ -59,36 +59,54 @@ fn command_action_kinds(item: &Value) -> Vec<&'static str> {
     kinds
 }
 
-fn named_tool_action(item: &Value) -> Vec<&'static str> {
-    let name = item["tool"]
-        .as_str()
-        .or_else(|| item["name"].as_str())
-        .unwrap_or_default();
+pub(crate) fn named_tool_action_by_name(name: &str, arguments: &Value) -> Vec<&'static str> {
     let tool = name.rsplit("__").next().unwrap_or(name);
     let tool = tool.rsplit(['.', '/']).next().unwrap_or(tool);
     let kind = match tool {
-        "exec_command" | "shell_command" | "shell" | "local_shell" => {
+        "exec_command" | "shell_command" | "shell" | "local_shell" | "bash" | "run_command" => {
             // Some tool versions preserve typed commands in arguments instead of
             // emitting a separate commandExecution item.
-            return command_action_kinds(&item["arguments"]);
+            return command_action_kinds(arguments);
         }
         "read_file"
         | "read_files"
         | "read_text_file"
         | "read_multiple_files"
         | "readFile"
-        | "readFiles" => "read-file",
-        "list_directory" | "list_files" | "listFiles" => "list-files",
-        "search_files" | "searchFiles" | "grep" => "search-files",
-        "apply_patch" | "edit_file" | "write_file" | "fileChange" => "edit-file",
-        "web_search" | "web_search_call" | "webSearch" | "search_query" => "web-search",
-        "open_page" | "openPage" => "open-page",
+        | "readFiles"
+        | "view_file"
+        | "view_file_outline"
+        | "view_code_item" => "read-file",
+        "list_directory" | "list_files" | "listFiles" | "list_dir" | "find_by_name" | "glob" => {
+            "list-files"
+        }
+        "search_files" | "searchFiles" | "grep" | "grep_search" | "ripgrep" => "search-files",
+        "apply_patch"
+        | "edit_file"
+        | "write_file"
+        | "fileChange"
+        | "write_to_file"
+        | "replace_file_content"
+        | "multi_replace_file_content"
+        | "str_replace_editor" => "edit-file",
+        "web_search" | "web_search_call" | "webSearch" | "search_query" | "search_web" => {
+            "web-search"
+        }
+        "open_page" | "openPage" | "read_url_content" | "fetch_url" => "open-page",
         "find_in_page" | "findInPage" => "find-in-page",
         "load_tool" | "loadTool" => "load-tool",
         "tool_search" | "tool_search_call" | "toolSearch" | "find_tool" => "find-tool",
         _ => "call-tool",
     };
     vec![kind]
+}
+
+fn named_tool_action(item: &Value) -> Vec<&'static str> {
+    let name = item["tool"]
+        .as_str()
+        .or_else(|| item["name"].as_str())
+        .unwrap_or_default();
+    named_tool_action_by_name(name, &item["arguments"])
 }
 
 pub fn action_kinds(item: &Value) -> Vec<&'static str> {

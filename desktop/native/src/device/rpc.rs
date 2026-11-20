@@ -3,7 +3,7 @@ use super::*;
 impl DeviceSession {
     pub(super) fn plugin_write(&self, plugin: Arc<dyn Adapter>, method: &str, call: &Value) -> Result<Value> {
         let thread = plugin_thread(&call["params"]["id"])?;
-        let (request, action) = match method {
+        let (request, action, draft_uploads) = match method {
             "thread.open" => {
                 ensure!(
                     call["body"].as_object().is_some_and(|body| body.len() == 1),
@@ -12,13 +12,14 @@ impl DeviceSession {
                 (
                     serde_json::from_value(call["body"]["requestId"].clone())?,
                     Write::Open,
+                    None,
                 )
             }
             "request.respond" => {
                 let response: crate::requests::Response =
                     serde_json::from_value(call["body"].clone())?;
                 response.validate()?;
-                (response.request_id, Write::Respond(response))
+                (response.request_id, Write::Respond(response), None)
             }
             "settings.update" => {
                 let mut body = call["body"].clone();
@@ -32,6 +33,7 @@ impl DeviceSession {
                 (
                     request,
                     Write::Settings(serde_json::from_value::<ModelSettings>(body)?),
+                    None,
                 )
             }
             "control.execute" => {
@@ -48,14 +50,17 @@ impl DeviceSession {
                         "DSH 权限状态缺失"
                     );
                 }
-                (body.request_id, Write::Control(body.control))
+                (body.request_id, Write::Control(body.control), None)
             }
             _ => {
-                let scope = Scope::plugin(plugin.id(), thread);
                 serde_json::from_value::<PluginRequest>(call["body"].clone())?.parse(
                     method,
                     plugin.as_ref(),
-                    |ids| {
+                    |draft, ids| {
+                        let scope = match draft {
+                            Some(draft) => Scope::codex_draft(plugin.id(), draft),
+                            None => Scope::plugin(plugin.id(), thread),
+                        };
                         let store = self.db.lock().expect("database mutex poisoned");
                         ids.iter()
                             .map(|id| store.verified_upload(&self.device.id, &scope, *id))
@@ -83,15 +88,19 @@ impl DeviceSession {
             .map_err(|_| Conflict)?;
         if fresh {
             let db = self.db.clone();
+            let device_id = self.device.id.clone();
             let thread = thread.to_owned();
             let activity = self.activity.clone();
             tokio::spawn(async move {
                 let _activity = activity;
                 let _admission = admission;
                 let created = |id: &str| {
-                    db.lock()
-                        .expect("database mutex poisoned")
-                        .record_plugin_thread(plugin.id(), request, id)
+                    db.lock().expect("database mutex poisoned").record_plugin_thread(
+                        plugin.id(),
+                        request,
+                        id,
+                        draft_uploads.as_ref().map(|draft| (device_id.as_str(), draft)),
+                    )
                 };
                 let result = timeout(
                     action.dispatch_timeout(),
@@ -221,11 +230,13 @@ impl DeviceSession {
                 }
                 "upload.begin" => {
                     let thread = plugin_thread(&call["params"]["id"])?;
-                    let writable = self
-                        .plugin_watches
-                        .get(&(plugin.id().to_owned(), thread.to_owned()))
-                        .and_then(|watch| watch.live.0.borrow().clone())
-                        .is_some_and(|view| view.thread["synchronized"] == true);
+                    let is_draft = codex_draft_id(&call["params"]["id"])?.is_some();
+                    let writable = is_draft
+                        || self
+                            .plugin_watches
+                            .get(&(plugin.id().to_owned(), thread.to_owned()))
+                            .and_then(|watch| watch.live.0.borrow().clone())
+                            .is_some_and(|view| view.thread["synchronized"] == true);
                     ensure!(writable && plugin.uploads_enabled(), "请先同步可写会话");
                     self.begin_upload(Scope::plugin(plugin.id(), thread), call["body"].clone())
                         .await

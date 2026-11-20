@@ -214,6 +214,13 @@ impl Hub {
                 cards.push(card);
             }
         }
+        let blocking = cards
+            .iter()
+            .any(|card| card["actionable"] == true && card["kind"] != "async-question");
+        if blocking {
+            view.thread["canSend"] = json!(false);
+            view.thread["canSteer"] = json!(false);
+        }
         view.thread["pendingRequests"] = json!(cards.len());
         view.thread["requests"] = json!(cards);
     }

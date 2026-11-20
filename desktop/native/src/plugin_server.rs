@@ -308,11 +308,16 @@ impl<A: PluginAdapter> Server<A> {
         if matches!(&action, Write::Send { model: Some(_), .. }) && !self.next_message_model {
             return Ok(json!({"state":"rejected","reason":"当前宿主不支持消息模型"}));
         }
-        if let Write::Send {
-            skills, plugin_ids, ..
-        } = &action
-        {
-            self.adapter.validate_selection(skills, plugin_ids)?;
+        match &action {
+            Write::Send {
+                skills, plugin_ids, ..
+            }
+            | Write::Create {
+                skills, plugin_ids, ..
+            } => {
+                self.adapter.validate_selection(skills, plugin_ids)?;
+            }
+            _ => {}
         }
         let live = self.watches.get(thread).map(|(_, live)| live.clone());
         let created = |id: &str| {
