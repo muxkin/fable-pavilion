@@ -1,6 +1,6 @@
 /** Isolated responsive layout and clipboard/active-turn attachment acceptance. */
 import { chromium, expect } from '@playwright/test';
-import { registerWorkbenchFixture } from './lib/messaging-smoke.js';
+import { registerWorkbenchFixture } from '../lib/messaging-smoke.js';
 import { PNG } from 'pngjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

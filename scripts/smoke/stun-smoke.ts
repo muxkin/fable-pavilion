@@ -1,11 +1,11 @@
-import { privateOutput } from './private-output.js';
+import { privateOutput } from '../private-output.js';
 await privateOutput('.test-output');
 /** RFC 5389 binding and TURN-disabled check; never print ICE addresses or credentials. */
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { readConfig } from '../src/server/config.js';
+import { readConfig } from '../../src/server/config.js';
 import { chromium } from '@playwright/test';
 import { RTCPeerConnection } from 'werift';
 const url = process.argv[2] ?? readConfig().p2p?.stunUrls[0];

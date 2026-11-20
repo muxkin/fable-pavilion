@@ -1,12 +1,12 @@
 /** Deterministic delivery faults against an isolated host, never a real conversation. */
 import { chromium, expect } from '@playwright/test';
-import { registerWorkbenchFixture } from './lib/messaging-smoke.js';
+import { registerWorkbenchFixture } from '../lib/messaging-smoke.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { config, host, store, registry, close } from './v2-fixture.js';
-import { DeliveryError } from '../src/server/delivery-error.js';
-import { RpcError } from '../src/shared/rpc.js';
+import { DeliveryError } from '../../src/server/delivery-error.js';
+import { RpcError } from '../../src/shared/rpc.js';
 
 const output = process.env.TEST_OUTPUT ?? join(tmpdir(), 'pocket-delivery-qa');
 await mkdir(output, { recursive: true });

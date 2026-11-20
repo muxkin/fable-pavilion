@@ -10,14 +10,14 @@ import { once } from 'node:events';
 import sharp from 'sharp';
 import { build } from 'esbuild';
 import { RTCPeerConnection as AgentPeer } from 'werift';
-import { buildRelay } from '../src/server/relay.js';
-import { AgentCallsClient } from '../src/client/calls.js';
+import { buildRelay } from '../../src/server/relay.js';
+import { AgentCallsClient } from '../../src/client/calls.js';
 import {
   allocateLocalPort,
   saveRecoveryCode,
   registerAgentFixture,
   browserAccountFixture,
-} from './lib/messaging-smoke.js';
+} from '../lib/messaging-smoke.js';
 const cdp = process.env.TEST_CDP_URL;
 const bind = cdp ? process.env.TEST_BIND : '127.0.0.1';
 if (!bind) throw Error('Set TEST_BIND to a bindable IPv4 address reachable by the CDP browser');

@@ -1,6 +1,6 @@
 /** A packed third-party adapter exercises the existing built UI without rebuilding it. */
 import { chromium, expect } from '@playwright/test';
-import { registerWorkbenchFixture } from './lib/messaging-smoke.js';
+import { registerWorkbenchFixture } from '../lib/messaging-smoke.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';

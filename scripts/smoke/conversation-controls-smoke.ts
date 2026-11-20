@@ -1,6 +1,6 @@
 /** Isolated DSH controls UI regression; no production feedback or agent execution. */
 import { chromium, expect } from '@playwright/test';
-import { registerWorkbenchFixture } from './lib/messaging-smoke.js';
+import { registerWorkbenchFixture } from '../lib/messaging-smoke.js';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

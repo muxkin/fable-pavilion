@@ -1,10 +1,10 @@
 /** Deterministic browser acceptance: isolated state, no real desktop operations. */
 import { chromium, expect } from '@playwright/test';
-import { registerWorkbenchFixture } from './lib/messaging-smoke.js';
+import { registerWorkbenchFixture } from '../lib/messaging-smoke.js';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config, host, relay, store, native, close, file } from './v2-fixture.js';
-import { THREAD } from '../test/helpers.js';
+import { THREAD } from '../../test/helpers.js';
 const output = process.env.TEST_OUTPUT ?? '.test-output';
 await mkdir(output, { recursive: true });
 const report: any = {

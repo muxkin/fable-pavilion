@@ -1,13 +1,13 @@
 /** Bounded app layout and foreground recovery, with isolated native state. */
 import { chromium, expect } from '@playwright/test';
-import { registerWorkbenchFixture } from './lib/messaging-smoke.js';
+import { registerWorkbenchFixture } from '../lib/messaging-smoke.js';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config, host, store, native, registry, close } from './v2-fixture.js';
 const output = process.env.TEST_OUTPUT ?? '.test-output/layout-recovery';
 await mkdir(output, { recursive: true });
-import { DeliveryError } from '../src/server/delivery-error.js';
-import { RpcError } from '../src/shared/rpc.js';
+import { DeliveryError } from '../../src/server/delivery-error.js';
+import { RpcError } from '../../src/shared/rpc.js';
 const backend = registry.get();
 const status = backend.status.bind(backend);
 backend.status = () => {

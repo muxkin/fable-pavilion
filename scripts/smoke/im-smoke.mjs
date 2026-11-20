@@ -5,14 +5,14 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { PNG } from 'pngjs';
-import { buildRelay } from '../src/server/relay.ts';
+import { buildRelay } from '../../src/server/relay.ts';
 import {
   allocateLocalPort,
   saveRecoveryCode,
   registerAgentFixture,
   messagingFixtureRequest,
   openChatMore,
-} from './lib/messaging-smoke.ts';
+} from '../lib/messaging-smoke.ts';
 // Isolated accounts and local relay; no live desktop or personal IM state is touched.
 const bind = process.env.TEST_BIND ?? '127.0.0.1',
   port = await allocateLocalPort(bind, process.env.TEST_PORT);

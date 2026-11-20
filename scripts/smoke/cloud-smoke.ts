@@ -2,14 +2,14 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
-import { readConfig } from '../src/server/config.js';
-import { Store } from '../src/server/store.js';
-import { hostIdentity } from '../src/server/device-identity.js';
-import { createIdentity } from '../src/shared/secure-channel.js';
-import { apiCall } from '../src/shared/rpc.js';
-import { applySync, checkpoint, type CachedThread } from '../src/shared/sync.js';
-import { nodeSession } from '../src/client/node-session.js';
-import { privateOutput } from './private-output.js';
+import { readConfig } from '../../src/server/config.js';
+import { Store } from '../../src/server/store.js';
+import { hostIdentity } from '../../src/server/device-identity.js';
+import { createIdentity } from '../../src/shared/secure-channel.js';
+import { apiCall } from '../../src/shared/rpc.js';
+import { applySync, checkpoint, type CachedThread } from '../../src/shared/sync.js';
+import { nodeSession } from '../../src/client/node-session.js';
+import { privateOutput } from '../private-output.js';
 const config = readConfig(),
   threadId = process.argv[2];
 assert.match(threadId ?? '', /^[a-f0-9-]{36}$/);

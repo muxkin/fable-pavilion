@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chromium, expect, type Locator, type Page } from '@playwright/test';
 import jsQR from 'jsqr';
 import QRCode from 'qrcode';
-import { saveRecoveryCode } from './lib/messaging-smoke.js';
+import { saveRecoveryCode } from '../lib/messaging-smoke.js';
 
 process.env.TEST_BIND ??= 'localhost';
 const { config, close } = await import('./v2-fixture.js');

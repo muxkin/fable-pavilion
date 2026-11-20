@@ -3,13 +3,13 @@ import { chromium, expect } from '@playwright/test';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config, host, store, native, close } from './v2-fixture.js';
-import { THREAD, TURN } from '../test/helpers.js';
-import { saveRecoveryCode } from './lib/messaging-smoke.js';
-import { mathCopyFixture, verifyMathCopy } from './lib/math-copy-smoke.js';
+import { THREAD, TURN } from '../../test/helpers.js';
+import { saveRecoveryCode } from '../lib/messaging-smoke.js';
+import { mathCopyFixture, verifyMathCopy } from '../lib/math-copy-smoke.js';
 import {
   selectionTranslationFixture,
   verifyOnDeviceSelectionTranslation,
-} from './lib/selection-translation-smoke.js';
+} from '../lib/selection-translation-smoke.js';
 import sharp from 'sharp';
 const report: any = { fixture: true, checks: {}, errors: [], physicalPhone: false };
 const browser = await chromium.launch({
@@ -475,7 +475,7 @@ try {
   const installerBase = '/downloads/desktop/native/rust/linux/x64/';
   // A published manifest exercises the browser's pinned key without downloading the installer.
   const releaseManifest = JSON.parse(
-    await readFile(new URL('../test/fixtures/native-linux-release.json', import.meta.url), 'utf8'),
+    await readFile(new URL('../../test/fixtures/native-linux-release.json', import.meta.url), 'utf8'),
   );
   const { file, size } = JSON.parse(Buffer.from(releaseManifest.payload, 'base64').toString('utf8'));
   const installerPath = installerBase.replace('/desktop/', '/desktop/direct/') + file;

@@ -1,13 +1,13 @@
 /** Historical operation replay must never override the user's conversation selection. */
 import { chromium, expect } from '@playwright/test';
-import { registerWorkbenchFixture } from './lib/messaging-smoke.js';
+import { registerWorkbenchFixture } from '../lib/messaging-smoke.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { config, host, store, registry, native, close } from './v2-fixture.js';
-import { THREAD, TURN } from '../test/helpers.js';
-import type { Operation } from '../src/shared/types.js';
+import { THREAD, TURN } from '../../test/helpers.js';
+import type { Operation } from '../../src/shared/types.js';
 
 const output = process.env.TEST_OUTPUT ?? join(tmpdir(), 'pocket-conversation-replay');
 await mkdir(output, { recursive: true });

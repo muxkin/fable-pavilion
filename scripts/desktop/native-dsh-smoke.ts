@@ -1,24 +1,30 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { once } from 'node:events';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rename as renameFile, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createInterface } from 'node:readline';
-import { setTimeout as delay } from 'node:timers/promises';
-import { WebSocket, WebSocketServer } from 'ws';
 import { nodeSession } from '../../src/client/node-session.js';
 import { buildRelay } from '../../src/server/relay.js';
 import { apiCall } from '../../src/shared/rpc.js';
 import { createIdentity } from '../../src/shared/secure-channel.js';
+import { createDshFixture, defaultDshProjections, dshModelId } from './lib/dsh-fixture.js';
+import {
+  allocateLocalPort,
+  runCleanups,
+  spawnNativeAdapter,
+  waitFor,
+  type RunningNativeAdapter,
+} from './lib/native-helpers.js';
 
-const state = await mkdtemp(join(tmpdir(), 'native-dsh-smoke-'));
-const executable = resolve(process.argv[2]);
+const executable = resolve(process.argv[2] ?? 'desktop/native/target/release/agent-space-native');
+assert(existsSync(executable), `Rust desktop adapter executable not found: ${executable}`);
 const plugin = process.argv[3] ? resolve(process.argv[3]) : undefined;
 const bundled = process.env.POCKET_NATIVE_TEST_BUNDLED_PLUGINS === '1';
 assert(bundled || plugin, 'Supply the DSH plugin directory or test an installer with bundled plugins');
+
+const state = await mkdtemp(join(tmpdir(), 'native-dsh-smoke-'));
 const legacy = join(state, 'legacy');
 const legacyWork = join(legacy, 'original-workspace');
 const legacyDesktop = join(legacy, 'desktop-settings.json');
@@ -26,621 +32,32 @@ const legacyEnv = join(legacy, 'gateway.env');
 const externalEnv = join(legacy, 'external-gateway.env');
 const overrideEnv = join(legacy, 'override-gateway.env');
 let configSource: 'initial-env' | 'desktop-settings' | 'explicit-env' = 'initial-env';
+
 const hash = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 const png = await readFile('src/web/public/app-icon-32.png');
 const workspacePdf = Buffer.from('%PDF-1.7\nfixture document\n');
 const sessionZip = Buffer.from('504b0506000000000000000000000000000000000000', 'hex');
-type GoalView = { id: string; revision: number; objective: string; phase: string; activation: string };
-const modelId = (model: string) => JSON.stringify(['fixture', model]);
-const defaultProjections = () => ({
-  modelSelection: { next: { provider: 'fixture', model: 'base' } },
-  permissions: { currentValue: 'ask' },
-  agentPreset: 'standard',
-  plan: { active: false },
-  turnOutline: [],
-});
-const instances = ['dsh-one', 'dsh-two'].map((id) => ({
-  id,
-  token: randomBytes(16).toString('hex'),
-  title: id,
-  created: new Map<string, string>(),
-  inbox: [] as { id: string; content: { type: string; text: string }[] }[],
-  followers: new Map<WebSocket, string>(),
-  controls: new Map<WebSocket, string>(),
-  eventClients: new Map<WebSocket, { stream: string; peer: string; client: string }>(),
-  eventSessions: 0,
-  eventReplies: [] as { clientId: string; eventId: string; outcome: any }[],
-  timed: new Map<string, number>(),
-  releasedWaits: [] as string[],
-  lostEvents: new Set<string>(),
-  competingEvents: new Set<string>(),
-  receipts: new Map<string, { attachmentId: string; name: string; bytes: number }>(),
-  images: new Map<string, { attachment: object; data: string }>(),
-  projections: new Map<string, Record<string, unknown>>([['shared', defaultProjections()]]),
-  projectionSeq: 1,
-  pageWindow: 100,
-  calls: [] as { method: string; request: any }[],
-  goal: null as GoalView | null,
-  failCompact: false,
-  records: [
-    {
-      event: {
-        seq: 1,
-        time: 123,
-        type: 'assistant/message',
-        data: {
-          message: { id: 'reply', role: 'assistant', content: [{ type: 'text', text: 'Rust DSH history' }] },
-        },
-      },
-    },
-  ] as { event: Record<string, unknown> }[],
-  opens: 0,
-}));
-const [one, two] = instances;
-const cookie = (value?: string) => instances.find(({ id }) => value?.split('; ')[0] === 'session=' + id);
-const answerPeer = (value?: string) =>
-  value
-    ?.split('; ')
-    .find((part) => part.startsWith('answer='))
-    ?.slice(7);
-const dsh = createServer(async (request, response) => {
-  const path = new URL(request.url!, 'http://localhost');
-  if (path.pathname === '/connect') {
-    const instance = instances.find(({ token }) => path.searchParams.get('token') === token);
-    if (!instance) return response.writeHead(403).end();
-    const mode = path.searchParams.get('interactions');
-    assert(mode === 'none' || mode === 'answer');
-    const cookies = ['session=' + instance.id];
-    if (mode === 'answer') {
-      instance.eventSessions++;
-      cookies.push('answer=' + randomUUID());
-    }
-    return response.writeHead(302, { Location: '/api/remote.mux', 'Set-Cookie': cookies }).end();
-  }
-  const instance = cookie(request.headers.cookie);
-  if (!instance) return response.writeHead(403).end();
-  if (path.pathname === '/api/session.export') {
-    assert.equal(request.method, 'GET');
-    assert.equal(path.searchParams.get('includeDescendants'), 'true');
-    if (path.searchParams.get('sessionId') !== 'shared') return response.writeHead(404).end();
-    return response.writeHead(200, { 'content-type': 'application/zip' }).end(sessionZip);
-  }
-  if (path.pathname === '/api/file') {
-    assert.equal(instance, one);
-    assert.equal(path.searchParams.get('path'), '/fixture/report copy.pdf');
-    assert.equal(request.method, 'GET');
-    instance.calls.push({ method: '/api/file', request: path.searchParams.get('path') });
-    return response.end(workspacePdf);
-  }
-  const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
-  const body = Buffer.concat(chunks);
-  if (path.pathname === '/api/session/uploadFileBinary') {
-    assert.equal(request.headers['content-type'], 'application/octet-stream');
-    assert.equal(Number(request.headers['content-length']), body.length);
-    assert.equal(path.searchParams.get('sessionId'), 'shared');
-    const name = path.searchParams.get('name')!;
-    const file = { attachmentId: 'sha256:' + hash(body), name, bytes: body.length };
-    const receiptId = randomUUID();
-    instance.receipts.set(receiptId, file);
-    if (name === 'race.txt') {
-      record(instance, 'turn/start', { turn: 21 });
-      await delay(300);
-    }
-    instance.calls.push({ method: 'session/uploadFileBinary', request: file });
-    return response.end(JSON.stringify({ ok: true, value: { receiptId, file } }));
-  }
-  const rpc = JSON.parse(body.toString());
-  assert.equal(path.pathname, '/api/' + rpc.method);
-  const args = rpc.payload.args.request ?? rpc.payload.args;
-  let value;
-  switch (rpc.method) {
-    case 'skills/list':
-      assert.equal(args.sessionId, 'shared');
-      value = {
-        skills:
-          instance === one
-            ? [{ name: 'fixture-skill', description: 'Fixture skill', modelInvocable: false }]
-            : [],
-      };
-      break;
-    case 'goals/get':
-      assert.equal(args.agentId, 'shared');
-      value = instance.goal ?? undefined;
-      break;
-    case 'goals/create':
-    case 'goals/edit':
-    case 'goals/pause':
-    case 'goals/resume':
-    case 'goals/complete':
-    case 'goals/clear': {
-      assert.equal(instance, one);
-      const { agentId, ref, request } = rpc.payload.args;
-      assert.equal(agentId, 'shared');
-      if (rpc.method === 'goals/create') {
-        assert.equal(ref, undefined);
-        instance.goal = {
-          id: 'goal-' + randomUUID(),
-          revision: 1,
-          objective: request.objective,
-          phase: 'active',
-          activation: 'armed',
-        };
-        value = { ref: { id: instance.goal.id, revision: instance.goal.revision } };
-      } else {
-        const current = instance.goal!;
-        assert.deepEqual(ref, { id: current.id, revision: current.revision });
-        const next = { ...current, revision: current.revision + 1 };
-        if (rpc.method === 'goals/edit') next.objective = request.objective;
-        if (rpc.method === 'goals/pause') {
-          next.phase = 'paused';
-          next.activation = 'disarmed';
-        }
-        if (rpc.method === 'goals/resume') {
-          next.phase = 'active';
-          next.activation = 'armed';
-        }
-        if (rpc.method === 'goals/complete') {
-          next.phase = 'complete';
-          next.activation = 'disarmed';
-        }
-        if (rpc.method === 'goals/clear') {
-          value = { id: next.id, revision: next.revision };
-          instance.goal = null;
-        } else {
-          instance.goal = next;
-          value = next;
-        }
-        if (request?.objective === 'lost goal response') {
-          instance.calls.push({ method: rpc.method, request: args });
-          return response.destroy();
-        }
-      }
-      break;
-    }
-    case 'sessionFeedback/record':
-      assert.equal(instance, one);
-      assert.deepEqual(args, { sessionId: 'shared', text: 'Fixture feedback' });
-      value = { ok: true, value: {} };
-      break;
-    case '$events/result':
-      assert(
-        [...instance.eventClients.values()].some(
-          (binding) =>
-            binding.client === args.clientId && binding.peer === answerPeer(request.headers.cookie),
-        ),
-      );
-      instance.eventReplies.push(args);
-      if (instance.lostEvents.delete(args.eventId)) return response.destroy();
-      if (instance.competingEvents.delete(args.eventId)) {
-        eventFrame(instance, { type: 'cancel', eventId: args.eventId });
-        await delay(250);
-      }
-      break;
-    case 'userQuestions/answer': {
-      assert.equal(args.agentId, 'shared');
-      assert(answerPeer(request.headers.cookie));
-      const question = instance.projections.get('shared')?.userQuestions as { active: { callId: string }[] };
-      const active = question.active.filter((entry) => entry.callId !== args.callId);
-      value = active.length !== question.active.length;
-      if (value) project(instance, 'shared', 'userQuestions', { active, settled: [] });
-      break;
-    }
-    case 'session/page': {
-      assert.deepEqual(args.address, { kind: 'session', sessionId: 'shared' });
-      const earlier = instance.records.filter(
-        ({ event }) => Number(event.seq) < args.beforeSeq && Number(event.seq) <= args.throughSeq,
-      );
-      value = { records: earlier.slice(-instance.pageWindow), hasMore: earlier.length > instance.pageWindow };
-      break;
-    }
-    case 'fileReferences/list':
-      assert.deepEqual(args, { agentId: 'shared', query: 'report' });
-      value = [{ path: 'report copy.pdf' }];
-      break;
-    case 'session/attachment':
-      assert.equal(args.sessionId, 'shared');
-      value = instance.images.get(args.attachmentId);
-      if (!value)
-        return response.end(
-          JSON.stringify({
-            type: 'server-response',
-            rpcId: rpc.rpcId,
-            result: { ok: false, error: { code: 'session/attachment-invalid' } },
-          }),
-        );
-      break;
-    case 'session/list':
-      value = {
-        items: [
-          { sessionId: 'shared', updatedAt: 123, projections: { values: { title: instance.title } } },
-          ...[...instance.created].map(([sessionId, title]) => ({
-            sessionId,
-            updatedAt: 124,
-            projections: { values: { title } },
-          })),
-        ],
-      };
-      break;
-    case 'session/create': {
-      assert.equal(args.workspaceId, 'work-' + instance.id);
-      const id = 'created-' + args.sessionId;
-      instance.created.set(id, '新会话');
-      instance.projections.set(id, { ...defaultProjections(), agentPreset: args.agentPreset ?? 'standard' });
-      value = { sessionId: id };
-      break;
-    }
-    case 'session/projections':
-      assert(instance.projections.has(args.sessionId));
-      value = { kind: 'sequenced', ...baseline(instance, args.sessionId) };
-      break;
-    case 'session/modelCatalog':
-      assert.deepEqual(args, {});
-      value = {
-        groups: [
-          {
-            id: 'fixture',
-            name: 'Fixture',
-            models: [
-              { id: 'base', name: 'Base' },
-              {
-                id: 'advanced',
-                name: 'Advanced',
-                reasoning: { efforts: [{ id: 'high' }], defaultEffort: 'high' },
-              },
-              { id: 'drop', name: 'Drop response' },
-            ],
-          },
-        ],
-      };
-      break;
-    case 'session/selectModel': {
-      const { sessionId, ...selected } = args;
-      assert.equal(selected.provider, 'fixture');
-      project(instance, sessionId, 'modelSelection', { next: selected });
-      if (selected.model === 'drop') {
-        instance.calls.push({ method: rpc.method, request: args });
-        return response.destroy();
-      }
-      value = { selected };
-      break;
-    }
-    case 'permissionPresets/catalog':
-      assert.deepEqual(args, {});
-      value = {
-        defaultPreset: 'ask',
-        options: [
-          { value: 'ask', name: 'Ask' },
-          { value: 'restricted', name: 'Restricted' },
-          { value: 'ask\n/plan', name: 'Invalid preset identifier' },
-        ],
-      };
-      break;
-    case 'agentPresets/list':
-      value = {
-        presets: [
-          { id: 'standard', isDefault: true },
-          { id: 'custom', isDefault: false },
-          { id: 'broken', isDefault: false, broken: 'unavailable' },
-        ],
-      };
-      break;
-    case 'agentPresets/select':
-      assert.equal(args.agentPreset, 'custom');
-      project(instance, args.agentId, 'agentPreset', args.agentPreset);
-      value = args.agentPreset;
-      break;
-    case 'commands/list':
-      assert(instance.projections.has(args.agentId));
-      value = [
-        'permission',
-        'plan',
-        ...(instance === one && args.agentId === 'shared' ? ['compact', 'feedback', 'goal'] : []),
-      ].map((name) => ({ name }));
-      break;
-    case 'commands/execute':
-      assert.deepEqual(args.submittedAttachments, []);
-      if (args.line === '/compact') {
-        const commandId = randomUUID();
-        const kind = instance.failCompact ? 'error' : 'success';
-        instance.failCompact = false;
-        record(instance, 'command/run', { commandId, name: 'compact', args: '' });
-        record(instance, 'command/done', {
-          commandId,
-          kind,
-          text: kind === 'success' ? 'Compacted' : 'Fixture failure',
-        });
-        value = { commandId, result: { kind } };
-        break;
-      } else if (args.line === '/permission restricted' || args.line === '/permission ask') {
-        project(instance, args.agentId, 'permissions', { currentValue: args.line.split(' ')[1] });
-      } else {
-        assert(['/plan', '/plan off'].includes(args.line));
-        project(instance, args.agentId, 'plan', { active: args.line === '/plan' });
-      }
-      value = { commandId: randomUUID(), result: { kind: 'success' } };
-      break;
-    case 'session/prompt':
-      assert(args.sessionId === 'shared' || instance.created.has(args.sessionId));
-      if (['lost response', 'lost initial response'].includes(args.content[0].text)) {
-        instance.calls.push({ method: rpc.method, request: args });
-        return response.destroy();
-      }
-      if (args.content[0].text === 'queued') {
-        const queued = { id: 'queue-' + args.requestId, content: args.content };
-        const start = instance.inbox.length;
-        instance.inbox.push(queued);
-        record(instance, 'agent/inbox/spliced', { target: 'next-turn', start, inserted: [queued] });
-      }
-      if (args.content.some((part: any) => part.type === 'file' || part.type === 'image')) {
-        const content = args.content.map((part: any) => {
-          if (part.type === 'file') {
-            const attachment = instance.receipts.get(part.receiptId);
-            assert(attachment);
-            return { type: 'file', attachment };
-          }
-          if (part.type === 'image') {
-            assert.equal(part.mediaType, 'image/png');
-            assert.deepEqual(Buffer.from(part.data, 'base64'), png);
-            const attachment = {
-              attachmentId: 'sha256:' + hash(png),
-              mediaType: 'image/png',
-              bytes: png.length,
-              name: part.name,
-            };
-            instance.images.set(attachment.attachmentId, { attachment, data: part.data });
-            return { type: 'image', attachment };
-          }
-          return part;
-        });
-        record(instance, 'assistant/message', {
-          message: { id: args.requestId, role: 'assistant', content },
-        });
-      }
-      value = { accepted: true };
-      break;
-    case 'session/updateQueue': {
-      assert.deepEqual(args.action, { kind: 'remove' });
-      const start = instance.inbox.findIndex((item) => item.id === args.itemId);
-      assert(start >= 0);
-      instance.inbox.splice(start, 1);
-      record(instance, 'agent/inbox/spliced', {
-        target: 'next-turn',
-        start,
-        removedCount: 1,
-        inserted: [],
-        outcome: 'canceled',
-      });
-      value = { accepted: true };
-      break;
-    }
-    case 'session/cancel':
-      assert.deepEqual(args, { sessionId: 'shared' });
-      record(instance, 'turn/end', { turn: 8, reason: { kind: 'interrupted' } });
-      await delay(300); // The event can reach the relay before the acknowledgement.
-      value = { accepted: true };
-      break;
-    case 'session/rename':
-      if (args.sessionId === 'shared') {
-        instance.title = args.title;
-        record(instance, 'session/title', { title: args.title });
-      } else {
-        assert(instance.created.has(args.sessionId));
-        instance.created.set(args.sessionId, args.title);
-      }
-      value = { title: args.title, seq: instance.records.length };
-      break;
-    default:
-      assert.fail('Unexpected DSH RPC ' + rpc.method);
-  }
-  instance.calls.push({ method: rpc.method, request: args });
-  response.setHeader('Content-Type', 'application/json');
-  response.end(JSON.stringify({ type: 'server-response', rpcId: rpc.rpcId, result: { ok: true, value } }));
-});
-const dshSocket = new WebSocketServer({ server: dsh, path: '/api/remote.mux' });
-dshSocket.on('connection', (socket, request) => {
-  const instance = cookie(request.headers.cookie);
-  assert(instance);
-  const waits = new Map<string, string>();
-  socket.on('message', (buffer) => {
-    const frame = JSON.parse(buffer.toString());
-    if (frame.type === 'cancel' && waits.has(frame.streamId)) {
-      instance.releasedWaits.push(waits.get(frame.streamId)!);
-      waits.delete(frame.streamId);
-      return;
-    }
-    if (frame.type !== 'open') return;
-    if (frame.endpoint === '$events') {
-      const peer = answerPeer(request.headers.cookie);
-      assert(peer);
-      assert.deepEqual(frame.payload, { args: {} });
-      const client = randomUUID();
-      instance.eventClients.set(socket, { stream: frame.streamId, peer, client });
-      socket.send(
-        JSON.stringify({
-          type: 'item',
-          streamId: frame.streamId,
-          value: {
-            type: 'ready',
-            clientId: client,
-            host: { home: '/fixture' },
-          },
-        }),
-      );
-      return;
-    }
-    if (frame.endpoint === 'userQuestions/attachWait') {
-      assert(instance.eventClients.has(socket));
-      const { agentId, callId } = frame.payload.args;
-      assert.equal(agentId, 'shared');
-      const remainingMs = instance.timed.get(callId);
-      assert(remainingMs !== undefined);
-      waits.set(frame.streamId, callId);
-      socket.send(JSON.stringify({ type: 'item', streamId: frame.streamId, value: { remainingMs } }));
-      return;
-    }
-    if (frame.endpoint === 'workspace/follow') {
-      socket.send(
-        JSON.stringify({
-          type: 'item',
-          streamId: frame.streamId,
-          value: {
-            type: 'baseline',
-            value: {
-              items: [
-                {
-                  workspaceId: 'work-' + instance.id,
-                  title: 'Workspace ' + instance.id,
-                  path: '/fixture',
-                  sessionIds: ['shared', ...instance.created.keys()],
-                },
-              ],
-            },
-          },
-        }),
-      );
-      return;
-    }
-    if (frame.endpoint === 'session/control') {
-      assert.deepEqual(frame.payload.args, {});
-      instance.controls.set(socket, frame.streamId);
-      socket.send(
-        JSON.stringify({
-          type: 'item',
-          streamId: frame.streamId,
-          value: {
-            type: 'baseline',
-            value: {
-              projections: Object.fromEntries(
-                [...instance.projections.keys()].map((id) => [id, baseline(instance, id)]),
-              ),
-            },
-          },
-        }),
-      );
-      return;
-    }
-    assert.equal(frame.endpoint, 'session/follow');
-    const id = frame.payload.args.request.address.sessionId;
-    const isShared = id === 'shared';
-    assert(isShared || instance.created.has(id));
-    assert.equal(frame.payload.args.request.address.kind, 'session');
-    socket.send(
-      JSON.stringify({
-        type: 'item',
-        streamId: frame.streamId,
-        value: {
-          type: 'snapshot',
-          header: { id, version: 4, cwd: '/fixture', createdAt: 123 },
-          projections: {
-            ...baseline(instance, id),
-            values: {
-              ...instance.projections.get(id),
-              title: isShared ? instance.title : instance.created.get(id),
-              inbox: { 'next-turn': isShared ? instance.inbox : [], 'next-step': [] },
-            },
-          },
-          cursor: isShared ? instance.records.length : -1,
-          hasMore: isShared && instance.records.length > instance.pageWindow,
-          records: isShared ? instance.records.slice(-instance.pageWindow) : [],
-        },
-      }),
-    );
-    if (frame.payload.args.request.assistantStream) {
-      instance.opens++;
-      instance.followers.set(socket, frame.streamId);
-    }
-  });
-  socket.once('close', () => {
-    instance.followers.delete(socket);
-    instance.controls.delete(socket);
-    instance.eventClients.delete(socket);
-  });
-});
-function eventFrame(instance: typeof one, value: object) {
-  for (const [socket, { stream }] of instance.eventClients)
-    if (socket.readyState === WebSocket.OPEN)
-      socket.send(JSON.stringify({ type: 'item', streamId: stream, value }));
-}
-function interaction(instance: typeof one, event: string, request: object, agentId = 'shared') {
-  const eventId = randomUUID();
-  eventFrame(instance, { type: 'waterfall', event, eventId, agentId, request });
-  return eventId;
-}
-function baseline(instance: typeof one, id: string) {
-  return {
-    values: instance.projections.get(id),
-    asOfSeq: Math.max(instance.records.length, instance.projectionSeq),
-  };
-}
-function projectionFrame(instance: typeof one, value: object) {
-  for (const [socket, streamId] of instance.controls)
-    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'item', streamId, value }));
-}
-function project(instance: typeof one, sessionId: string, key: string, value: unknown, publish = true) {
-  const projections = instance.projections.get(sessionId);
-  assert(projections);
-  projections[key] = value;
-  instance.projectionSeq = Math.max(instance.records.length, instance.projectionSeq) + 1;
-  if (publish)
-    projectionFrame(instance, { type: 'projection', sessionId, key, value, seq: instance.projectionSeq });
-}
-function push(instance: typeof one, value: object) {
-  for (const [socket, streamId] of instance.followers)
-    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'item', streamId, value }));
-}
-function record(instance: typeof one, type: string, data: object, publish = true) {
-  const event = { type, data, seq: instance.records.length + 1, time: Date.now() };
-  instance.records.push({ event });
-  if (publish) push(instance, { type: 'event', event });
-}
-function user(instance: typeof one, turn: number, requestId: string, text: string) {
-  record(instance, 'user/message', {
-    turn,
-    id: requestId,
-    role: 'user',
-    source: { kind: 'user', rpcId: requestId },
-    content: [{ type: 'text', text }],
-  });
-}
-async function wait<T>(test: () => T | Promise<T>) {
-  const until = Date.now() + 8000;
-  while (Date.now() < until) {
-    const result = await test();
-    if (result) return result;
-    await delay(30);
-  }
-  assert.fail('Expected DSH state did not arrive');
-}
 
-const probe = createServer().listen(0, '127.0.0.1');
-await once(probe, 'listening');
-const address = probe.address();
-assert(address && typeof address !== 'string');
-await new Promise<void>((done) => probe.close(() => done()));
-const origin = 'http://127.0.0.1:' + address.port;
-const enrollment = randomBytes(32).toString('hex');
-const relay = await buildRelay({
-  origin,
-  enrollmentSecret: enrollment,
-  webRoot: join(state, 'no-web'),
-  assetOrigin: null,
-  uploadOrigins: [],
-});
-const phone = await createIdentity();
-let child: ReturnType<typeof spawn> | undefined;
+let fixture: Awaited<ReturnType<typeof createDshFixture>> | undefined;
+let relay: Awaited<ReturnType<typeof buildRelay>> | undefined;
+let running: RunningNativeAdapter | undefined;
+let phase = 'setup';
 
-async function launch() {
+async function launch(origin: string, tokenZero: string) {
   const args = ['--headless', '--print-pair'];
-  const removedWork = process.platform === 'linux' && configSource === 'initial-env'
-    ? join(legacy, 'removed-runtime')
-    : undefined;
+  const removedWork =
+    process.platform === 'linux' && configSource === 'initial-env' ? join(legacy, 'removed-runtime') : undefined;
   if (removedWork) await mkdir(removedWork, { mode: 0o700 });
   // The old Linux installer removes its runtime directory before restarting the adapter.
   const launchArgs = removedWork
     ? ['-c', 'cd "$1" && rmdir "$1" && shift && exec "$@"', 'fixture', removedWork, executable, ...args]
     : args;
-  child = spawn(removedWork ? '/bin/sh' : executable, launchArgs, {
+  running = await spawnNativeAdapter({
+    command: removedWork ? '/bin/sh' : executable,
+    args: launchArgs,
+    origin,
+    stopSignal: 'SIGINT',
+    timeoutMs: 15_000,
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(POCKET_|CODEX_)/i.test(key))),
       CODEX_HOME: join(state, 'no-codex'),
@@ -651,45 +68,61 @@ async function launch() {
         ? { POCKET_ENV_FILE: legacyEnv }
         : { POCKET_NATIVE_LEGACY_DESKTOP_SETTINGS: legacyDesktop }),
       ...(configSource === 'explicit-env' ? { POCKET_ENV_FILE: overrideEnv } : {}),
-      RUST_DSH_TEST_TOKEN_0: one.token,
+      RUST_DSH_TEST_TOKEN_0: tokenZero,
     },
-    stdio: ['ignore', 'pipe', 'inherit'],
   });
-  const lines = createInterface({ input: child.stdout! });
-  const timeout = setTimeout(() => child?.kill(), 15000);
-  try {
-    for await (const line of lines) {
-      if (line.startsWith(origin)) return new URL(line);
-    }
-    assert.fail('Rust adapter did not expose a fixture pairing link');
-  } finally {
-    lines.close();
-    clearTimeout(timeout);
-  }
-}
-async function stop() {
-  if (!child) return;
-  const exited = once(child, 'close');
-  child.kill('SIGINT');
-  await exited;
-  child = undefined;
+  return running;
 }
 
+async function stopAdapter() {
+  const current = running;
+  running = undefined;
+  await current?.stop();
+}
+
+const wait = <T>(check: () => T | Promise<T>, description = `DSH state during ${phase}`) =>
+  waitFor(check, { description, timeoutMs: 8_000, intervalMs: 30 });
+
 try {
-  dsh.listen(0, '127.0.0.1');
-  await once(dsh, 'listening');
-  const carrier = dsh.address();
-  assert(carrier && typeof carrier !== 'string');
+  fixture = await createDshFixture({ png, workspacePdf, sessionZip });
+  const {
+    instances,
+    one,
+    two,
+    eventFrame,
+    interaction,
+    projectionFrame,
+    project,
+    push,
+    record,
+    user,
+  } = fixture;
+
+  const port = await allocateLocalPort();
+  const origin = 'http://127.0.0.1:' + port;
+  const enrollment = randomBytes(32).toString('hex');
+  relay = await buildRelay({
+    origin,
+    enrollmentSecret: enrollment,
+    webRoot: join(state, 'no-web'),
+    assetOrigin: null,
+    uploadOrigins: [],
+  });
+  const phone = await createIdentity();
+
   const legacyConfig = join(legacyWork, 'old-backends.json');
-  const carrierUrl = 'http://127.0.0.1:' + carrier.port;
   await mkdir(legacy, { mode: 0o700 });
-  await writeFile(legacyEnv, [
-    `RUST_DSH_TEST_TOKEN_1=${two.token}`,
-    `POCKET_PUBLIC_ORIGIN=${origin}`,
-    `POCKET_RELAY_ENROLLMENT=${enrollment}`,
-    'POCKET_P2P=0',
-    '',
-  ].join('\n'), { mode: 0o600 });
+  await writeFile(
+    legacyEnv,
+    [
+      `RUST_DSH_TEST_TOKEN_1=${two.token}`,
+      `POCKET_PUBLIC_ORIGIN=${origin}`,
+      `POCKET_RELAY_ENROLLMENT=${enrollment}`,
+      'POCKET_P2P=0',
+      '',
+    ].join('\n'),
+    { mode: 0o600 },
+  );
   await writeFile(
     join(state, 'instances.json'),
     JSON.stringify([
@@ -697,54 +130,64 @@ try {
         id: one.id,
         name: one.id,
         plugin: '@agent-remote/adapter-dsh',
-        config: { url: carrierUrl, version: '0.2.1-rc.5' },
+        config: { url: fixture.url, version: '0.2.1-rc.5' },
         secrets: { token: 'RUST_DSH_TEST_TOKEN_0' },
       },
       {
         id: two.id,
         name: two.id,
         type: 'dsh',
-        url: carrierUrl,
+        url: fixture.url,
         tokenEnv: 'RUST_DSH_TEST_TOKEN_1',
         version: '0.2.1-rc.5',
       },
     ]),
     { mode: 0o600 },
   );
-  await relay.app.listen({ host: '127.0.0.1', port: address.port });
+  await relay.app.listen({ host: '127.0.0.1', port });
+
   if (plugin && !bundled) {
-    const withoutPlugin = await launch();
-    const params = new URLSearchParams(withoutPlugin.hash.slice(1));
-    const code = params.get('pair')!;
-    const session = await nodeSession(origin, params.get('host')!, await createIdentity(), hash(code), {
-      type: 'pair',
-      protocol: 2,
-      sessionId: randomUUID(),
-      code,
-      name: 'Missing DSH plugin fixture',
-    });
+    phase = 'missing plugin isolation and installation';
+    const withoutPlugin = await launch(origin, one.token);
+    const session = await nodeSession(
+      origin,
+      withoutPlugin.host,
+      await createIdentity(),
+      hash(withoutPlugin.pairCode),
+      {
+        type: 'pair',
+        protocol: 2,
+        sessionId: randomUUID(),
+        code: withoutPlugin.pairCode,
+        name: 'Missing DSH plugin fixture',
+      },
+    );
     try {
-      const { backends } = await session.rpc<{ backends: { id: string; connected: boolean }[] }>(apiCall('/backends'));
-      assert.deepEqual(backends.map(({ id, connected }) => [id, connected]),
-        instances.map(({ id }) => [id, false]));
+      const { backends } = await session.rpc<{ backends: { id: string; connected: boolean }[] }>(
+        apiCall('/backends'),
+      );
+      assert.deepEqual(
+        backends.map(({ id, connected }) => [id, connected]),
+        instances.map(({ id }) => [id, false]),
+      );
     } finally {
       session.close();
-      await stop();
+      await stopAdapter();
     }
     execFileSync(executable, ['--adapter', 'install', plugin], {
       env: { ...process.env, POCKET_NATIVE_STATE_DIR: state },
       stdio: ['ignore', 'pipe', 'inherit'],
     });
   }
-  const link = await launch();
-  const params = new URLSearchParams(link.hash.slice(1));
-  const pair = params.get('pair')!;
-  const host = params.get('host')!;
-  let session = await nodeSession(origin, host, phone, createHash('sha256').update(pair).digest('hex'), {
+
+  phase = 'pairing and initial history';
+  const started = await launch(origin, one.token);
+  const host = started.host;
+  let session = await nodeSession(origin, host, phone, hash(started.pairCode), {
     type: 'pair',
     protocol: 2,
     sessionId: randomUUID(),
-    code: pair,
+    code: started.pairCode,
     name: 'DSH fixture',
   });
   const ready = await session.ready;
@@ -762,15 +205,16 @@ try {
   let remove = listen();
   const rpc = <T>(backendId: string, path: string, method = 'GET', body?: unknown) =>
     session.rpc<T>({ ...apiCall(path, method, body), backendId });
-  const operation = (id: string, state: string, backendId = one.id) =>
+  const operation = (id: string, expectedState: string, backendId = one.id) =>
     wait(async () => {
       const op = await rpc<{ state: string }>(backendId, '/operations/' + id);
-      return op.state === state && op;
-    });
+      return op.state === expectedState && op;
+    }, `operation ${id} on ${backendId} did not reach ${expectedState}`);
   const watch = async (backendId: string) => {
     await session.request('watch', { backendId, threadId: 'shared' });
-    await wait(() => views.get(backendId)?.thread.synchronized === true);
+    await wait(() => views.get(backendId)?.thread.synchronized === true, `${backendId} watch did not synchronize`);
   };
+
   try {
     const { backends } = await session.rpc<{
       backends: { id: string; connected: boolean; adapterVersion?: string }[];
@@ -801,8 +245,9 @@ try {
       await watch(instance.id);
     }
 
+    phase = 'scoped attachment staging';
     const attachment = Buffer.from('staged DSH attachment');
-    const digest = createHash('sha256').update(attachment).digest('hex');
+    const digest = hash(attachment);
     const uploadSpec = { name: 'scope.txt', size: attachment.length, sha256: digest, hashes: [digest] };
     const upload = await rpc<{ id: string }>(one.id, '/threads/shared/uploads', 'POST', uploadSpec);
     const file = { fileId: upload.id, backendId: one.id, threadId: 'shared' };
@@ -818,6 +263,7 @@ try {
     );
     await assert.rejects(session.request('file', { ...file, action: 'read', index: 0, backendId: two.id }));
 
+    phase = 'send, stream, steer, queue and interrupt';
     const requestId = randomUUID();
     const send = { requestId, text: 'first' };
     await rpc(one.id, '/threads/shared/messages', 'POST', send);
@@ -903,6 +349,7 @@ try {
         views.get(one.id)?.thread.canSend === true && !views.get(one.id)?.order.includes('stream-attempt'),
     );
 
+    phase = 'gap reopen, rename, legacy drafts and media references';
     const reopen = one.opens;
     record(one, 'turn/start', { turn: 9 }, false);
     record(one, 'turn/end', { turn: 9, reason: { kind: 'completed' } });
@@ -913,16 +360,16 @@ try {
 
     await wait(() => views.get(one.id)?.thread.title === 'renamed');
     const stage = async (name: string, data: Buffer) => {
-      const digest = hash(data);
+      const digestValue = hash(data);
       const { id } = await rpc<{ id: string }>(one.id, '/threads/shared/uploads', 'POST', {
         name,
         size: data.length,
-        sha256: digest,
-        hashes: [digest],
+        sha256: digestValue,
+        hashes: [digestValue],
       });
-      const file = { fileId: id, backendId: one.id, threadId: 'shared' };
-      await session.request('file', { ...file, action: 'write', index: 0 }, data);
-      await session.request('file', { ...file, action: 'finish' });
+      const target = { fileId: id, backendId: one.id, threadId: 'shared' };
+      await session.request('file', { ...target, action: 'write', index: 0 }, data);
+      await session.request('file', { ...target, action: 'finish' });
       return id;
     };
     const describe = (backendId: string, path: string) =>
@@ -944,13 +391,25 @@ try {
     const legacyDraftPath = join(legacyDraftRoot, legacyDraftId, legacyDraftName);
     await mkdir(join(legacyDraftRoot, legacyDraftId), { mode: 0o700, recursive: true });
     await writeFile(legacyDraftPath, legacyDraftBytes, { mode: 0o600 });
-    await writeFile(join(legacyDraftRoot, legacyDraftId + '.json'), JSON.stringify({
-      id: legacyDraftId, name: legacyDraftName, size: legacyDraftBytes.length, sha256: hash(legacyDraftBytes),
-      device: ready.device.id, thread: 'shared', file: legacyDraftPath, complete: true,
-    }), { mode: 0o600 });
+    await writeFile(
+      join(legacyDraftRoot, legacyDraftId + '.json'),
+      JSON.stringify({
+        id: legacyDraftId,
+        name: legacyDraftName,
+        size: legacyDraftBytes.length,
+        sha256: hash(legacyDraftBytes),
+        device: ready.device.id,
+        thread: 'shared',
+        file: legacyDraftPath,
+        complete: true,
+      }),
+      { mode: 0o600 },
+    );
     const completeLegacy = '/threads/shared/uploads/' + legacyDraftId + '/complete';
     assert.deepEqual(await rpc(one.id, completeLegacy, 'POST'), {
-      id: legacyDraftId, name: legacyDraftName, path: legacyDraftPath,
+      id: legacyDraftId,
+      name: legacyDraftName,
+      path: legacyDraftPath,
     });
     await assert.rejects(rpc(two.id, completeLegacy, 'POST'));
     await assert.rejects(describe(two.id, legacyDraftPath));
@@ -1032,21 +491,23 @@ try {
     record(one, 'turn/end', { turn: 21, reason: { kind: 'completed' } });
     await wait(() => views.get(one.id)?.thread.canSend === true);
 
+    phase = 'approvals, questions and interactive waterfall events';
     const cards = () => (views.get(one.id)?.thread.requests ?? []) as any[];
-    const cardFor = (eventId: string) => wait(() => cards().find((card) => card.id.endsWith(':' + eventId)));
-    const responseTo = (card: any, reply: object, requestId = randomUUID()) => ({
-      requestId,
+    const cardFor = (eventId: string) =>
+      wait(() => cards().find((card) => card.id.endsWith(':' + eventId)), `card for event ${eventId}`);
+    const responseTo = (card: any, reply: object, responseRequestId = randomUUID()) => ({
+      requestId: responseRequestId,
       targetRequestId: card.id,
       expectedTurnId: card.turnId,
       expectedFingerprint: card.fingerprint,
       ...reply,
     });
-    const respond = async (body: ReturnType<typeof responseTo>, state: string) => {
+    const respond = async (body: ReturnType<typeof responseTo>, expectedState: string) => {
       await rpc(one.id, '/threads/shared/responses', 'POST', body);
-      await operation(body.requestId, state);
+      await operation(body.requestId, expectedState);
     };
     const outcome = (id: string) =>
-      wait(() => one.eventReplies.find((entry) => entry.eventId === id)?.outcome);
+      wait(() => one.eventReplies.find((entry) => entry.eventId === id)?.outcome, `event outcome for ${id}`);
     const approval = { toolName: 'fixture-tool', reason: 'Isolated approval' };
     const questions = [
       {
@@ -1056,7 +517,7 @@ try {
         options: [{ label: 'A', description: 'Fixture choice' }, { label: 'B' }],
       },
     ];
-    await wait(() => one.eventClients.size === 1 && two.eventClients.size === 1);
+    await wait(() => one.eventClients.size === 1 && two.eventClients.size === 1, 'event clients did not connect');
     const unwatched = interaction(one, 'approval/request', approval, 'not-watched');
     assert.deepEqual(await outcome(unwatched), { kind: 'next' });
     const unknown = interaction(one, 'unsupported/event', {});
@@ -1068,17 +529,25 @@ try {
     const beforeTool = await cardFor(asked);
     assert.equal(beforeTool.description, approval.reason);
     record(one, 'tool/call', {
-      turn: 22, step: 1, callId: 'other-call', name: approval.toolName,
+      turn: 22,
+      step: 1,
+      callId: 'other-call',
+      name: approval.toolName,
       arguments: JSON.stringify({ target: 'unrelated' }),
     });
     await wait(() => views.get(one.id)?.order.includes('tool-other-call'));
     assert.equal((await cardFor(asked)).description, approval.reason);
     const argumentsText = JSON.stringify({ command: 'printf "fixture approval"', cwd: '/fixture' });
     record(one, 'tool/call', {
-      turn: 22, step: 1, callId: approvalCallId, name: approval.toolName, arguments: argumentsText,
+      turn: 22,
+      step: 1,
+      callId: approvalCallId,
+      name: approval.toolName,
+      arguments: argumentsText,
     });
-    const card = await wait(() =>
-      cards().find((entry) => entry.id === beforeTool.id && entry.description.includes(argumentsText)),
+    const card = await wait(
+      () => cards().find((entry) => entry.id === beforeTool.id && entry.description.includes(argumentsText)),
+      'tool arguments did not enrich approval card',
     );
     assert.equal(card.description, `${approval.reason}\n\n工具参数：\n${argumentsText}`);
     assert.notEqual(card.fingerprint, beforeTool.fingerprint);
@@ -1092,9 +561,17 @@ try {
     await respond(responseTo(beforeTool, { decision: 'accept' }), 'rejected');
     await respond(responseTo(card, { decision: 'accept', expectedTurnId: '21' }), 'rejected');
     await respond(responseTo(card, { decision: 'acceptForSession' }), 'rejected');
-    await assert.rejects(rpc(one.id, '/threads/shared/responses', 'POST', responseTo(card, {
-      decision: 'accept', scope: 'session',
-    })));
+    await assert.rejects(
+      rpc(
+        one.id,
+        '/threads/shared/responses',
+        'POST',
+        responseTo(card, {
+          decision: 'accept',
+          scope: 'session',
+        }),
+      ),
+    );
     await respond(responseTo(card, { decision: 'decline', expectedFingerprint: '0'.repeat(64) }), 'rejected');
     const decision = responseTo(card, { decision: 'accept' });
     await respond(decision, 'completed');
@@ -1103,9 +580,12 @@ try {
     assert.equal(one.eventReplies.filter((entry) => entry.eventId === asked).length, 1);
     await wait(() => !cards().length);
 
-    for (const [decision, value] of [['decline', 'rejected'], ['cancel', 'cancelled']] as const) {
+    for (const [choice, value] of [
+      ['decline', 'rejected'],
+      ['cancel', 'cancelled'],
+    ] as const) {
       const event = interaction(one, 'approval/request', approval);
-      await respond(responseTo(await cardFor(event), { decision }), 'completed');
+      await respond(responseTo(await cardFor(event), { decision: choice }), 'completed');
       assert.deepEqual(await outcome(event), { kind: 'result', value });
       await wait(() => !cards().length);
     }
@@ -1154,7 +634,7 @@ try {
       active: [{ state: 'continued', callId: 'call-timed', questions }],
       settled: [],
     });
-    const late = await wait(() => cards().find((card) => card.kind === 'async-question'));
+    const late = await wait(() => cards().find((entry) => entry.kind === 'async-question'));
     assert.equal(late.turnId, null);
     assert.equal(late.acceptsWriteInQuestionIds, true);
     await respond(responseTo(late, { answers: { mode: ['B'] }, writeInQuestionIds: ['mode'] }), 'completed');
@@ -1193,13 +673,15 @@ try {
     await watch(one.id);
     record(one, 'turn/end', { turn: 22, reason: { kind: 'completed' } });
     await wait(() => views.get(one.id)?.thread.canSend === true);
+
+    phase = 'models, controls, skills, goals and ZIP export';
     const models = await rpc<{ models: { id: string; efforts: string[] }[] }>(one.id, '/models');
     assert.deepEqual(
       models.models.map(({ id, efforts }) => [id, efforts]),
       [
-        [modelId('base'), ['default']],
-        [modelId('advanced'), ['high']],
-        [modelId('drop'), ['default']],
+        [dshModelId('base'), ['default']],
+        [dshModelId('advanced'), ['high']],
+        [dshModelId('drop'), ['default']],
       ],
     );
     const controls = await rpc<{ actions: string[]; presets: { id: string }[] }>(
@@ -1216,16 +698,16 @@ try {
       controls.presets.map(({ id }) => id),
       ['standard', 'custom'],
     );
-    await wait(() => views.get(one.id)?.thread.model === modelId('base'));
+    await wait(() => views.get(one.id)?.thread.model === dshModelId('base'));
     const modelChange = {
       requestId: randomUUID(),
-      model: modelId('advanced'),
+      model: dshModelId('advanced'),
       effort: 'high',
       mode: 'default',
       expectedMode: 'default',
       serviceTier: 'default',
       expectedServiceTier: null,
-      expectedModel: modelId('base'),
+      expectedModel: dshModelId('base'),
       expectedEffort: 'default',
     };
     await rpc(one.id, '/threads/shared/settings', 'POST', modelChange);
@@ -1233,30 +715,30 @@ try {
     await wait(() => views.get(one.id)?.thread.reasoningEffort === 'high');
     await rpc(one.id, '/threads/shared/settings', 'POST', modelChange);
     assert.equal(one.calls.filter((call) => call.method === 'session/selectModel').length, 1);
-    assert.equal(views.get(two.id)?.thread.model, modelId('base'));
+    assert.equal(views.get(two.id)?.thread.model, dshModelId('base'));
     projectionFrame(one, {
       type: 'projection',
       sessionId: 'shared',
       key: 'modelSelection',
       seq: one.projectionSeq - 1,
-      value: defaultProjections().modelSelection,
+      value: defaultDshProjections().modelSelection,
     });
     project(one, 'shared', 'plan', { active: true }, false);
     const staleModel = {
       ...modelChange,
       requestId: randomUUID(),
-      expectedModel: modelId('advanced'),
+      expectedModel: dshModelId('advanced'),
       expectedEffort: 'high',
     };
     await rpc(one.id, '/threads/shared/settings', 'POST', staleModel);
     await operation(staleModel.requestId, 'rejected');
     assert.equal(one.calls.filter((call) => call.method === 'session/selectModel').length, 1);
-    assert.equal(views.get(one.id)?.thread.model, modelId('advanced'));
+    assert.equal(views.get(one.id)?.thread.model, dshModelId('advanced'));
 
     const control = async (value: object, expected = 'completed') => {
-      const requestId = randomUUID();
-      await rpc(one.id, '/threads/shared/control', 'POST', { requestId, control: value });
-      return operation(requestId, expected);
+      const controlRequestId = randomUUID();
+      await rpc(one.id, '/threads/shared/control', 'POST', { requestId: controlRequestId, control: value });
+      return operation(controlRequestId, expected);
     };
     const permissionRevision = views.get(one.id)?.thread.controls.permissionRevision;
     assert.equal(typeof permissionRevision, 'string');
@@ -1343,15 +825,15 @@ try {
     await rpc(one.id, '/threads/shared/control', 'POST', lostGoal);
     assert.equal(one.calls.filter(({ method }) => method === 'goals/edit').length, 1);
     assert.equal((await readGoal())?.objective, 'lost goal response');
-    for (const [operation, phase] of [
+    for (const [goalOperation, expectedPhase] of [
       ['pause', 'paused'],
       ['resume', 'active'],
       ['complete', 'complete'],
     ] as const) {
       const current = (await readGoal())!;
-      await control({ action: 'goal', operation, ref: current.ref });
+      await control({ action: 'goal', operation: goalOperation, ref: current.ref });
       const result = (await readGoal())!;
-      assert.deepEqual([result.phase, result.ref.revision], [phase, current.ref.revision + 1]);
+      assert.deepEqual([result.phase, result.ref.revision], [expectedPhase, current.ref.revision + 1]);
     }
     await control({ action: 'goal', operation: 'clear', ref: (await readGoal())!.ref });
     assert.equal(await readGoal(), null);
@@ -1369,15 +851,16 @@ try {
     const lostSetting = {
       ...staleModel,
       requestId: randomUUID(),
-      model: modelId('drop'),
+      model: dshModelId('drop'),
       effort: 'default',
       mode: 'plan',
       expectedMode: 'plan',
     };
     await rpc(one.id, '/threads/shared/settings', 'POST', lostSetting);
     await operation(lostSetting.requestId, 'uncertain');
-    await wait(() => views.get(one.id)?.thread.model === modelId('drop'));
+    await wait(() => views.get(one.id)?.thread.model === dshModelId('drop'));
 
+    phase = 'project grouping and thread creation';
     const grouped = await rpc<{ threads: { id: string; projectId: string }[] }>(
       one.id,
       '/threads?project=work-dsh-one',
@@ -1394,7 +877,7 @@ try {
       title: 'new session',
       prompt: 'initial',
       projectId: 'work-dsh-one',
-      model: modelId('advanced'),
+      model: dshModelId('advanced'),
       thinking: 'high',
       permission: 'restricted',
       agentPreset: 'custom',
@@ -1428,24 +911,29 @@ try {
     assert.equal(incomplete.resultThreadId, 'created-' + partial);
     assert(!two.created.size);
 
+    phase = 'restart recovery and legacy desktop settings migration';
     const lost = randomUUID();
     await rpc(one.id, '/threads/shared/messages', 'POST', { requestId: lost, text: 'lost response' });
     await operation(lost, 'uncertain');
     const restartCount = one.calls.length;
     remove();
     session.close();
-    await stop();
+    await stopAdapter();
     await mkdir(legacyWork, { mode: 0o700 });
     await renameFile(join(state, 'instances.json'), legacyConfig);
     const oldEnvironment = `RUST_DSH_TEST_TOKEN_1=${two.token}\nPOCKET_BACKENDS_FILE=old-backends.json\nPOCKET_PUBLIC_ORIGIN=https://unused.invalid\nPOCKET_P2P=0\n`;
     await writeFile(externalEnv, oldEnvironment, { mode: 0o600 });
-    await writeFile(legacyDesktop, JSON.stringify({
-      origin,
-      legacyGateway: { workingDirectory: legacyWork, environmentFile: externalEnv },
-    }), { mode: 0o600 });
+    await writeFile(
+      legacyDesktop,
+      JSON.stringify({
+        origin,
+        legacyGateway: { workingDirectory: legacyWork, environmentFile: externalEnv },
+      }),
+      { mode: 0o600 },
+    );
     await rm(join(state, 'service-origin'));
     configSource = 'desktop-settings';
-    await launch();
+    await launch(origin, one.token);
     views.clear();
     session = await nodeSession(origin, host, phone, ready.ticket, {
       type: 'authenticate',
@@ -1471,13 +959,14 @@ try {
     record(one, 'turn/end', { turn: 10, reason: { kind: 'completed' } });
     await operation(lost, 'completed');
 
+    phase = 'migrated read-only policy';
     remove();
     session.close();
-    await stop();
+    await stopAdapter();
     await writeFile(overrideEnv, oldEnvironment + 'POCKET_READ_ONLY=1\n', { mode: 0o600 });
     configSource = 'explicit-env';
     const beforeReadOnly = one.eventSessions;
-    await launch();
+    await launch(origin, one.token);
     views.clear();
     session = await nodeSession(origin, host, phone, ready.ticket, {
       type: 'authenticate',
@@ -1515,14 +1004,21 @@ try {
     remove();
     session.close();
   }
+  assert.deepEqual(fixture.errors, [], 'Synthetic DSH fixture recorded unexpected errors');
   console.log(
     'Rust DSH: media, native skills and controls, goals, ZIP export, approvals and questions, recovery, replay, legacy environment and read-only policy passed.',
   );
+} catch (error) {
+  const stderr = running?.stderrTail();
+  console.error(
+    `Native DSH smoke failed during ${phase}${stderr ? `\n--- adapter stderr ---\n${stderr}` : ''}`,
+  );
+  throw error;
 } finally {
-  await stop();
-  for (const socket of dshSocket.clients) socket.terminate();
-  dshSocket.close();
-  dsh.close();
-  await relay.app.close();
-  await rm(state, { recursive: true, force: true });
+  await runCleanups([
+    () => stopAdapter(),
+    () => fixture?.close(),
+    () => relay?.app.close(),
+    () => rm(state, { recursive: true, force: true }),
+  ]);
 }

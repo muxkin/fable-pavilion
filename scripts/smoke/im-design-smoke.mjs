@@ -3,19 +3,19 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { PNG } from 'pngjs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { buildRelay } from '../src/server/relay.ts';
-import { mathCopyFixture, verifyMathCopy } from './lib/math-copy-smoke.ts';
+import { buildRelay } from '../../src/server/relay.ts';
+import { mathCopyFixture, verifyMathCopy } from '../lib/math-copy-smoke.ts';
 import {
   selectionTranslationFixture,
   verifySiteSelectionTranslation,
-} from './lib/selection-translation-smoke.ts';
+} from '../lib/selection-translation-smoke.ts';
 import {
   allocateLocalPort,
   saveRecoveryCode,
   registerAgentFixture,
   browserAccountFixture,
   messagingFixtureRequest,
-} from './lib/messaging-smoke.ts';
+} from '../lib/messaging-smoke.ts';
 // Synthetic artwork keeps this check reproducible without personal files.
 const artwork = new PNG({ width: 64, height: 64 });
 for (let i = 0; i < artwork.data.length; i += 4) artwork.data.set([22, 120, 102, i % 128 ? 255 : 0], i);

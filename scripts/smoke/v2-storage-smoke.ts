@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readConfig } from '../src/server/config.js';
-import { FileService } from '../src/server/file-service.js';
-import { Uploads } from '../src/server/uploads.js';
-import { BLOCK_SIZE, hashBytes, encryptBlock, decryptBlock } from '../src/shared/files.js';
-import { uploadToStorage } from '../src/web/storage-upload.js';
-import { loadStorage } from '../src/server/object-storage.js';
+import { readConfig } from '../../src/server/config.js';
+import { FileService } from '../../src/server/file-service.js';
+import { Uploads } from '../../src/server/uploads.js';
+import { BLOCK_SIZE, hashBytes, encryptBlock, decryptBlock } from '../../src/shared/files.js';
+import { uploadToStorage } from '../../src/web/storage-upload.js';
+import { loadStorage } from '../../src/server/object-storage.js';
 const base = readConfig();
 if (!base.media) throw Error('Private storage not configured');
 const stateDir = await mkdtemp(join(tmpdir(), 'pocket-v2-storage-')),
