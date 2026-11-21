@@ -8,7 +8,9 @@ import {
   approveAdminAuthRequest,
   consumeAdminAuthRequest,
   createAdminAuthRequest,
+  deleteAdminUser,
   inspectAdminAuthRequest,
+  migrateAdminUserId,
 } from './admin-queries.js';
 import { ChatError, digest, type LoginDeviceMeta, type MessagingStore } from './store-core.js';
 import type { MessagingObjects, MediaKind } from './objects.js';
@@ -952,6 +954,45 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
       `吊销用户 ${targetId} 的 ${result.revoked} 个登录会话`,
     );
     return result;
+  });
+  app.delete('/admin/users/:id', async (req) => {
+    const admin = requireAdmin(req);
+    const targetId = uid(req);
+    if (targetId === admin.id || adminUserIds.has(targetId)) {
+      throw new ChatError(400, '不能删除管理员账号');
+    }
+    const removed = deleteAdminUser(store.db, targetId);
+    store.changes.emit(targetId);
+    if (config.storage) await objects.collectGarbage?.().catch(() => {});
+    store.recordAdminAudit(
+      admin.id,
+      'delete_user',
+      targetId,
+      `永久删除账号 ${removed.displayName} (@${removed.username} · UID ${targetId})`,
+    );
+    return { ok: true, deleted: removed };
+  });
+  app.post('/admin/users/:id/migrate-uid', { bodyLimit: 1024 }, async (req) => {
+    const admin = requireAdmin(req);
+    const fromId = uid(req);
+    const { toId, resetAllocator = false } = z
+      .object({
+        toId: userId,
+        resetAllocator: z.boolean().optional(),
+      })
+      .strict()
+      .parse(req.body);
+    const result = migrateAdminUserId(store.db, fromId, toId, resetAllocator);
+    const migratedDesktops = (await config.desktops?.migrateAccount?.(fromId, toId)) ?? 0;
+    store.changes.emit(fromId);
+    store.changes.emit(toId);
+    store.recordAdminAudit(
+      toId === admin.id || fromId === admin.id ? toId : admin.id,
+      'migrate_uid',
+      toId,
+      `迁移账号 @${result.username} UID：${fromId} -> ${toId}（同步桌面节点 ${migratedDesktops} 台）`,
+    );
+    return { ...result, migratedDesktops };
   });
   app.get('/admin/sessions', (req) => {
     requireAdmin(req);

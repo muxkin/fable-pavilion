@@ -1,4 +1,5 @@
-import { onMounted, shallowRef } from 'vue';
+import { shallowRef } from 'vue';
+import { watchRender } from '../render-effects';
 import { tsxComponent } from '../tsx-component';
 import { messaging, useMessaging } from './context';
 import { Dialog, Notice, errorText } from './ui';
@@ -49,7 +50,7 @@ export function takeAdminAuthParams(): AdminAuthParams | null {
   return null;
 }
 
-export const AdminAuthApproval = tsxComponent(function AdminAuthApproval(props: {
+export const AdminAuthApproval = tsxComponent(function AdminAuthApproval(_props: {
   request: AdminAuthParams;
   onClose: () => void;
 }) {
@@ -57,23 +58,28 @@ export const AdminAuthApproval = tsxComponent(function AdminAuthApproval(props: 
   const busy = shallowRef(false);
   const done = shallowRef(false);
   const error = shallowRef('');
-
-  async function inspect(request: AdminAuthParams) {
-    error.value = '';
-    try {
-      info.value = await messaging.request<AuthInfo>(`/admin/auth/${request.id}`, 'GET');
-    } catch (cause) {
-      error.value = errorText(cause);
-    }
-  }
-
-  onMounted(() => {
-    const { user } = useMessaging();
-    if (user?.isAdmin) void inspect(props.request);
-  });
+  const watchRequest = watchRender();
 
   return ({ request, onClose }) => {
     const { user } = useMessaging();
+
+    watchRequest(() => {
+      if (!user?.isAdmin) return;
+      let alive = true;
+      error.value = '';
+      void messaging
+        .request<AuthInfo>(`/admin/auth/${request.id}`, 'GET')
+        .then((res) => {
+          if (alive) info.value = res;
+        })
+        .catch((cause) => {
+          if (alive) error.value = errorText(cause);
+        });
+      return () => {
+        alive = false;
+      };
+    }, [request.id, Boolean(user?.isAdmin)]);
+
     if (!user) return null;
 
     async function approve() {
@@ -97,7 +103,7 @@ export const AdminAuthApproval = tsxComponent(function AdminAuthApproval(props: 
             <div style={{ display: 'grid', gap: '12px' }}>
               <p style={{ margin: 0, lineHeight: 1.6 }}>
                 当前登录账号 <strong>{user.displayName}</strong>（@{user.username} · UID{' '}
-                <strong>{user.id}</strong>）未列入本站管理员白名单（<code>POCKET_ADMIN_UIDS</code>），无法批准管理后台授权。
+                <strong>{user.id}</strong>）不具备本站管理员权限，无法批准管理后台授权。
               </p>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <button type="button" onClick={onClose}>

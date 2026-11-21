@@ -27,10 +27,12 @@ import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.net.ssl.HttpsURLConnection;
 import org.json.JSONArray;
@@ -42,6 +44,8 @@ final class VerifiedFrontend {
     private static final int MAX_FILE = 25 * 1024 * 1024; // Pages' maximum asset size.
     private static final Pattern INSTALLER_PATH =
             Pattern.compile("/downloads/android/fable-pavilion-android-[0-9]+\\.[0-9]+\\.[0-9]+\\.apk");
+    private static final Pattern SHELL_ASSET = Pattern.compile("[\"']/assets/([A-Za-z0-9._-]+\\.(?:js|css))[\"']");
+    private static final ConcurrentHashMap<String, Object> ASSET_LOCKS = new ConcurrentHashMap<>();
     private final Uri releaseOrigin;
     private final File cache;
     private final Map<String, String> files;
@@ -139,14 +143,30 @@ final class VerifiedFrontend {
         return version > previous.version || version == previous.version && id.equals(previous.id);
     }
 
+    private boolean hasLocalAsset(String hash) {
+        return hash != null && (embedded.files.contains(hash + ".bin") || new File(cache, hash).isFile());
+    }
+
     private boolean ready() {
         if (expires <= System.currentTimeMillis()) return false;
-        for (Map.Entry<String, String> entry : files.entrySet()) {
-            String hash = entry.getValue();
-            if (!isInstallerPath(entry.getKey()) && !embedded.files.contains(hash + ".bin") &&
-                    !new File(cache, hash).isFile()) return false;
+        return hasLocalAsset(files.get("/index.html"));
+    }
+
+    private Set<String> criticalShellHashes(byte[] indexHtml) {
+        Set<String> needed = new HashSet<>();
+        for (String path : new String[] { "/index.html", "/sw.js", "/version.json", "/manifest.webmanifest", AndroidUpdates.FEED }) {
+            String hash = files.get(path);
+            if (hash != null && !hasLocalAsset(hash)) needed.add(hash);
         }
-        return true;
+        if (indexHtml != null) {
+            Matcher matcher = SHELL_ASSET.matcher(new String(indexHtml, StandardCharsets.UTF_8));
+            while (matcher.find()) {
+                String path = "/assets/" + matcher.group(1);
+                String hash = files.get(path);
+                if (hash != null && !hasLocalAsset(hash)) needed.add(hash);
+            }
+        }
+        return needed;
     }
 
     VerifiedFrontend update(String encodedKey, SharedPreferences prefs) throws Exception {
@@ -158,31 +178,33 @@ final class VerifiedFrontend {
                 (previous != null && !next.sameOrNewerThan(previous)))
             throw new IOException("Expired or rolled back release");
         if (next.id.equals(id) && ready()) return this;
-        // Prepare the complete signed frontend off the WebView's request thread using bounded concurrency.
-        Set<String> needed = new HashSet<>();
-        for (Map.Entry<String, String> entry : next.files.entrySet()) {
-            if (!isInstallerPath(entry.getKey())) needed.add(entry.getValue());
-        }
-        ExecutorService pool = Executors.newFixedThreadPool(6);
-        try {
-            java.util.List<Future<?>> tasks = new java.util.ArrayList<>(needed.size());
-            for (final String hash : needed) {
-                tasks.add(pool.submit(() -> {
-                    next.file(hash, true);
-                    return null;
-                }));
-            }
-            for (Future<?> task : tasks) {
-                try {
-                    task.get();
-                } catch (ExecutionException failure) {
-                    Throwable cause = failure.getCause();
-                    if (cause instanceof Exception) throw (Exception) cause;
-                    throw new IOException("Asset download failed", cause);
+        // Prefetch only the critical shell (/index.html + its direct entry assets) so hot-updates
+        // complete in under a second; lazy route/syntax/diagram chunks verify & cache on demand.
+        String indexHash = next.files.get("/index.html");
+        byte[] indexHtml = indexHash != null ? next.file(indexHash, true) : null;
+        Set<String> needed = next.criticalShellHashes(indexHtml);
+        if (!needed.isEmpty()) {
+            ExecutorService pool = Executors.newFixedThreadPool(Math.min(6, needed.size()));
+            try {
+                java.util.List<Future<?>> tasks = new java.util.ArrayList<>(needed.size());
+                for (final String hash : needed) {
+                    tasks.add(pool.submit(() -> {
+                        next.file(hash, true);
+                        return null;
+                    }));
                 }
+                for (Future<?> task : tasks) {
+                    try {
+                        task.get();
+                    } catch (ExecutionException failure) {
+                        Throwable cause = failure.getCause();
+                        if (cause instanceof Exception) throw (Exception) cause;
+                        throw new IOException("Asset download failed", cause);
+                    }
+                }
+            } finally {
+                pool.shutdownNow();
             }
-        } finally {
-            pool.shutdownNow();
         }
         if (!prefs.edit().putString(releaseOrigin.toString(), Base64.encodeToString(document, Base64.NO_WRAP)).commit())
             throw new IOException("Could not save accepted release");
@@ -212,7 +234,7 @@ final class VerifiedFrontend {
         String hash = files.get(AndroidUpdates.FEED);
         if (hash == null) return null;
         if (expires <= System.currentTimeMillis()) throw new IOException("Release expired");
-        byte[] bytes = file(hash, false);
+        byte[] bytes = file(hash, true);
         AndroidUpdates.Release apk = new AndroidUpdates.Release(
                 new JSONObject(new String(bytes, StandardCharsets.UTF_8)));
         if (!apk.checksum.equals(files.get(apk.path()))) throw new IOException("Unsigned APK checksum");
@@ -236,7 +258,7 @@ final class VerifiedFrontend {
                 String prefix = RELEASE + "assets/";
                 if (path.startsWith(prefix) && path.endsWith(".bin")) {
                     String hash = path.substring(prefix.length(), path.length() - 4);
-                    if (hashes.contains(hash)) return releaseData(file(hash, false));
+                    if (hashes.contains(hash)) return releaseData(file(hash, true));
                 }
                 return error(404, "Not Found");
             }
@@ -264,7 +286,7 @@ final class VerifiedFrontend {
         String mime = mime(path);
         String encoding = mime.startsWith("text/") ? "UTF-8" : null;
         return new WebResourceResponse(mime, encoding, 200, "OK", headers,
-                new ByteArrayInputStream(file(expected, false)));
+                new ByteArrayInputStream(file(expected, true)));
     }
 
     private static WebResourceResponse releaseData(byte[] bytes) {
@@ -304,18 +326,28 @@ final class VerifiedFrontend {
             stored.delete();
         }
         if (!download) throw new IOException("Asset is not present in the verified release cache");
-        byte[] bytes = fetch(releaseOrigin + RELEASE + "assets/" + expected + ".bin", MAX_FILE);
-        if (!expected.equals(digest(bytes))) throw new IOException("Invalid release file hash");
-        if (!cache.isDirectory() && !cache.mkdirs() && !cache.isDirectory())
-            throw new IOException("Could not create the verified release cache");
-        File writing = File.createTempFile("asset", ".tmp", cache);
-        try {
-            try (FileOutputStream output = new FileOutputStream(writing)) { output.write(bytes); }
-            if (!writing.renameTo(stored)) throw new IOException("Could not save the verified release asset");
-        } finally {
-            writing.delete();
+        Object lock = ASSET_LOCKS.computeIfAbsent(expected, ignored -> new Object());
+        synchronized (lock) {
+            if (stored.isFile()) {
+                try (InputStream input = new FileInputStream(stored)) {
+                    byte[] bytes = read(input, MAX_FILE);
+                    if (expected.equals(digest(bytes))) return bytes;
+                } catch (IOException ignored) {}
+                stored.delete();
+            }
+            byte[] bytes = fetch(releaseOrigin + RELEASE + "assets/" + expected + ".bin", MAX_FILE);
+            if (!expected.equals(digest(bytes))) throw new IOException("Invalid release file hash");
+            if (!cache.isDirectory() && !cache.mkdirs() && !cache.isDirectory())
+                throw new IOException("Could not create the verified release cache");
+            File writing = File.createTempFile("asset", ".tmp", cache);
+            try {
+                try (FileOutputStream output = new FileOutputStream(writing)) { output.write(bytes); }
+                if (!writing.renameTo(stored)) throw new IOException("Could not save the verified release asset");
+            } finally {
+                writing.delete();
+            }
+            return bytes;
         }
-        return bytes;
     }
 
     static byte[] fetch(String url, int limit) throws IOException {
@@ -326,15 +358,20 @@ final class VerifiedFrontend {
             connection.setConnectTimeout(15000);
             connection.setReadTimeout(20000);
             connection.setUseCaches(false);
+            boolean keepAlive = false;
             try {
                 if (connection.getResponseCode() != 200 || connection.getContentLengthLong() > limit)
                     throw new IOException("Release download unavailable");
-                try (InputStream input = connection.getInputStream()) { return read(input, limit); }
+                try (InputStream input = connection.getInputStream()) {
+                    byte[] data = read(input, limit);
+                    keepAlive = true;
+                    return data;
+                }
             } catch (IOException failure) {
                 last = failure;
                 if (attempt == 2) throw failure;
             } finally {
-                connection.disconnect();
+                if (!keepAlive) connection.disconnect();
             }
         }
         throw last != null ? last : new IOException("Release download unavailable");

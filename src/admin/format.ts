@@ -45,6 +45,8 @@ export function auditActionLabel(action: string): string {
     revoke_user_sessions: '强制账号下线',
     revoke_session: '踢出单条会话',
     revoke_desktop: '吊销桌面节点',
+    delete_user: '删除账号',
+    migrate_uid: '迁移账号 UID',
   };
   return map[action] ?? action;
 }

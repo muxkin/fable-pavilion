@@ -17,6 +17,7 @@ export interface DesktopAuthorizations {
   revoke(account: string, hostId: string): boolean | Promise<boolean>;
   listAll?: () => AdminDesktopEnrollment[] | Promise<AdminDesktopEnrollment[]>;
   revokeAny?: (hostId: string) => boolean | Promise<boolean>;
+  migrateAccount?: (fromAccount: string, toAccount: string) => number | Promise<number>;
 }
 
 export class DesktopEnrollmentStore {
@@ -135,5 +136,13 @@ export class DesktopEnrollmentStore {
     `,
       )
       .run(Date.now(), hostId).changes;
+  }
+
+  migrateAccount(fromAccount: string, toAccount: string): number {
+    return Number(
+      this.db
+        .prepare('UPDATE desktop_enrollments SET account=? WHERE account=?')
+        .run(toAccount, fromAccount).changes ?? 0,
+    );
   }
 }

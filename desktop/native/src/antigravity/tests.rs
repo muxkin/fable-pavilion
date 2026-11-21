@@ -674,13 +674,18 @@ fn projects_inline_images_together_with_file_and_video_attachments() {
         false,
     )
     .unwrap();
+    let image_path = std::env::temp_dir()
+        .join("brain")
+        .join("thread-1")
+        .join(".user_uploaded")
+        .join("shot.png");
     let step = json!({
         "metadata": {"executionId": "exec-1"},
         "userInput": {
             "clientMessageId": "msg-1",
             "items": [{"text": prompt}],
             "media": [{
-                "uri": "/tmp/brain/thread-1/.user_uploaded/shot.png",
+                "uri": image_path.to_string_lossy().as_ref(),
                 "mimeType": "image/png",
                 "displayName": "shot.png"
             }]

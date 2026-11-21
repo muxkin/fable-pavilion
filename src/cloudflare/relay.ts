@@ -126,6 +126,9 @@ export class RelayHub extends DurableObject<Env> {
     this.core.revokeDesktop(hostId);
     return true;
   }
+  migrateDesktopAccount(fromId: string, toId: string) {
+    return this.desktops.migrateAccount(fromId, toId);
+  }
   private sockets() {
     return this.core.sockets();
   }

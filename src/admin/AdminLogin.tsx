@@ -7,7 +7,7 @@ import { adminApi, type AdminAuthChallenge, type SiteStatus } from './api';
 
 type LoginTab = 'handoff' | 'recovery';
 
-export const AdminLogin = tsxComponent(function AdminLogin(_props: {
+export const AdminLogin = tsxComponent(function AdminLogin(initialProps: {
   status: SiteStatus | null;
   onAuthenticated: (user: ChatUser) => void;
 }) {
@@ -23,6 +23,7 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
   let pollTimer: number | undefined;
   let tickTimer: number | undefined;
   let disposed = false;
+  let onAuthCallback = initialProps.onAuthenticated;
 
   function stopPolling() {
     if (pollTimer !== undefined) {
@@ -40,7 +41,7 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
     stopPolling();
   });
 
-  async function startHandoff(onAuthenticated: (user: ChatUser) => void) {
+  async function startHandoff() {
     stopPolling();
     busy.value = true;
     error.value = '';
@@ -73,7 +74,7 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
           .then((res) => {
             if (!res.pending && res.user) {
               stopPolling();
-              onAuthenticated(res.user);
+              onAuthCallback(res.user);
             }
           })
           .catch((cause) => {
@@ -88,12 +89,14 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
     }
   }
 
+  onMounted(() => {
+    if (tab.value === 'handoff' && !challenge.value && !busy.value) {
+      void startHandoff();
+    }
+  });
+
   return ({ status, onAuthenticated }) => {
-    onMounted(() => {
-      if (tab.value === 'handoff' && !challenge.value && !busy.value) {
-        void startHandoff(onAuthenticated);
-      }
-    });
+    onAuthCallback = onAuthenticated;
 
     async function submitSecret(e: Event) {
       e.preventDefault();
@@ -108,7 +111,7 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
           recovery,
         );
         secret.value = '';
-        onAuthenticated(user);
+        onAuthCallback(user);
       } catch (cause) {
         error.value = cause instanceof Error ? cause.message : '登录失败，请检查凭据';
       } finally {
@@ -126,7 +129,7 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
             </span>
             <div>
               <h1>子虚亭 · 管理台</h1>
-              <p>Fable Pavilion Operations Console · 零知识运维后台</p>
+              <p>Fable Pavilion Operations Console</p>
             </div>
           </div>
 
@@ -140,7 +143,7 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
                 tab.value = 'handoff';
                 error.value = '';
                 if (!challenge.value || remainingSec.value <= 0) {
-                  void startHandoff(onAuthenticated);
+                  void startHandoff();
                 }
               }}
             >
@@ -173,7 +176,7 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
           {tab.value === 'handoff' ? (
             <div class="adm-handoff-panel">
               <p class="adm-muted">
-                使用已登录的管理员设备扫码，或点击下方按钮在主站确认核对码即可签发管理会话。此方式<strong>不会</strong>传输任何端到端加密私钥。
+                使用已登录的管理员设备扫码，或点击下方按钮在主站确认核对码即可登录。
               </p>
               <div class="adm-qr-stage">
                 {qrDataUrl.value ? (
@@ -185,7 +188,9 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
               {current && (
                 <div class="adm-code-box">
                   <span>核对码</span>
-                  <strong>{current.code.slice(0, 3)} {current.code.slice(3)}</strong>
+                  <strong>
+                    {current.code.slice(0, 3)} {current.code.slice(3)}
+                  </strong>
                   <small>{remainingSec.value > 0 ? `剩余 ${remainingSec.value} 秒` : '已过期'}</small>
                 </div>
               )}
@@ -205,7 +210,7 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
                   type="button"
                   class="adm-btn"
                   disabled={busy.value}
-                  onClick={() => void startHandoff(onAuthenticated)}
+                  onClick={() => void startHandoff()}
                 >
                   <Icon name="refresh" size={15} />
                   <span>重新生成</span>
@@ -249,7 +254,7 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
                   type="password"
                   required
                   autocomplete="current-password"
-                  placeholder={status?.deviceLoginOnly || !usePassword.value ? '输入 24 位账号恢复码' : '输入账号密码'}
+                  placeholder={status?.deviceLoginOnly || !usePassword.value ? '输入账号恢复码' : '输入账号密码'}
                   value={secret.value}
                   onInput={(e: Event) => (secret.value = (e.target as HTMLInputElement).value)}
                 />
@@ -260,11 +265,6 @@ export const AdminLogin = tsxComponent(function AdminLogin(_props: {
               </button>
             </form>
           )}
-
-          <footer class="adm-auth-foot">
-            <Icon name="shield" size={14} />
-            <span>仅限 POCKET_ADMIN_UIDS 授权账号访问 · 严禁暴露明文聊天内容</span>
-          </footer>
         </div>
       </div>
     );

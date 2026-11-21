@@ -101,6 +101,8 @@ export const adminApi = {
     request<AdminUserDetail>(`/admin/users/${encodeURIComponent(userId)}`, 'GET', undefined, signal),
   revokeUserSessions: (userId: string) =>
     request<{ revoked: number }>(`/admin/users/${encodeURIComponent(userId)}/revoke-sessions`, 'POST', {}),
+  deleteUser: (userId: string) =>
+    request<{ ok: boolean }>(`/admin/users/${encodeURIComponent(userId)}`, 'DELETE'),
   sessions: (q = '', limit = 150, signal?: AbortSignal) => {
     const qs = new URLSearchParams({ limit: String(limit) });
     if (q.trim()) qs.set('q', q.trim());

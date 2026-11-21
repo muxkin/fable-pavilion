@@ -47,6 +47,7 @@ export class MessagingHub extends DurableObject<Env> {
         revoke: (...args) => relay().revokeDesktop(...args),
         listAll: () => relay().listAllDesktops(),
         revokeAny: (hostId) => relay().revokeAnyDesktop(hostId),
+        migrateAccount: (fromId, toId) => relay().migrateDesktopAccount(fromId, toId),
       },
       runtime: 'cloudflare',
       humanContacts: env.POCKET_IM_HUMAN_CONTACTS === 'true',

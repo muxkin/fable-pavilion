@@ -297,6 +297,27 @@ describe('7-day cloud retention, persistent sessions, admin console, cache & exp
     await expect(
       admin.client.request('/admin/auth/poll', 'POST', { id: handoff.id, secret: handoff.secret }),
     ).rejects.toThrow();
+
+    // Admin delete user + migrate UID atomically with allocator reset
+    await admin.client.request(`/admin/users/${listed.users[0].id}`, 'DELETE');
+    const afterDelete = await admin.client.request<{ users: { id: string }[] }>('/admin/users');
+    expect(afterDelete.users.map((u) => u.id)).toEqual(['10000000']);
+
+    // Cannot delete self/admin
+    await expect(admin.client.request('/admin/users/10000000', 'DELETE')).rejects.toThrow();
+
+    // Register a second user (gets 10000002), delete old test slot if vacant, migrate to 10000001
+    const third = await register('thirduser', 'Third');
+    const thirdId = (await third.client.me()).user!.id;
+    const migrated = await admin.client.request<{ fromId: string; toId: string; lastUid?: string }>(
+      `/admin/users/${thirdId}/migrate-uid`,
+      'POST',
+      { toId: '10000001', resetAllocator: true },
+    );
+    expect(migrated.fromId).toBe(thirdId);
+    expect(migrated.toId).toBe('10000001');
+    expect(migrated.lastUid).toBe('10000001');
+    expect((await third.client.me()).user?.id).toBe('10000001');
   });
 
   it('preserves older locally cached messages when merging newer cloud pages', () => {

@@ -663,3 +663,185 @@ export function queryAdminAudit(db: MessagingDatabase, limit = 100): AdminAuditE
       detail: String(row.detail),
     }));
 }
+
+function tableExists(db: MessagingDatabase, table: string): boolean {
+  return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
+}
+
+/** Permanently remove a non-admin account and all owned data in foreign-key-safe order. */
+export function deleteAdminUser(db: MessagingDatabase, targetId: string) {
+  const user = db.prepare('SELECT id, username, display_name AS displayName, kind FROM im_users WHERE id=?').get(targetId);
+  if (!user) throw new ChatError(404, '用户不存在');
+  if (db.prepare('SELECT 1 FROM im_users WHERE owner_id=? LIMIT 1').get(targetId)) {
+    throw new ChatError(409, '请先删除该账号名下的所有 Agent');
+  }
+  const run = () => {
+    const directConvoIds = db
+      .prepare("SELECT id FROM im_conversations WHERE low_id=? OR high_id=?")
+      .all(targetId, targetId)
+      .map((r) => String(r.id));
+    for (const cid of directConvoIds) {
+      db.prepare('DELETE FROM im_message_features WHERE message_id IN (SELECT id FROM im_messages WHERE conversation_id=?)').run(cid);
+      db.prepare('DELETE FROM im_files WHERE conversation_id=?').run(cid);
+      db.prepare('DELETE FROM im_events WHERE conversation_id=?').run(cid);
+      db.prepare('DELETE FROM im_messages WHERE conversation_id=?').run(cid);
+      db.prepare('DELETE FROM im_members WHERE conversation_id=?').run(cid);
+      db.prepare('DELETE FROM im_conversations WHERE id=?').run(cid);
+    }
+    db.prepare('DELETE FROM im_message_features WHERE message_id IN (SELECT id FROM im_messages WHERE sender_id=?)').run(targetId);
+    db.prepare('DELETE FROM im_files WHERE user_id=? OR message_id IN (SELECT id FROM im_messages WHERE sender_id=?)').run(targetId, targetId);
+    db.prepare('DELETE FROM im_events WHERE user_id=? OR message_id IN (SELECT id FROM im_messages WHERE sender_id=?)').run(targetId, targetId);
+    db.prepare('DELETE FROM im_messages WHERE sender_id=?').run(targetId);
+    db.prepare('DELETE FROM im_members WHERE user_id=?').run(targetId);
+    db.prepare('UPDATE im_conversations SET owner_id=NULL WHERE owner_id=?').run(targetId);
+    db.prepare('DELETE FROM im_contacts WHERE user_id=? OR contact_id=?').run(targetId, targetId);
+    db.prepare('DELETE FROM im_stickers WHERE user_id=?').run(targetId);
+    db.prepare('DELETE FROM im_avatars WHERE user_id=?').run(targetId);
+    db.prepare('DELETE FROM im_invites WHERE owner_id=?').run(targetId);
+    db.prepare('DELETE FROM im_vault_items WHERE user_id=?').run(targetId);
+    db.prepare('DELETE FROM im_account_crypto WHERE user_id=?').run(targetId);
+    db.prepare('DELETE FROM im_sessions WHERE user_id=?').run(targetId);
+
+    const optionalUserTables: [string, string][] = [
+      ['im_trusted_credentials', 'user_id'],
+      ['im_trusted_logins', 'user_id'],
+      ['im_trusted_qr_invites', 'user_id'],
+      ['im_trusted_ceremonies', 'user_id'],
+      ['im_trusted_enroll_grants', 'user_id'],
+      ['im_trusted_totp_grants', 'user_id'],
+      ['im_trusted_events', 'user_id'],
+      ['im_authenticator_setups', 'user_id'],
+      ['im_external_setup_grants', 'user_id'],
+      ['im_account_totp', 'user_id'],
+      ['im_external_totp', 'user_id'],
+      ['im_desktop_backup_grants', 'user_id'],
+      ['im_usage_reset_proofs', 'account_id'],
+      ['im_call_presence', 'agent_id'],
+      ['im_calls', 'caller_id'],
+      ['im_calls', 'agent_id'],
+      ['im_call_signals', 'sender_id'],
+      ['resource_policies', 'owner_id'],
+      ['resource_usage', 'owner_id'],
+      ['resource_relay_tickets', 'owner_id'],
+    ];
+    for (const [table, col] of optionalUserTables) {
+      if (tableExists(db, table)) {
+        db.prepare(`DELETE FROM ${table} WHERE ${col}=?`).run(targetId);
+      }
+    }
+    db.prepare('DELETE FROM im_users WHERE id=?').run(targetId);
+    return {
+      id: targetId,
+      username: String(user.username),
+      displayName: String(user.displayName),
+      kind: String(user.kind),
+    };
+  };
+  return db.isTransaction ? run() : db.transaction(run);
+}
+
+/**
+ * Atomically migrate an account to a vacant target UID while preserving all active sessions,
+ * profile, avatar, stickers, vault, and references under SQLite foreign-key enforcement.
+ */
+export function migrateAdminUserId(
+  db: MessagingDatabase,
+  fromId: string,
+  toId: string,
+  resetAllocator = false,
+) {
+  if (fromId === toId) throw new ChatError(400, '目标 UID 与当前 UID 相同');
+  const source = db
+    .prepare('SELECT id, kind, username, display_name, password_hash, owner_id, created_at FROM im_users WHERE id=?')
+    .get(fromId);
+  if (!source) throw new ChatError(404, '源账号不存在');
+  if (db.prepare('SELECT 1 FROM im_users WHERE id=?').get(toId)) {
+    throw new ChatError(409, `目标 UID ${toId} 已被占用，请先清理或选择其他 UID`);
+  }
+  const run = () => {
+    const tempUsername = `__migrating_${fromId}_${Date.now()}`;
+    db.prepare('UPDATE im_users SET username=? WHERE id=?').run(tempUsername, fromId);
+    db.prepare(
+      'INSERT INTO im_users(id,kind,username,display_name,password_hash,owner_id,created_at) VALUES (?,?,?,?,?,?,?)',
+    ).run(
+      toId,
+      source.kind!,
+      source.username!,
+      source.display_name!,
+      source.password_hash ?? null,
+      source.owner_id ?? null,
+      source.created_at!,
+    );
+
+    db.prepare('UPDATE im_users SET owner_id=? WHERE owner_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_sessions SET user_id=? WHERE user_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_account_crypto SET user_id=? WHERE user_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_vault_items SET user_id=? WHERE user_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_invites SET owner_id=? WHERE owner_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_contacts SET user_id=? WHERE user_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_contacts SET contact_id=? WHERE contact_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_conversations SET owner_id=? WHERE owner_id=?').run(toId, fromId);
+
+    // Keep canonical direct-conversation ordering (low_id < high_id lexicographically/numerically).
+    const directs = db
+      .prepare('SELECT id, low_id, high_id FROM im_conversations WHERE low_id=? OR high_id=?')
+      .all(fromId, fromId);
+    for (const c of directs) {
+      const a = String(c.low_id) === fromId ? toId : String(c.low_id);
+      const b = String(c.high_id) === fromId ? toId : String(c.high_id);
+      const [low, high] = a < b ? [a, b] : [b, a];
+      db.prepare('UPDATE im_conversations SET low_id=?, high_id=? WHERE id=?').run(low, high, c.id!);
+    }
+
+    db.prepare('UPDATE im_members SET user_id=? WHERE user_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_messages SET sender_id=? WHERE sender_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_events SET user_id=? WHERE user_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_files SET user_id=? WHERE user_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_avatars SET user_id=? WHERE user_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_stickers SET user_id=? WHERE user_id=?').run(toId, fromId);
+    db.prepare('UPDATE im_admin_audit SET actor_id=? WHERE actor_id=?').run(toId, fromId);
+
+    const optionalUserTables: [string, string][] = [
+      ['im_trusted_credentials', 'user_id'],
+      ['im_trusted_logins', 'user_id'],
+      ['im_trusted_qr_invites', 'user_id'],
+      ['im_trusted_ceremonies', 'user_id'],
+      ['im_trusted_enroll_grants', 'user_id'],
+      ['im_trusted_totp_grants', 'user_id'],
+      ['im_trusted_events', 'user_id'],
+      ['im_authenticator_setups', 'user_id'],
+      ['im_external_setup_grants', 'user_id'],
+      ['im_account_totp', 'user_id'],
+      ['im_external_totp', 'user_id'],
+      ['im_desktop_backup_grants', 'user_id'],
+      ['im_usage_reset_proofs', 'account_id'],
+      ['im_call_presence', 'agent_id'],
+      ['im_calls', 'caller_id'],
+      ['im_calls', 'agent_id'],
+      ['im_call_signals', 'sender_id'],
+      ['resource_policies', 'owner_id'],
+      ['resource_usage', 'owner_id'],
+      ['resource_relay_tickets', 'owner_id'],
+    ];
+    for (const [table, col] of optionalUserTables) {
+      if (tableExists(db, table)) {
+        db.prepare(`UPDATE ${table} SET ${col}=? WHERE ${col}=?`).run(toId, fromId);
+      }
+    }
+
+    db.prepare('DELETE FROM im_users WHERE id=?').run(fromId);
+
+    let lastUid: string | undefined;
+    if (resetAllocator) {
+      const ids = db
+        .prepare('SELECT id FROM im_users')
+        .all()
+        .map((r) => BigInt(String(r.id)));
+      const maxId = ids.length ? ids.reduce((a, b) => (a > b ? a : b)) : 9_999_999n;
+      lastUid = maxId.toString();
+      db.prepare("UPDATE im_uid_allocator SET last_uid=? WHERE name='user'").run(lastUid);
+    }
+    return { fromId, toId, username: String(source.username), ...(lastUid ? { lastUid } : {}) };
+  };
+  return db.isTransaction ? run() : db.transaction(run);
+}

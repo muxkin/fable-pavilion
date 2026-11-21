@@ -464,6 +464,21 @@ export const AdminApp = tsxComponent(function AdminApp() {
                     });
                   });
                 }}
+                onDeleteUser={async (target) => {
+                  await new Promise<void>((resolve) => {
+                    askConfirm({
+                      title: `永久删除账号 ${target.displayName}`,
+                      body: `确认彻底删除 ${target.displayName} (@${target.username} · UID ${target.id}) 及其全部云端会话与数据？此操作不可撤销。`,
+                      danger: true,
+                      action: async () => {
+                        await adminApi.deleteUser(target.id);
+                        showToast(`已永久删除账号 ${target.displayName} (UID ${target.id})`);
+                        await loadCurrentTab(true);
+                        resolve();
+                      },
+                    });
+                  });
+                }}
                 onRevokeSession={async (deviceId) => {
                   await adminApi.revokeSession(deviceId);
                   showToast('已踢出该设备会话');

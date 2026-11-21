@@ -18,6 +18,7 @@ export const UsersView = tsxComponent(function UsersView(_props: {
     sort?: 'created' | 'active' | 'messages' | 'storage';
   }) => void;
   onRevokeUser: (user: AdminUserSummary) => Promise<void>;
+  onDeleteUser: (user: AdminUserSummary) => Promise<void>;
   onRevokeSession: (deviceId: string) => Promise<void>;
   onRevokeDesktop: (hostId: string) => Promise<void>;
 }) {
@@ -53,6 +54,7 @@ export const UsersView = tsxComponent(function UsersView(_props: {
     sort,
     onFilterChange,
     onRevokeUser,
+    onDeleteUser,
     onRevokeSession,
     onRevokeDesktop,
   }) => {
@@ -373,6 +375,26 @@ export const UsersView = tsxComponent(function UsersView(_props: {
                         </ul>
                       )}
                     </section>
+
+                    {activeDetail.user.id !== currentAdminId && (
+                      <section class="adm-drawer-sec">
+                        <div class="adm-drawer-sec-head">
+                          <h3>危险操作</h3>
+                          <button
+                            type="button"
+                            class="adm-btn is-sm is-danger"
+                            onClick={() =>
+                              void onDeleteUser(activeDetail.user).then(() => {
+                                selectedId.value = null;
+                                detail.value = null;
+                              })
+                            }
+                          >
+                            永久删除账号
+                          </button>
+                        </div>
+                      </section>
+                    )}
                   </>
                 )}
               </div>

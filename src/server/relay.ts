@@ -101,6 +101,7 @@ export async function buildRelay(config: RelayConfig) {
         core.revokeDesktop(id);
         return true;
       },
+      migrateAccount: (fromId, toId) => desktops.migrateAccount(fromId, toId),
     },
   });
   const releases = fileReleaseStore(config.releaseRoot ?? join(config.webRoot, '..'));
