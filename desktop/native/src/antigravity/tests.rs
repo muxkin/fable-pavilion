@@ -652,16 +652,23 @@ fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_pat
 
 #[test]
 fn projects_inline_images_together_with_file_and_video_attachments() {
+    let base = std::env::temp_dir().join("native-uploads");
+    let mp4_path = base
+        .join("00000000-0000-0000-0000-000000000001")
+        .join("attachment.mp4");
+    let pdf_path = base
+        .join("00000000-0000-0000-0000-000000000002")
+        .join("attachment.pdf");
     let prompt = crate::files::attachment_prompt(
         "请分析这个视频和文档",
         &[
             crate::files::Attachment {
                 name: "demo.mp4".into(),
-                path: PathBuf::from("/tmp/native-uploads/00000000-0000-0000-0000-000000000001/attachment.mp4"),
+                path: mp4_path.clone(),
             },
             crate::files::Attachment {
                 name: "spec.pdf".into(),
-                path: PathBuf::from("/tmp/native-uploads/00000000-0000-0000-0000-000000000002/attachment.pdf"),
+                path: pdf_path,
             },
         ],
         false,
@@ -687,9 +694,6 @@ fn projects_inline_images_together_with_file_and_video_attachments() {
     assert_eq!(attachments[0]["name"], "shot.png");
     assert_eq!(attachments[0]["path"], "antigravity-image:4:0");
     assert_eq!(attachments[1]["name"], "demo.mp4");
-    assert_eq!(
-        attachments[1]["path"],
-        "/tmp/native-uploads/00000000-0000-0000-0000-000000000001/attachment.mp4"
-    );
+    assert_eq!(attachments[1]["path"], mp4_path.to_string_lossy().as_ref());
     assert_eq!(attachments[2]["name"], "spec.pdf");
 }
