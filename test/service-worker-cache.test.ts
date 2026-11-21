@@ -19,6 +19,7 @@ function fixture() {
   runInNewContext(source, {
     self: {
       location: { origin: 'https://chat.test' },
+      skipWaiting: vi.fn(),
       addEventListener: (key: string, handler: any) => {
         handlers[key] = handler;
       },
@@ -37,6 +38,11 @@ function fixture() {
     fetch,
     deny: () => {
       denied = true;
+    },
+    async install() {
+      const lifetime: Promise<unknown>[] = [];
+      handlers.install?.({ waitUntil: (value: Promise<unknown>) => lifetime.push(value) });
+      await Promise.all(lifetime);
     },
     request(path: string, destination = 'document') {
       let response: Promise<Response> | undefined;
@@ -83,4 +89,15 @@ it('returns cached public scripts without a second network request', async () =>
   await f.request('/assets/app-123456.js', 'script');
   expect(f.fetch).toHaveBeenCalledTimes(1);
   expect(f.request('/api/im/conversations/a/files/b/private.png', 'image')).toBeUndefined();
+});
+it('pre-caches the start shell on install and returns a 200 HTML fallback offline for PWA installability', async () => {
+  const f = fixture();
+  await f.install();
+  expect(await f.entries.get('/')!.clone().text()).toContain('current');
+  const cold = fixture();
+  cold.fetch.mockRejectedValue(Error('offline'));
+  const response = await cold.request('/');
+  expect(response!.status).toBe(200);
+  expect(response!.headers.get('Content-Type')).toContain('text/html');
+  expect(await response!.text()).toContain('离线');
 });

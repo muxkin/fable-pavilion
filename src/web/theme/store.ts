@@ -17,11 +17,16 @@ function read(): Appearance {
   }
 }
 const system = window.matchMedia('(prefers-color-scheme: dark)');
+function systemColorMode(): ColorMode {
+  const androidMode = (window as Window & { fableAndroidSystemTheme?: string }).fableAndroidSystemTheme;
+  if (androidMode === 'dark' || androidMode === 'light') return androidMode;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
 let settings = read();
 let snapshot = { settings, resolved: resolveMode(settings) };
 const listeners = new Set<() => void>();
 function resolveMode(value: Appearance): ColorMode {
-  return value.mode === 'system' ? (system.matches ? 'dark' : 'light') : value.mode;
+  return value.mode === 'system' ? systemColorMode() : value.mode;
 }
 function apply() {
   const mode = resolveMode(settings);
@@ -37,6 +42,9 @@ function apply() {
   applyAppIcon(settings.appIcon);
   snapshot = { settings, resolved: mode };
   listeners.forEach((listener) => listener());
+}
+function syncSystemMode() {
+  if (settings.mode === 'system' && resolveMode(settings) !== snapshot.resolved) apply();
 }
 export function updateAppearance(next: Appearance) {
   const clean = parseAppearance(next);
@@ -54,9 +62,19 @@ export function updateAppearance(next: Appearance) {
   settings = clean;
   apply();
 }
+let initialized = false;
 export function initializeAppearance() {
   apply();
-  system.addEventListener('change', apply);
+  if (initialized) return;
+  initialized = true;
+  if (typeof system.addEventListener === 'function') system.addEventListener('change', syncSystemMode);
+  else if (typeof system.addListener === 'function') system.addListener(syncSystemMode);
+  window.addEventListener('fable-android-system-theme', syncSystemMode);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') syncSystemMode();
+  });
+  window.addEventListener('focus', syncSystemMode);
+  window.addEventListener('pageshow', syncSystemMode);
   window.addEventListener('storage', (event) => {
     if (event.key === STORAGE_KEY || event.key === null) {
       settings = read();

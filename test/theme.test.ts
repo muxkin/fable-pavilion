@@ -134,7 +134,11 @@ describe('shared appearance system', () => {
 describe('appearance before the app bundle loads', () => {
   const boot = readFileSync(new URL('../src/web/theme/boot.js', import.meta.url), 'utf8');
 
-  function prepaint(stored: string | (() => never), prefersDark = false) {
+  function prepaint(
+    stored: string | (() => never),
+    prefersDark = false,
+    androidSystemTheme?: 'light' | 'dark',
+  ) {
     const theme = {
       dataset: {},
       palette: new Map<string, string>(),
@@ -148,6 +152,7 @@ describe('appearance before the app bundle loads', () => {
       ),
     };
     runInNewContext(boot, {
+      fableAndroidSystemTheme: androidSystemTheme,
       localStorage: { getItem: typeof stored === 'string' ? () => stored : stored },
       matchMedia: () => ({ matches: prefersDark }),
       document: {
@@ -186,15 +191,29 @@ describe('appearance before the app bundle loads', () => {
       expect(result.metadata.get('link[rel="manifest"]')).toBe(appManifestPath(defaultAppIcon));
     }
   });
+
+  it('prefers the Android shell system theme hint when WebView matchMedia reports light', () => {
+    const result = prepaint(JSON.stringify({ version: 1, mode: 'system' }), false, 'dark');
+    expect(result.dataset).toMatchObject({ colorMode: 'dark', theme: 'pavilion-dark' });
+    expect(result.palette.get('--surface')).toBe('#1a2a2f');
+  });
 });
 
 it.each(appIconIds)('ships the correct PWA art for %s without changing the install identity', (icon) => {
   const manifest = JSON.parse(
     readFileSync(new URL(`../src/web/public${appManifestPath(icon)}`, import.meta.url), 'utf8'),
   );
-  expect(manifest).toMatchObject({ id: '/', scope: '/', start_url: '/' });
+  expect(manifest).toMatchObject({
+    id: '/',
+    scope: '/',
+    start_url: '/',
+    display: 'standalone',
+    prefer_related_applications: false,
+  });
   expect(manifest.icons).toMatchObject([
-    { src: appIconPath(icon), sizes: '192x192' },
-    { src: appIconPath(icon, 512), sizes: '512x512' },
+    { src: appIconPath(icon), sizes: '192x192', purpose: 'any' },
+    { src: appIconPath(icon, 512), sizes: '512x512', purpose: 'any' },
+    { src: appIconPath(icon), sizes: '192x192', purpose: 'maskable' },
+    { src: appIconPath(icon, 512), sizes: '512x512', purpose: 'maskable' },
   ]);
 });

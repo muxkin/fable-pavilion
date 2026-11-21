@@ -79,10 +79,10 @@ it('keeps settings detail pages under their actual account or preferences parent
   expect(parentRoute({ page: 'account-credentials' })).toEqual({ page: 'login-security' });
   expect(parentRoute({ page: 'account-recovery' })).toEqual({ page: 'account-credentials' });
   expect(parentRoute({ page: 'downloads' })).toEqual({ page: 'me' });
+  expect(parentRoute({ page: 'donation' })).toEqual({ page: 'me' });
   for (const page of ['login-devices', 'authenticators'] as const)
     expect(parentRoute({ page })).toEqual({ page: 'login-security' });
-  for (const page of ['resources', 'donation'] as const)
-    expect(parentRoute({ page })).toEqual({ page: 'settings' });
+  expect(parentRoute({ page: 'resources' })).toEqual({ page: 'settings' });
 });
 
 it('preserves the Agent entry context without accepting unrelated return destinations', () => {

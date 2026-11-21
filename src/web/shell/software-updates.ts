@@ -14,8 +14,21 @@ export interface AndroidRelease {
   href: string;
 }
 
+export function refreshWebsite() {
+  if ('serviceWorker' in navigator) {
+    void navigator.serviceWorker
+      .getRegistration()
+      .then((registration) => registration?.update())
+      .catch(() => {})
+      .finally(() => location.reload());
+    return;
+  }
+  location.reload();
+}
+
 export function useSoftwareUpdates() {
   const website = shallowRef(false);
+  const websiteBuildId = shallowRef('');
   const android = shallowRef<AndroidRelease | null>();
   const watchVersions = watchRender();
   const watchAndroid = watchRender();
@@ -51,8 +64,11 @@ export function useSoftwareUpdates() {
                 build &&
                 typeof data?.buildId === 'string' &&
                 /^[a-f0-9]{16}$/.test(data.buildId)
-              )
-                website.value = data.buildId !== build;
+              ) {
+                const updated = data.buildId !== build;
+                website.value = updated;
+                websiteBuildId.value = updated ? data.buildId : '';
+              }
             }),
           ];
           if (checkAndroid)
@@ -102,6 +118,7 @@ export function useSoftwareUpdates() {
     const release = android.value;
     return {
       website: website.value,
+      websiteBuildId: websiteBuildId.value,
       android: release,
       androidAvailable: backgroundAndroid
         ? nativeState.value === 'ready'

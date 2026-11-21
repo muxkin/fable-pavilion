@@ -505,7 +505,6 @@ try {
   expect(downloadRequests).toBe(2);
   await page.getByRole('button', { name: '返回', exact: true }).click();
   await expect(page.locator('.adapter-downloads')).toHaveCount(0);
-  await page.getByRole('button', { name: /^设置/ }).click();
 
   await page.route('**/support.json', (route) =>
     route.fulfill({
@@ -529,6 +528,7 @@ try {
   await expect(qr).toHaveClass(/cropped/);
   await page.getByRole('button', { name: '返回', exact: true }).click();
 
+  await page.getByRole('button', { name: /^设置/ }).click();
   await page.getByRole('button', { name: /外观/ }).click();
   await page.getByLabel('深色', { exact: true }).check();
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');

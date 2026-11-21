@@ -41,6 +41,7 @@ import {
 } from '../notifications';
 import { notificationId } from '../../shared/notifications';
 import TrustedLoginNotice from '../messaging/TrustedLoginNotice.vue';
+import WebsiteUpdateNotice from './WebsiteUpdateNotice.vue';
 import { takeLoginInvitation } from './login-invitation';
 import { ComputerSetup } from './ComputerSetup';
 
@@ -591,6 +592,12 @@ export default tsxComponent(function AuthenticatedShell() {
                     {accountSyncError}
                   </p>
                 )}
+                <WebsiteUpdateNotice
+                  available={software.website}
+                  buildId={software.websiteBuildId}
+                  blocked={workbenchUpdateBlocked.value || messagingUpdateBlocked.value}
+                  hidden={route.page === 'downloads'}
+                />
                 {user && <TrustedLoginNotice openSecurity={() => navigate({ page: 'login-security' })} />}
                 {user && <IncomingAgentCalls key={user.id} />}
               </div>

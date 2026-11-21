@@ -7,12 +7,15 @@
   } catch {
     /* Apply system defaults when the browser cannot read saved preferences. */
   }
+  const androidMode = globalThis.fableAndroidSystemTheme;
   const mode =
     data.mode === 'dark' || data.mode === 'light'
       ? data.mode
-      : matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light';
+      : androidMode === 'dark' || androidMode === 'light'
+        ? androidMode
+        : matchMedia('(prefers-color-scheme: dark)').matches
+          ? 'dark'
+          : 'light';
   const theme =
     typeof data[mode] === 'string' && /^[a-z0-9-]{1,80}$/.test(data[mode]) ? data[mode] : `pavilion-${mode}`;
   const root = document.documentElement;

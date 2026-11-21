@@ -62,6 +62,12 @@ ${
   Content-Disposition: attachment
   Content-Security-Policy: default-src 'none'; sandbox; frame-ancestors 'none'
   Cache-Control: no-cache
+/manifest.webmanifest
+  Content-Type: application/manifest+json; charset=utf-8
+  Cache-Control: no-cache
+/app-icons/*.webmanifest
+  Content-Type: application/manifest+json; charset=utf-8
+  Cache-Control: no-cache
 /sw.js
   Cache-Control: no-cache
 `
@@ -154,9 +160,32 @@ async function signedRelease(directory) {
     join(directory, 'index.html'),
     `<!doctype html>
 <html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fffcf5">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="子虚亭">
+<link rel="icon" type="image/png" sizes="32x32" href="/app-icons/wuyou-32.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/app-icons/wuyou-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>子虚亭</title><p role="status">正在验证子虚亭前端…</p>
 <script src="/verified-start.js" defer></script></html>\n`,
   );
+  // Copy inert PWA metadata and icon files so browser-level installability checks
+  // (e.g. manifest/icon fetches outside a controlling service worker) get JSON/PNG rather than HTML.
+  if (paths.includes('/manifest.webmanifest')) {
+    await cp(join(source, 'manifest.webmanifest'), join(directory, 'manifest.webmanifest'));
+  }
+  const iconAssets = paths.filter(
+    (path) => path.startsWith('/app-icons/') && (path.endsWith('.webmanifest') || path.endsWith('.png')),
+  );
+  if (iconAssets.length) {
+    await mkdir(join(directory, 'app-icons'), { recursive: true });
+    for (const path of iconAssets) {
+      const relative = path.slice(1);
+      await cp(join(source, relative), join(directory, relative));
+    }
+  }
   // Copy download links that have to work outside a controlled browser (e.g. the APK installer).
   // Downloaded files remain subject to their own package signature verification.
   if (paths.some((path) => path.startsWith('/downloads/android/'))) {

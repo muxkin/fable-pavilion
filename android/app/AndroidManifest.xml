@@ -19,7 +19,7 @@
         android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize"
+            android:configChanges="keyboardHidden|orientation|screenSize|uiMode"
             android:enableOnBackInvokedCallback="true"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">

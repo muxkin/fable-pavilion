@@ -7,7 +7,7 @@ import {
 } from '../../shared/desktop-releases.js';
 import SvgIcon from '../SvgIcon.vue';
 import { loadNativeInstaller, nativeSourceArchive, type NativeInstaller } from './native-installers.js';
-import type { AndroidRelease, AndroidUpdateState } from './software-updates';
+import { refreshWebsite, type AndroidRelease, type AndroidUpdateState } from './software-updates';
 
 defineProps<{
   websiteUpdate: boolean;
@@ -16,10 +16,6 @@ defineProps<{
   androidUpdateState?: AndroidUpdateState;
   updateBlocked: boolean;
 }>();
-
-function refreshWebsite() {
-  location.reload();
-}
 
 const installerLabels = {
   'windows-x64-setup.exe': { name: 'Windows x64', icon: 'windows', format: 'EXE' },

@@ -50,6 +50,10 @@ scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 mkdir -p "$scratch/res/values" "$scratch/res/mipmap-xxxhdpi" "$scratch/java" "$scratch/classes" "$scratch/dex"
 cp "$android_dir"/app/res/values/*.xml "$scratch/res/values/"
+if [[ -d "$android_dir/app/res/values-night" ]]; then
+  mkdir -p "$scratch/res/values-night"
+  cp "$android_dir"/app/res/values-night/*.xml "$scratch/res/values-night/"
+fi
 cp "$android_dir/../src/web/public/app-icons/wuyou-192.png" "$scratch/res/mipmap-xxxhdpi/ic_launcher.png"
 printf '<resources><string name="web_origin" translatable="false">%s</string><string name="frontend_release_key" translatable="false">%s</string></resources>\n' \
   "$origin" "$public_key" > "$scratch/res/values/origin.xml"

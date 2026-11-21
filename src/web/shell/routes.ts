@@ -127,7 +127,7 @@ export function parentRoute(route: AppRoute): AppRoute {
       : { page: 'workbench' };
   if (route.page === 'pair') return { page: 'devices' };
   if (route.page === 'add-computer' || route.page === 'account-login') return { page: 'workbench' };
-  if (['about', 'appearance', 'donation', 'resources'].includes(route.page)) return { page: 'settings' };
+  if (['about', 'appearance', 'resources'].includes(route.page)) return { page: 'settings' };
   if (route.page === 'account-recovery') return { page: 'account-credentials' };
   if (['trusted-devices', 'login-devices', 'authenticators', 'account-credentials'].includes(route.page))
     return { page: 'login-security' };

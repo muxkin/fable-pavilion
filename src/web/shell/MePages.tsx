@@ -165,11 +165,17 @@ export default tsxComponent(function MePages(_props: {
                 accessory={software.website || software.androidAvailable ? '有更新' : undefined}
                 onClick={() => navigate({ page: 'downloads' })}
               />
+              <Row
+                icon="heart"
+                title="支持项目"
+                detail="赞赏与支持开发"
+                onClick={() => navigate({ page: 'donation' })}
+              />
               <Row icon="document" title="下载诊断日志" onClick={downloadDiagnostics} />
               <Row
                 icon="sliders"
                 title="设置"
-                detail="外观、缓存与帮助"
+                detail="外观、缓存与关于"
                 onClick={() => navigate({ page: 'settings' })}
               />
             </section>
@@ -253,7 +259,6 @@ export default tsxComponent(function MePages(_props: {
                 帮助与关于
               </h2>
               <Row icon="info" title="关于" onClick={() => navigate({ page: 'about' })} />
-              <Row icon="heart" title="支持项目" onClick={() => navigate({ page: 'donation' })} />
             </section>
             {user && (
               <button

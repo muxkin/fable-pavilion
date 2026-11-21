@@ -17,6 +17,7 @@ if (entry) {
     globalThis.crypto?.subtle
   ) {
     installBrowserCompatibility();
+    if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js').catch(() => {});
     start(entry);
   } else {
     entry.querySelector('[data-startup-status]')!.textContent =

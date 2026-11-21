@@ -2,14 +2,19 @@
   "id": "/",
   "name": "子虚亭 · Fable Pavilion",
   "short_name": "子虚亭",
+  "description": "连接本机与云端 AI 助手的加密协作工作台",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "background_color": "#fffcf5",
   "theme_color": "#fffcf5",
+  "prefer_related_applications": false,
   "icons": [
     { "src": "/app-icons/pavilion-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
-    { "src": "/app-icons/pavilion-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" }
+    { "src": "/app-icons/pavilion-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" },
+    { "src": "/app-icons/pavilion-192.png", "type": "image/png", "sizes": "192x192", "purpose": "maskable" },
+    { "src": "/app-icons/pavilion-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
   ]
 }

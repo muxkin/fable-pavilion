@@ -46,6 +46,8 @@ async function checkRelease() {
     )
       throw Error('Release rollback');
     await readFile(next, '/index.html', cache);
+    if (Object.hasOwn(next.files, '/manifest.webmanifest'))
+      await readFile(next, '/manifest.webmanifest', cache).catch(() => {});
     await cache.put(installedPath, Response.json({ document }));
     return next;
   } catch (error) {

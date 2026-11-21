@@ -6,7 +6,11 @@
       name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#fffcf5" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="子虚亭" />
     <link rel="icon" type="image/png" sizes="32x32" href="/app-icons/wuyou-32.png" vite-ignore />
     <link rel="apple-touch-icon" sizes="192x192" href="/app-icons/wuyou-192.png" vite-ignore />
     <link rel="manifest" href="/manifest.webmanifest" vite-ignore />
@@ -34,7 +38,7 @@
         text-align: center;
       }
       @media (prefers-color-scheme: dark) {
-        #app-startup {
+        :root:not([data-color-mode='light']) #app-startup {
           --entry-bg: #172329;
           --entry-text: #f6f2ea;
           --entry-accent: #8cc9bb;
@@ -42,6 +46,14 @@
           --entry-rule: #8b9f9b;
           color-scheme: dark;
         }
+      }
+      :root[data-color-mode='dark'] #app-startup {
+        --entry-bg: #172329;
+        --entry-text: #f6f2ea;
+        --entry-accent: #8cc9bb;
+        --entry-on-accent: #102e29;
+        --entry-rule: #8b9f9b;
+        color-scheme: dark;
       }
       #app-startup > section {
         max-width: 660px;

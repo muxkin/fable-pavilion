@@ -53,12 +53,15 @@ const signed = (release, label, env = {}) => {
 let browser;
 try {
   await mkdir(join(source, 'assets'), { recursive: true });
+  await mkdir(join(source, 'app-icons'), { recursive: true });
   await writeFile(join(scratch, 'signing.pem'), privateKey.export({ type: 'pkcs8', format: 'pem' }), {
     mode: 0o600,
   });
   await writeFile(join(scratch, 'verification.pem'), publicKey.export({ type: 'spki', format: 'pem' }));
   await writeFile(join(source, 'asset-origin.json'), '{"base":"/"}');
   await copyFile(resolve('src/web/public/sw.js'), join(source, 'sw.js'));
+  await copyFile(resolve('src/web/public/manifest.webmanifest'), join(source, 'manifest.webmanifest'));
+  await copyFile(resolve('src/web/public/app-icons/wuyou-192.png'), join(source, 'app-icons/wuyou-192.png'));
   await writeFile(
     join(source, 'index.html'),
     '<meta charset="utf-8"><script type="module" src="/assets/main.js"></script><p>application</p>',
@@ -69,6 +72,10 @@ try {
   );
   await writeFile(join(source, 'assets/dependency.js'), 'export const label = "old";');
   const old = signed(20, 'valid');
+  assert.equal(JSON.parse(await readFile(join(old, 'manifest.webmanifest'), 'utf8')).start_url, '/');
+  assert.ok((await readFile(join(old, 'app-icons/wuyou-192.png'))).length > 1000);
+  assert.match(await readFile(join(old, 'index.html'), 'utf8'), /rel="manifest" href="\/manifest\.webmanifest"/);
+  assert.match(await readFile(join(old, '_headers'), 'utf8'), /\/manifest\.webmanifest\n\s+Content-Type: application\/manifest\+json/);
   await writeFile(join(source, 'assets/dependency.js'), 'export const label = "new";');
   const newer = signed(21, 'new');
   const tampered = signed(22, 'tampered');

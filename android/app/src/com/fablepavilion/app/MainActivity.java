@@ -150,6 +150,39 @@ public final class MainActivity extends Activity {
                 == Configuration.UI_MODE_NIGHT_YES;
     }
 
+    @SuppressWarnings("deprecation")
+    private void applyWebViewTheme(WebView view) {
+        if (view == null) return;
+        boolean dark = darkMode();
+        view.setBackgroundColor(Color.parseColor(dark ? "#151B20" : "#FFFCF5"));
+        WebSettings settings = view.getSettings();
+        if (Build.VERSION.SDK_INT >= 33) {
+            settings.setAlgorithmicDarkeningAllowed(false);
+        } else if (Build.VERSION.SDK_INT >= 29) {
+            settings.setForceDark(dark ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
+        }
+    }
+
+    private void emitSystemTheme() {
+        if (web == null || web.getUrl() == null || !trusted(Uri.parse(web.getUrl()))) return;
+        String mode = darkMode() ? "'dark'" : "'light'";
+        web.evaluateJavascript(
+                "window.fableAndroidSystemTheme=" + mode
+                        + ";window.dispatchEvent(new Event('fable-android-system-theme'));",
+                null);
+    }
+
+    @Override public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        configureSystemBars();
+        boolean dark = darkMode();
+        if (offline != null) offline.setBackgroundColor(Color.parseColor(dark ? "#151B20" : "#FFFCF5"));
+        if (unavailableSummary != null)
+            unavailableSummary.setTextColor(Color.parseColor(dark ? "#F4F0E8" : "#202F37"));
+        applyWebViewTheme(web);
+        emitSystemTheme();
+    }
+
     private void configureSystemBars() {
         boolean dark = darkMode();
         int background = Color.parseColor(dark ? "#151B20" : "#FFFCF5");
@@ -209,7 +242,7 @@ public final class MainActivity extends Activity {
 
     private void createWebView() {
         web = new WebView(this);
-        web.setBackgroundColor(Color.parseColor(darkMode() ? "#151B20" : "#FFFCF5"));
+        applyWebViewTheme(web);
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setUserAgentString(settings.getUserAgentString() +
@@ -262,6 +295,7 @@ public final class MainActivity extends Activity {
                     downloads.watchBlobUrls(view);
                     offerLoginSiteAccess(view);
                     offerNotificationAccess(view);
+                    emitSystemTheme();
                     reportUpdateToPage();
                 }
             }
@@ -934,6 +968,9 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (web != null) web.onResume();
+        configureSystemBars();
+        applyWebViewTheme(web);
+        emitSystemTheme();
         updates.attach(this::updateChanged);
         AndroidNotifications.observe(this::emitNotificationStatus);
         emitNotificationStatus();

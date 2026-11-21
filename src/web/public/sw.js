@@ -1,6 +1,25 @@
 /* Cache local public assets only. CDN assets use their immutable HTTP cache directly. */
-const CACHE = 'pocket-static-v4';
-self.addEventListener('install', () => self.skipWaiting());
+const CACHE = 'pocket-static-v5';
+const OFFLINE_SHELL =
+  '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>子虚亭</title><p>当前处于离线状态，请联网后重新打开子虚亭。</p></html>';
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+  if (!self.pocketVerifiedFrontend) {
+    event.waitUntil(
+      caches
+        .open(CACHE)
+        .then((cache) =>
+          fetch('/')
+            .then((response) => {
+              if (response.ok && response.headers.get('Content-Type')?.includes('text/html'))
+                return cache.put('/', response);
+            })
+            .catch(() => {}),
+        )
+        .catch(() => {}),
+    );
+  }
+});
 self.addEventListener('activate', (event) =>
   event.waitUntil(
     (async () => {
@@ -43,7 +62,10 @@ self.addEventListener('fetch', (event) => {
           } catch {
             return (
               (await cache?.match('/').catch(() => undefined)) ??
-              new Response('请联网打开一次页面', { status: 503 })
+              new Response(OFFLINE_SHELL, {
+                status: 200,
+                headers: { 'Content-Type': 'text/html; charset=utf-8' },
+              })
             );
           }
         }),
