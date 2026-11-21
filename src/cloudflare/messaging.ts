@@ -84,22 +84,42 @@ export class MessagingHub extends DurableObject<Env> {
     this.store.calls?.expire();
   }
   private async schedule() {
-    const row = this.store.db
+    const db = this.store.db;
+    const streamRow = db
+      .prepare("SELECT min(updated_at)+120001 AS deadline FROM im_messages WHERE state='streaming'")
+      .get();
+    const messageRow = db
+      .prepare('SELECT min(created_at)+? AS deadline FROM im_messages')
+      .get(MESSAGE_RETENTION_MS + 1);
+    const fileRow = db
+      .prepare('SELECT min(created_at)+? AS deadline FROM im_files')
+      .get(MESSAGE_RETENTION_MS + 1);
+    const orphanFileRow = db
+      .prepare('SELECT min(created_at)+86400001 AS deadline FROM im_files WHERE message_id IS NULL')
+      .get();
+    const gcRow = db.prepare('SELECT min(not_before) AS deadline FROM im_object_gc').get();
+    const orphanMediaRow = db
       .prepare(
-        `SELECT min(deadline) AS deadline FROM (
-      SELECT min(updated_at)+120001 AS deadline FROM im_messages WHERE state='streaming'
-      UNION ALL SELECT min(created_at)+? FROM im_messages
-      UNION ALL SELECT min(created_at)+? FROM im_files
-      UNION ALL SELECT min(created_at)+86400001 FROM im_files WHERE message_id IS NULL
-      UNION ALL SELECT min(not_before) FROM im_object_gc
-      UNION ALL SELECT ? WHERE EXISTS(SELECT 1 FROM im_media_objects m WHERE
+        `SELECT ? AS deadline WHERE EXISTS(SELECT 1 FROM im_media_objects m WHERE
         (kind='file' AND NOT EXISTS(SELECT 1 FROM im_files f WHERE f.id=m.id AND f.removed=0)) OR
         (kind='sticker' AND NOT EXISTS(SELECT 1 FROM im_stickers s WHERE s.id=m.id)) OR
-        (kind='avatar' AND NOT EXISTS(SELECT 1 FROM im_avatars a WHERE a.id=m.id)))
-      UNION ALL SELECT min(expires_at) FROM im_message_features WHERE status='pending')`,
+        (kind='avatar' AND NOT EXISTS(SELECT 1 FROM im_avatars a WHERE a.id=m.id)))`,
       )
-      .get(MESSAGE_RETENTION_MS + 1, MESSAGE_RETENTION_MS + 1, Date.now() + 60000);
-    const deadlines = [row?.deadline, this.store.calls?.nextDeadline(), this.store.push?.nextDeadline()]
+      .get(Date.now() + 60000);
+    const featureRow = db
+      .prepare("SELECT min(expires_at) AS deadline FROM im_message_features WHERE status='pending'")
+      .get();
+    const deadlines = [
+      streamRow?.deadline,
+      messageRow?.deadline,
+      fileRow?.deadline,
+      orphanFileRow?.deadline,
+      gcRow?.deadline,
+      orphanMediaRow?.deadline,
+      featureRow?.deadline,
+      this.store.calls?.nextDeadline(),
+      this.store.push?.nextDeadline(),
+    ]
       .filter((v) => v !== null && v !== undefined)
       .map(Number);
     if (deadlines.length)
