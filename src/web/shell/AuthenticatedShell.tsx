@@ -29,7 +29,7 @@ import { hasMessagingDrafts, subscribeDrafts } from '../messaging/drafts';
 import { PageBoundary, PageLoading } from './PageBoundary';
 import { AccountSecurity } from '../messaging/AccountSecurity';
 import { TrustedInvitationReceiver } from '../messaging/TrustedLogin';
-import { AdminAuthApproval } from '../messaging/AdminAuthApproval';
+import { AdminAuthApproval, takeAdminAuthParams } from '../messaging/AdminAuthApproval';
 import { onAccountSessionChange, syncAccountHosts, accountSyncError } from '../account-session';
 import { messaging } from '../messaging/context';
 import { DesktopAuthorizationPage, readDesktopAuthorization } from './DesktopAuthorizationPage';
@@ -83,6 +83,7 @@ export default tsxComponent(function AuthenticatedShell() {
     stopKeybookSync = startAdapterKeybookSync(messaging.account, messaging.raw.bind(messaging));
   });
   onScopeDispose(() => stopKeybookSync?.());
+  const adminAuthRequest = shallowRef(takeAdminAuthParams());
   const routeState = shallowRef(readRoute(new URL(location.href)));
   seedMobileHistory(routeState.value);
   const loginInvitation = shallowRef(takeLoginInvitation(routeState.value));
@@ -600,7 +601,13 @@ export default tsxComponent(function AuthenticatedShell() {
                   hidden={route.page === 'downloads'}
                 />
                 {user && <TrustedLoginNotice openSecurity={() => navigate({ page: 'login-security' })} />}
-                {user?.isAdmin && <AdminAuthApproval key={user.id} />}
+                {user && adminAuthRequest.value && (
+                  <AdminAuthApproval
+                    key={`${user.id}:${adminAuthRequest.value.id}`}
+                    request={adminAuthRequest.value}
+                    onClose={() => (adminAuthRequest.value = null)}
+                  />
+                )}
                 {user && <IncomingAgentCalls key={user.id} />}
               </div>
               {ready && (showWorkspace || (route.page === 'messages' && route.conversation)) && (

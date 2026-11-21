@@ -3,6 +3,11 @@ import { tsxComponent } from '../tsx-component';
 import { messaging, useMessaging } from './context';
 import { Dialog, Notice, errorText } from './ui';
 
+export interface AdminAuthParams {
+  id: string;
+  code: string;
+}
+
 interface AuthInfo {
   id: string;
   code: string;
@@ -12,7 +17,8 @@ interface AuthInfo {
   expiresAt: number;
 }
 
-function readAdminAuthParams(): { id: string; code: string } | null {
+/** Capture ?admin-auth=...&code=... synchronously at boot before router history replaces the URL. */
+export function takeAdminAuthParams(): AdminAuthParams | null {
   try {
     const url = new URL(location.href);
     const id = url.searchParams.get('admin-auth') ?? '';
@@ -21,71 +27,79 @@ function readAdminAuthParams(): { id: string; code: string } | null {
       /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id) &&
       /^\d{6}$/.test(code)
     ) {
+      url.searchParams.delete('admin-auth');
+      url.searchParams.delete('code');
+      history.replaceState(history.state, '', url.pathname + url.search + url.hash);
       return { id, code };
     }
   } catch {}
   return null;
 }
 
-function clearAdminAuthParams() {
-  try {
-    const url = new URL(location.href);
-    url.searchParams.delete('admin-auth');
-    url.searchParams.delete('code');
-    history.replaceState(history.state, '', url.pathname + url.search + url.hash);
-  } catch {}
-}
-
-export const AdminAuthApproval = tsxComponent(function AdminAuthApproval() {
-  const params = shallowRef<{ id: string; code: string } | null>(readAdminAuthParams());
+export const AdminAuthApproval = tsxComponent(function AdminAuthApproval(props: {
+  request: AdminAuthParams;
+  onClose: () => void;
+}) {
   const info = shallowRef<AuthInfo | null>(null);
   const busy = shallowRef(false);
   const done = shallowRef(false);
   const error = shallowRef('');
 
-  async function inspect() {
-    const current = params.value;
-    if (!current) return;
+  async function inspect(request: AdminAuthParams) {
     error.value = '';
     try {
-      info.value = await messaging.request<AuthInfo>(`/admin/auth/${current.id}`, 'GET');
+      info.value = await messaging.request<AuthInfo>(`/admin/auth/${request.id}`, 'GET');
     } catch (cause) {
       error.value = errorText(cause);
     }
-  }
-
-  async function approve() {
-    const current = params.value;
-    if (!current || busy.value) return;
-    busy.value = true;
-    error.value = '';
-    try {
-      await messaging.request('/admin/auth/approve', 'POST', current);
-      done.value = true;
-      clearAdminAuthParams();
-    } catch (cause) {
-      error.value = errorText(cause);
-    } finally {
-      busy.value = false;
-    }
-  }
-
-  function close() {
-    params.value = null;
-    info.value = null;
-    clearAdminAuthParams();
   }
 
   onMounted(() => {
-    if (params.value) void inspect();
+    const { user } = useMessaging();
+    if (user?.isAdmin) void inspect(props.request);
   });
 
-  return () => {
+  return ({ request, onClose }) => {
     const { user } = useMessaging();
-    if (!params.value || !user?.isAdmin) return null;
+    if (!user) return null;
+
+    async function approve() {
+      if (busy.value) return;
+      busy.value = true;
+      error.value = '';
+      try {
+        await messaging.request('/admin/auth/approve', 'POST', request);
+        done.value = true;
+      } catch (cause) {
+        error.value = errorText(cause);
+      } finally {
+        busy.value = false;
+      }
+    }
+
+    if (!user.isAdmin) {
+      return (
+        <Dialog title="无法批准管理后台登录" onClose={onClose}>
+          {() => (
+            <div style={{ display: 'grid', gap: '12px' }}>
+              <p style={{ margin: 0, lineHeight: 1.6 }}>
+                当前登录账号 <strong>{user.displayName}</strong>（@{user.username} · UID{' '}
+                <strong>{user.id}</strong>）未列入本站管理员白名单（<code>POCKET_ADMIN_UIDS</code>），无法批准管理后台授权。
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button type="button" onClick={onClose}>
+                  知道了
+                </button>
+              </div>
+            </div>
+          )}
+        </Dialog>
+      );
+    }
+
     const item = info.value;
     return (
-      <Dialog title="管理后台登录授权" onClose={close}>
+      <Dialog title="管理后台登录授权" onClose={onClose}>
         {() => (
           <div style={{ display: 'grid', gap: '12px' }}>
             <Notice text={error.value} />
@@ -94,7 +108,7 @@ export const AdminAuthApproval = tsxComponent(function AdminAuthApproval() {
                 <p style={{ margin: 0, lineHeight: 1.6 }}>
                   已批准管理后台登录，请切回管理后台页面继续操作（可直接关闭此窗口）。
                 </p>
-                <button type="button" onClick={close}>
+                <button type="button" onClick={onClose}>
                   完成
                 </button>
               </>
@@ -120,16 +134,17 @@ export const AdminAuthApproval = tsxComponent(function AdminAuthApproval() {
                     请求设备：<strong>{item?.deviceName ?? '校验中…'}</strong>
                   </div>
                   <div>
-                    核对码：<strong style={{ fontSize: '18px', letterSpacing: '0.12em' }}>{params.value!.code}</strong>
+                    核对码：
+                    <strong style={{ fontSize: '18px', letterSpacing: '0.12em' }}>{request.code}</strong>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                  <button type="button" class="secondary" disabled={busy.value} onClick={close}>
+                  <button type="button" class="secondary" disabled={busy.value} onClick={onClose}>
                     拒绝
                   </button>
                   <button
                     type="button"
-                    disabled={busy.value || !item || item.approved || item.code !== params.value!.code}
+                    disabled={busy.value || !item || item.approved || item.code !== request.code}
                     onClick={() => void approve()}
                   >
                     {busy.value ? '授权中…' : '确认授权'}
