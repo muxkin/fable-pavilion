@@ -1,10 +1,11 @@
 /* Cache local public assets only. CDN assets use their immutable HTTP cache directly. */
 const CACHE = 'pocket-static-v5';
+const androidVerifiedApp = /\bFablePavilionAndroidUpdater\b/.test(self.navigator?.userAgent ?? '');
 const OFFLINE_SHELL =
   '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>子虚亭</title><p>当前处于离线状态，请联网后重新打开子虚亭。</p></html>';
 self.addEventListener('install', (event) => {
   self.skipWaiting();
-  if (!self.pocketVerifiedFrontend) {
+  if (!self.pocketVerifiedFrontend && !androidVerifiedApp) {
     event.waitUntil(
       caches
         .open(CACHE)
@@ -41,6 +42,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (
+    !androidVerifiedApp &&
     url.origin === self.location.origin &&
     request.mode === 'navigate' &&
     !url.pathname.startsWith('/api/')

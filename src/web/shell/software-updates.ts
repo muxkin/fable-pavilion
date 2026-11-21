@@ -16,11 +16,12 @@ export interface AndroidRelease {
 
 export function refreshWebsite() {
   if ('serviceWorker' in navigator) {
-    void navigator.serviceWorker
-      .getRegistration()
-      .then((registration) => registration?.update())
-      .catch(() => {})
-      .finally(() => location.reload());
+    const prepare = installedAndroid
+      ? navigator.serviceWorker
+          .getRegistrations()
+          .then((registrations) => Promise.all(registrations.map((reg) => reg.unregister())))
+      : navigator.serviceWorker.getRegistration().then((registration) => registration?.update());
+    void prepare.catch(() => {}).finally(() => location.reload());
     return;
   }
   location.reload();

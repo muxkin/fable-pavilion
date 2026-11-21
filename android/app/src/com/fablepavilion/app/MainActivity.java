@@ -54,6 +54,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import org.json.JSONObject;
 
@@ -728,12 +729,20 @@ public final class MainActivity extends Activity {
             return request.isForMainFrame() ? VerifiedFrontend.unavailable() : null;
         VerifiedFrontend release = verifiedFrontend;
         if (release == null) return VerifiedFrontend.unavailable();
+        String path = request.getUrl().getEncodedPath();
+        Map<String, String> reqHeaders = request.getRequestHeaders();
+        String fetchMode = null;
+        if (reqHeaders != null) {
+            fetchMode = reqHeaders.get("Sec-Fetch-Mode");
+            if (fetchMode == null) fetchMode = reqHeaders.get("sec-fetch-mode");
+        }
+        boolean documentNavigation = request.isForMainFrame() ||
+                (("/".equals(path) || "/index.html".equals(path)) && "navigate".equalsIgnoreCase(fetchMode));
         VerifiedFrontend available = availableFrontend;
-        if (available != null && !startingFrontend && request.isForMainFrame()) {
+        if (available != null && !startingFrontend && documentNavigation) {
             verifiedFrontend = available;
             release = available;
         }
-        String path = request.getUrl().getEncodedPath();
         boolean updateMetadata = "/version.json".equals(path) || AndroidUpdates.FEED.equals(path);
         if (updateMetadata && !request.isForMainFrame()) {
             runOnUiThread(this::checkFrontendUpdate);

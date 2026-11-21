@@ -2,7 +2,7 @@ import { it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 const source = readFileSync(new URL('../src/web/public/sw.js', import.meta.url), 'utf8');
-function fixture() {
+function fixture(userAgent = 'Mozilla/5.0') {
   const handlers: Record<string, (e: any) => void> = {},
     entries = new Map<string, Response>();
   let denied = false;
@@ -19,6 +19,7 @@ function fixture() {
   runInNewContext(source, {
     self: {
       location: { origin: 'https://chat.test' },
+      navigator: { userAgent },
       skipWaiting: vi.fn(),
       addEventListener: (key: string, handler: any) => {
         handlers[key] = handler;
@@ -100,4 +101,11 @@ it('pre-caches the start shell on install and returns a 200 HTML fallback offlin
   expect(response!.status).toBe(200);
   expect(response!.headers.get('Content-Type')).toContain('text/html');
   expect(await response!.text()).toContain('离线');
+});
+it('leaves top-level document navigations to the Android verified wrapper so reload activates new releases', async () => {
+  const f = fixture('Mozilla/5.0 FablePavilionAndroid/13 FablePavilionAndroidUpdater');
+  await f.install();
+  expect(f.entries.size).toBe(0);
+  expect(f.request('/')).toBeUndefined();
+  expect(f.request('/?page=downloads')).toBeUndefined();
 });
