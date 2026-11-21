@@ -1,6 +1,18 @@
 name: Pure Rust desktop installer checks
 on:
   workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Target platforms to build and verify'
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - windows
+          - macos-arm64
+          - macos-intel
+          - non-linux
   push:
     tags: [native-rust-qa-v*]
   pull_request:
@@ -22,27 +34,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-22.04
-            platform: linux
-            arch: x64
-            target: x86_64-unknown-linux-gnu
-            binary: agent-space-native
-          - os: windows-latest
-            platform: win32
-            arch: x64
-            target: x86_64-pc-windows-msvc
-            binary: agent-space-native.exe
-          - os: macos-15
-            platform: darwin
-            arch: arm64
-            target: aarch64-apple-darwin
-            binary: agent-space-native
-          - os: macos-15-intel
-            platform: darwin
-            arch: x64
-            target: x86_64-apple-darwin
-            binary: agent-space-native
+        include: >-
+          ${{ fromJson(
+            (github.event_name == 'workflow_dispatch' && inputs.targets == 'linux' && '[{"os":"ubuntu-22.04","platform":"linux","arch":"x64","target":"x86_64-unknown-linux-gnu","binary":"agent-space-native"}]') ||
+            (github.event_name == 'workflow_dispatch' && inputs.targets == 'windows' && '[{"os":"windows-latest","platform":"win32","arch":"x64","target":"x86_64-pc-windows-msvc","binary":"agent-space-native.exe"}]') ||
+            (github.event_name == 'workflow_dispatch' && inputs.targets == 'macos-arm64' && '[{"os":"macos-15","platform":"darwin","arch":"arm64","target":"aarch64-apple-darwin","binary":"agent-space-native"}]') ||
+            (github.event_name == 'workflow_dispatch' && inputs.targets == 'macos-intel' && '[{"os":"macos-15-intel","platform":"darwin","arch":"x64","target":"x86_64-apple-darwin","binary":"agent-space-native"}]') ||
+            (github.event_name == 'workflow_dispatch' && inputs.targets == 'non-linux' && '[{"os":"windows-latest","platform":"win32","arch":"x64","target":"x86_64-pc-windows-msvc","binary":"agent-space-native.exe"},{"os":"macos-15","platform":"darwin","arch":"arm64","target":"aarch64-apple-darwin","binary":"agent-space-native"},{"os":"macos-15-intel","platform":"darwin","arch":"x64","target":"x86_64-apple-darwin","binary":"agent-space-native"}]') ||
+            '[{"os":"ubuntu-22.04","platform":"linux","arch":"x64","target":"x86_64-unknown-linux-gnu","binary":"agent-space-native"},{"os":"windows-latest","platform":"win32","arch":"x64","target":"x86_64-pc-windows-msvc","binary":"agent-space-native.exe"},{"os":"macos-15","platform":"darwin","arch":"arm64","target":"aarch64-apple-darwin","binary":"agent-space-native"},{"os":"macos-15-intel","platform":"darwin","arch":"x64","target":"x86_64-apple-darwin","binary":"agent-space-native"}]'
+          ) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +66,20 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - uses: Swatinem/rust-cache@v2
+        if: runner.os == 'Linux'
+        with:
+          workspaces: |
+            desktop/native -> target
+            desktop/native -> ../../dist/native-musl-target
+          shared-key: desktop-native-linux-${{ matrix.arch }}
+          cache-on-failure: true
+      - uses: Swatinem/rust-cache@v2
+        if: runner.os != 'Linux'
+        with:
+          workspaces: desktop/native -> target
+          shared-key: desktop-native-${{ matrix.platform }}-${{ matrix.arch }}
+          cache-on-failure: true
       - name: Install Linux desktop test dependencies
         if: runner.os == 'Linux'
         timeout-minutes: 10
@@ -92,8 +106,13 @@ jobs:
       - name: Build the static musl gateway and Linux plugins
         if: runner.os == 'Linux'
         run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          mkdir -p "$cargo_home"
           docker run --rm --user "$(id -u):$(id -g)" \
-            --volume "$PWD:/src" --workdir /src/desktop/native \
+            --volume "$PWD:/src" \
+            --volume "$cargo_home:/cargo-home" \
+            -e CARGO_HOME=/cargo-home \
+            --workdir /src/desktop/native \
             rust:1.95.0-alpine sh -ec '
               cargo build --release --locked --target x86_64-unknown-linux-musl \
                 --no-default-features --bin agent-space-native
@@ -155,7 +174,13 @@ jobs:
               if (!decoded.length) throw Error("Musl codec returned an empty image");
               console.log("Musl shared Noise fixture and bitmap codec loaded");
             '
-          docker run --rm --user "$(id -u):$(id -g)" --volume "$PWD:/src" --workdir /src \
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          mkdir -p "$cargo_home"
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$PWD:/src" \
+            --volume "$cargo_home:/cargo-home" \
+            -e CARGO_HOME=/cargo-home \
+            --workdir /src \
             agent-space-musl-build sh -ec '
               export CARGO_TARGET_DIR=/src/dist/native-musl-target
               cargo build --manifest-path desktop/native/Cargo.toml --release --locked \
