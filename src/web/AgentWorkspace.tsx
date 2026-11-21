@@ -9,7 +9,7 @@ import { ConversationControls, type ControlSection } from './ConversationControl
 import type { ControlAction } from '../shared/controls';
 import { capabilityEnabled, DEFAULT_BACKEND, type BackendInfo } from '../shared/backends';
 import { mergeCodexHistory } from '../shared/codex-history';
-import { uploadFile } from './file-client';
+import { downloadFile, exportSessionLog, uploadFile } from './file-client';
 import { deviceSession } from './device-session';
 import { RpcError as ApiError } from '../shared/rpc';
 import { contentVersion } from '../shared/sync';
@@ -1382,6 +1382,9 @@ export default tsxComponent(function AgentWorkspace(_props: {
           agentName={agentName}
           onWorkbench={() => backTo({ page: 'workbench' }, navigate)}
           canCreate={canCreateConversation}
+          canRename={status?.capabilities.renameThread === true}
+          canFork={status?.capabilities.forkThread === true}
+          canExportLog={backend?.presentation?.exportLog === true}
           projects={projects}
           threads={threads}
           cursor={cursor}
@@ -1393,6 +1396,26 @@ export default tsxComponent(function AgentWorkspace(_props: {
           onSelect={setSelected}
           onRefresh={() => void loadThreads()}
           onMore={() => void loadThreads(cursor ?? undefined)}
+          onReloadThread={(target) => {
+            if (selected?.id !== target.id) setSelected(target);
+            else setSubscriptionAttempt((value) => value + 1);
+          }}
+          onRenameThread={(target) => {
+            if (selected?.id !== target.id) setSelected(target);
+            setError('');
+            setThreadAction({ kind: 'rename', threadId: target.id, title: target.title });
+          }}
+          onForkThread={(target) => {
+            if (selected?.id !== target.id) setSelected(target);
+            setError('');
+            setThreadAction({ kind: 'fork', threadId: target.id, title: target.title });
+          }}
+          onExportThread={(target) => {
+            setError('');
+            void exportSessionLog(target.id)
+              .then((file) => downloadFile(file))
+              .catch((cause) => setError((cause as Error).message || '无法导出会话日志'));
+          }}
           onCreate={(projectId) => {
             setNewProject(projectId ?? selected?.projectId ?? undefined);
             if (!selected && threads[0]) setSelected(threads[0]);

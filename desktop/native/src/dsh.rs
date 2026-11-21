@@ -881,6 +881,20 @@ pub(crate) fn render(records: &[Value], full: bool) -> Vec<Value> {
                     "details":&details[..details.floor_char_boundary(limit.min(details.len()))],
                     "turnId":turn,"truncated":truncated,
                 });
+                let created_at = event["ts"]
+                    .as_i64()
+                    .or_else(|| event["createdAt"].as_i64())
+                    .or_else(|| message["createdAt"].as_i64())
+                    .or_else(|| {
+                        event["timestamp"]
+                            .as_str()
+                            .or_else(|| message["timestamp"].as_str())
+                            .map(crate::state::rfc3339_ms)
+                    })
+                    .filter(|&ts| ts > 0);
+                if let Some(ts) = created_at {
+                    item["createdAt"] = json!(ts);
+                }
                 if let Some(request) = message["source"]["rpcId"].as_str() {
                     item["clientMessageId"] = json!(request);
                 }

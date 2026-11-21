@@ -33,6 +33,7 @@ export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool';
   text: string;
+  createdAt?: number;
   turnId?: string;
   turnBoundary?: true;
   /** Identifies the same Codex item across live snapshots and persisted history. */

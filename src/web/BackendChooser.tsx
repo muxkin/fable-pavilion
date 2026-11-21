@@ -458,17 +458,38 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
                       aria-label="会话列表"
                       tabindex={recents.length > 5 ? 0 : undefined}
                     >
-                      {recents.map((thread) => (
-                        <button
-                          key={JSON.stringify([thread.backendId, thread.id])}
-                          disabled={busy || working.value}
-                          onClick={() => open(hostId, thread.backendId, thread.id)}
-                        >
-                          <Icon name="chat" size={16} />
-                          <span>{thread.title || '未命名会话'}</span>
-                          <Icon name="chevron" size={16} />
-                        </button>
-                      ))}
+                      {recents.map((thread) => {
+                        const tool = snapshot.backends.find((b) => b.id === thread.backendId);
+                        const appearance = tool ? (tool.appearance ?? backendAppearanceDefaults(tool)) : null;
+                        const toolName = appearance?.name ?? thread.backendId;
+                        const fullTime =
+                          thread.updatedAt > 0 ? new Date(thread.updatedAt).toLocaleString('zh-CN') : '';
+                        return (
+                          <button
+                            key={JSON.stringify([thread.backendId, thread.id])}
+                            disabled={busy || working.value}
+                            onClick={() => open(hostId, thread.backendId, thread.id)}
+                          >
+                            <span class="computer-recent-icon" title={toolName} aria-label={toolName}>
+                              <BackendIcon
+                                icon={appearance?.icon ?? { kind: 'builtin', value: 'chat' }}
+                                product={tool?.product}
+                              />
+                            </span>
+                            <span class="computer-recent-title">{thread.title || '未命名会话'}</span>
+                            {thread.updatedAt > 0 && (
+                              <time
+                                class="computer-recent-time"
+                                datetime={new Date(thread.updatedAt).toISOString()}
+                                title={fullTime}
+                              >
+                                {formatRecentTime(thread.updatedAt)}
+                              </time>
+                            )}
+                            <Icon name="chevron" size={16} />
+                          </button>
+                        );
+                      })}
                     </div>
                   </section>
                 )}
@@ -506,3 +527,15 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
     );
   };
 });
+
+function formatRecentTime(ms: number): string {
+  const date = new Date(ms);
+  const now = new Date();
+  const hhmm = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (date.toDateString() === now.toDateString()) return hhmm;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return `昨天 ${hhmm}`;
+  if (date.getFullYear() === now.getFullYear()) return `${date.getMonth() + 1}/${date.getDate()}`;
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+}

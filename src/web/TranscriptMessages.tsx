@@ -47,22 +47,38 @@ export const TranscriptMessages = tsxComponent(function TranscriptMessages(_prop
         last.messages.push(message);
       else groups.push({ key: message.id, kind, messages: [message] });
     }
-    const render = (m: Message) => (
-      <article key={m.id} class={`message ${m.role}`} data-user-turn={m.role === 'user' ? m.id : undefined}>
-        <div class="message-role">
-          {m.role === 'assistant' && agent.avatar && (
-            <img class="codex-avatar" src={agent.avatar} alt="" width={32} height={32} />
+    const render = (m: Message) => {
+      const hasTime = typeof m.createdAt === 'number' && Number.isFinite(m.createdAt) && m.createdAt > 0;
+      const timeLabel = hasTime ? formatMessageTime(m.createdAt!) : '';
+      const timeTitle = hasTime ? new Date(m.createdAt!).toLocaleString('zh-CN') : '';
+      const timeIso = hasTime ? new Date(m.createdAt!).toISOString() : undefined;
+      return (
+        <article key={m.id} class={`message ${m.role}`} data-user-turn={m.role === 'user' ? m.id : undefined}>
+          <div class="message-role">
+            {m.role === 'assistant' && agent.avatar && (
+              <img class="codex-avatar" src={agent.avatar} alt="" width={32} height={32} />
+            )}
+            <span>{m.role === 'user' ? '你' : m.role === 'assistant' ? agent.name : '工具活动'}</span>
+            {hasTime && m.role !== 'user' && (
+              <time class="message-time" datetime={timeIso} title={timeTitle}>
+                {timeLabel}
+              </time>
+            )}
+          </div>
+          <MessageContent
+            message={m}
+            threadId={threadId}
+            streaming={!!activeTurnId && m.turnId === activeTurnId}
+            codex={codex}
+          />
+          {hasTime && m.role === 'user' && (
+            <time class="message-time message-time-foot" datetime={timeIso} title={timeTitle}>
+              {timeLabel}
+            </time>
           )}
-          {m.role === 'user' ? '你' : m.role === 'assistant' ? agent.name : '工具活动'}
-        </div>
-        <MessageContent
-          message={m}
-          threadId={threadId}
-          streaming={!!activeTurnId && m.turnId === activeTurnId}
-          codex={codex}
-        />
-      </article>
-    );
+        </article>
+      );
+    };
     const renderGroup = (group: (typeof groups)[number]) => {
       if (group.kind === 'tools')
         return (
@@ -241,3 +257,17 @@ const ToolActivityGroup = tsxComponent(function ToolActivityGroup(_props: {
     );
   };
 });
+
+function formatMessageTime(ms: number): string {
+  const date = new Date(ms);
+  const now = new Date();
+  const hhmm = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (date.toDateString() === now.toDateString()) return hhmm;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return `昨天 ${hhmm}`;
+  if (date.getFullYear() === now.getFullYear()) {
+    return `${date.getMonth() + 1}/${date.getDate()} ${hhmm}`;
+  }
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${hhmm}`;
+}

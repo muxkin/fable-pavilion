@@ -4,7 +4,7 @@ import { scrypt } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { USER_ID_PATTERN, USERNAME_PATTERN } from '../../shared/account-identity.js';
-import { ChatError, digest, type MessagingStore } from './store-core.js';
+import { ChatError, digest, type LoginDeviceMeta, type MessagingStore } from './store-core.js';
 import type { MessagingObjects, MediaKind } from './objects.js';
 import { registerAccounts, vaultSchema } from './accounts.js';
 import { ResourceError } from '../resources/service.js';
@@ -160,33 +160,101 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
     push?.focus(token(req), id, conversation);
     return { ok: true };
   });
-  const browserName = (req: MessagingRequest) => {
+  const deviceInfo = (req: MessagingRequest): LoginDeviceMeta => {
     const ua = String(req.headers['user-agent'] ?? '');
-    const os = /Android/.test(ua)
-      ? 'Android'
-      : /iPhone/i.test(ua)
-        ? 'iPhone'
-        : /iPad/.test(ua)
-          ? 'iPad'
-          : /Windows/.test(ua)
-            ? 'Windows'
-            : /Macintosh/.test(ua)
-              ? 'Mac'
-              : /Linux/.test(ua)
-                ? 'Linux'
-                : '';
-    const browser = /FablePavilionAndroid|; wv\)/i.test(ua)
-      ? '子虚亭'
-      : /Edg/.test(ua)
-        ? 'Edge'
-        : /Firefox|FxiOS/.test(ua)
-          ? 'Firefox'
-          : /Chrome|CriOS/.test(ua)
-            ? 'Chrome'
-            : /Safari/.test(ua)
-              ? 'Safari'
-              : '浏览器';
-    return [os, browser].filter(Boolean).join(' · ');
+    const harmonyMatch = /HarmonyOS\s*([0-9]+(?:\.[0-9]+)?)?|OpenHarmony\s*([0-9]+(?:\.[0-9]+)?)?/i.exec(ua);
+    const androidMatch = /Android\s*([0-9]+(?:\.[0-9]+)?)?/i.exec(ua);
+    const iosMatch = /(?:iPhone|CPU)\s+OS\s+([0-9]+)[._]([0-9]+)/i.exec(ua);
+    const macMatch = /Mac OS X\s+([0-9]+)[._]([0-9]+)/i.exec(ua);
+    const isTablet =
+      /iPad|Tablet|Pad\b/i.test(ua) ||
+      (/Android/i.test(ua) && !/Mobile/i.test(ua) && !/FablePavilionAndroid/i.test(ua));
+    const os = harmonyMatch
+      ? `鸿蒙${harmonyMatch[1] || harmonyMatch[2] ? ` ${harmonyMatch[1] || harmonyMatch[2]}` : ''}`
+      : androidMatch
+        ? `Android${androidMatch[1] ? ` ${androidMatch[1]}` : ''}`
+        : /iPhone/i.test(ua)
+          ? `iPhone${iosMatch ? ` (iOS ${iosMatch[1]})` : ''}`
+          : /iPad/i.test(ua)
+            ? `iPad${iosMatch ? ` (iPadOS ${iosMatch[1]})` : ''}`
+            : /Windows/i.test(ua)
+              ? 'Windows'
+              : /Macintosh/i.test(ua)
+                ? `macOS${macMatch ? ` ${macMatch[1]}` : ''}`
+                : /Linux/i.test(ua)
+                  ? 'Linux'
+                  : '';
+    const appMatch = /\bFablePavilionAndroid\/(\d+)\b/.exec(ua);
+    const huaweiBrowserMatch = /\bHuaweiBrowser\/(\d+)/i.exec(ua);
+    const edgeMatch = /\bEdg(?:A|iOS)?\/(\d+)/.exec(ua);
+    const firefoxMatch = /\b(?:Firefox|FxiOS)\/(\d+)/.exec(ua);
+    const chromeMatch = /\b(?:Chrome|CriOS)\/(\d+)/.exec(ua);
+    const safariMatch = /\bVersion\/(\d+)[^]*Safari/i.exec(ua);
+    const browser = appMatch
+      ? `子虚亭 Android`
+      : /; wv\)/i.test(ua)
+        ? '子虚亭'
+        : huaweiBrowserMatch
+          ? `华为浏览器 ${huaweiBrowserMatch[1]}`
+          : edgeMatch
+            ? `Edge ${edgeMatch[1]}`
+            : firefoxMatch
+              ? `Firefox ${firefoxMatch[1]}`
+              : chromeMatch
+                ? `Chrome ${chromeMatch[1]}`
+                : safariMatch
+                  ? `Safari ${safariMatch[1]}`
+                  : /Safari/i.test(ua)
+                    ? 'Safari'
+                    : '浏览器';
+    const platform = appMatch
+      ? 'app'
+      : isTablet
+        ? 'tablet'
+        : /iPhone|Android|Mobile|HarmonyOS/i.test(ua)
+          ? 'mobile'
+          : /Windows|Macintosh|Linux|X11/i.test(ua)
+            ? 'desktop'
+            : 'web';
+    const rawIp = (() => {
+      try {
+        return req.clientAddress();
+      } catch {
+        return '';
+      }
+    })();
+    const ip = rawIp.replace(/^::ffff:/i, '').trim().slice(0, 45) || undefined;
+    const country = String(req.headers['cf-ipcountry'] ?? '').trim();
+    const city = String(req.headers['cf-ipcity'] ?? '').trim();
+    const location =
+      [city && city.length <= 48 ? city : '', country && country !== 'XX' && country !== 'T1' ? country : '']
+        .filter(Boolean)
+        .join(', ') || undefined;
+    const originHost = (() => {
+      try {
+        if (req.origin) return new URL(req.origin).host;
+      } catch {}
+      const host = String(req.headers.host ?? '').trim();
+      return /^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?$/.test(host) ? host : undefined;
+    })();
+    const shortOs = harmonyMatch
+      ? '鸿蒙'
+      : androidMatch
+        ? 'Android'
+        : /iPhone/i.test(ua)
+          ? 'iPhone'
+          : /iPad/i.test(ua)
+            ? 'iPad'
+            : /Windows/i.test(ua)
+              ? 'Windows'
+              : /Macintosh/i.test(ua)
+                ? 'Mac'
+                : /Linux/i.test(ua)
+                  ? 'Linux'
+                  : '';
+    const shortBrowser = browser.replace(/\s+\d+$/, '');
+    const name = [shortOs, shortBrowser].filter(Boolean).join(' · ') || '浏览器';
+    return { name, platform, os: os || undefined, browser, ip, location, origin: originHost };
   };
   const session = (
     req: MessagingRequest,
@@ -195,7 +263,7 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
     onIssued?: (sessionHash: string) => void,
     verified = true,
   ) => {
-    const { token: value, expiresAt } = store.issueSession(user.id, { name: browserName(req), verified });
+    const { token: value, expiresAt } = store.issueSession(user.id, { ...deviceInfo(req), verified });
     onIssued?.(digest(value));
     reply.setCookie(COOKIE, value, {
       path: '/api/im',
@@ -397,8 +465,14 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
   app.get('/login-devices', (req) => {
     const user = human(req);
     const current = token(req);
-    store.touchSession(current, browserName(req));
+    store.touchSession(current, deviceInfo(req), true);
     return { devices: store.loginDevices(user.id, current) };
+  });
+  app.patch('/login-devices/:id', { bodyLimit: 1024 }, (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { name } = z.object({ name: z.string().trim().max(60) }).parse(req.body);
+    store.renameLoginDevice(human(req).id, id, name);
+    return { ok: true };
   });
   app.delete('/login-devices/:id', (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
@@ -700,7 +774,7 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
   app.get('/me', (req) => {
     const current = token(req);
     const user = current ? identity(req) : null;
-    if (user?.kind === 'human') store.touchSession(current, browserName(req));
+    if (user?.kind === 'human') store.touchSession(current, deviceInfo(req));
     return { user };
   });
   app.patch('/me', { bodyLimit: 4096 }, async (req) => {
@@ -763,7 +837,7 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
   });
   app.get('/sync', async (req, reply) => {
     const user = identity(req);
-    if (user.kind === 'human') store.touchSession(token(req), browserName(req));
+    if (user.kind === 'human') store.touchSession(token(req), deviceInfo(req));
     const { cursor, wait } = z
       .object({
         cursor: integer.default(0),

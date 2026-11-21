@@ -469,3 +469,46 @@ pub fn remember_origin(directory: &Path, origin: &str) -> Result<()> {
     }
     write
 }
+
+pub(crate) fn rfc3339_ms(s: &str) -> i64 {
+    fn number(s: &str, range: std::ops::Range<usize>) -> Option<i64> {
+        s.get(range)?.parse().ok()
+    }
+    let parse = || {
+        let mut y = number(s, 0..4)?;
+        let m = number(s, 5..7)?;
+        let d = number(s, 8..10)?;
+        let h = number(s, 11..13)?;
+        let min = number(s, 14..16)?;
+        let sec = number(s, 17..19)?;
+        if !(1..=12).contains(&m)
+            || !(1..=31).contains(&d)
+            || h > 23
+            || min > 59
+            || sec > 60
+            || !s.ends_with('Z')
+        {
+            return None;
+        }
+        y -= i64::from(m <= 2);
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let mp = m + if m > 2 { -3 } else { 9 };
+        let days =
+            era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + (153 * mp + 2) / 5 + d - 1 - 719468;
+        let millis = s
+            .get(19..)
+            .and_then(|s| s.strip_prefix('.'))
+            .map(|s| {
+                s.bytes()
+                    .take(3)
+                    .take_while(u8::is_ascii_digit)
+                    .enumerate()
+                    .map(|(i, b)| (b - b'0') as i64 * [100, 10, 1][i])
+                    .sum::<i64>()
+            })
+            .unwrap_or(0);
+        Some(((days * 24 + h) * 60 + min) * 60 * 1000 + sec * 1000 + millis)
+    };
+    parse().unwrap_or(0)
+}

@@ -38,6 +38,13 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
   backend?: BackendInfo;
   onWorkbench?: () => void;
   canCreate?: boolean;
+  canRename?: boolean;
+  canFork?: boolean;
+  canExportLog?: boolean;
+  onRenameThread?: (t: ThreadSummary) => void;
+  onForkThread?: (t: ThreadSummary) => void;
+  onExportThread?: (t: ThreadSummary) => void;
+  onReloadThread?: (t: ThreadSummary) => void;
 }) {
   const tabState = shallowRef<'recent' | 'projects'>('recent');
   const setTab = writeRef(tabState);
@@ -59,6 +66,8 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
   const setBusy = writeRef(busyState);
   const errorState = shallowRef('');
   const setError = writeRef(errorState);
+  const menuState = shallowRef<{ x: number; y: number; thread: ThreadSummary | null } | null>(null);
+  const menuRef = shallowRef<HTMLDivElement | null>(null);
   const generation = { current: 0 };
   const searchGeneration = { current: 0 };
   const watchTimeout = watchRender();
@@ -67,6 +76,7 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
   const watchExpanded = watchRender();
   const watchActivity = watchRender();
   const watchRecentActivity = watchRender();
+  const watchContextMenu = watchRender();
   return ({
     projects,
     threads,
@@ -84,6 +94,13 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
     backend,
     onWorkbench,
     canCreate,
+    canRename,
+    canFork,
+    canExportLog,
+    onRenameThread,
+    onForkThread,
+    onExportThread,
+    onReloadThread,
   }) => {
     const tab = tabState.value;
     const query = queryState.value;
@@ -95,6 +112,43 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
     const busy = busyState.value;
     const error = errorState.value;
     const order = orderState.value;
+    const menu = menuState.value;
+    const closeMenu = () => {
+      menuState.value = null;
+    };
+    function openContextMenu(event: MouseEvent, thread: ThreadSummary | null) {
+      event.preventDefault();
+      event.stopPropagation();
+      const menuWidth = 200;
+      const estimatedHeight = thread ? 280 : 140;
+      const margin = 8;
+      const x = Math.max(margin, Math.min(event.clientX, window.innerWidth - menuWidth - margin));
+      const y = Math.max(margin, Math.min(event.clientY, window.innerHeight - estimatedHeight - margin));
+      menuState.value = { x, y, thread };
+    }
+    watchContextMenu(() => {
+      if (!menu) return;
+      const onPointerDown = (event: PointerEvent) => {
+        if (menuRef.value && event.target instanceof Node && menuRef.value.contains(event.target)) return;
+        closeMenu();
+      };
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') closeMenu();
+      };
+      const onDismiss = () => closeMenu();
+      window.addEventListener('pointerdown', onPointerDown, true);
+      window.addEventListener('keydown', onKeyDown);
+      window.addEventListener('resize', onDismiss);
+      window.addEventListener('blur', onDismiss);
+      window.addEventListener('scroll', onDismiss, true);
+      return () => {
+        window.removeEventListener('pointerdown', onPointerDown, true);
+        window.removeEventListener('keydown', onKeyDown);
+        window.removeEventListener('resize', onDismiss);
+        window.removeEventListener('blur', onDismiss);
+        window.removeEventListener('scroll', onDismiss, true);
+      };
+    }, [!!menu]);
 
     watchRecentActivity(() => {
       if (order !== 'activity') return;
@@ -236,8 +290,9 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
       items.map((t) => (
         <button
           key={t.id}
-          class={`thread-button ${selected?.id === t.id ? 'selected' : ''}`}
+          class={`thread-button ${selected?.id === t.id ? 'selected' : ''}${menu?.thread?.id === t.id ? ' context-active' : ''}`}
           onClick={() => onSelect(t)}
+          onContextmenu={(event: MouseEvent) => openContextMenu(event, t)}
         >
           {grouped && <span class="thread-node" />}
           <span class="thread-label">
@@ -353,7 +408,7 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
             <Icon name="refresh" size={18} />
           </button>
         </div>
-        <nav aria-label="会话列表">
+        <nav aria-label="会话列表" onContextmenu={(event: MouseEvent) => openContextMenu(event, null)}>
           {error && (
             <p role="alert" class="error">
               {error}
@@ -428,15 +483,171 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
             ))
           )}
         </nav>
+        {menu && (
+          <div
+            ref={menuRef}
+            class="thread-context-menu"
+            role="menu"
+            aria-label={menu.thread ? '会话操作菜单' : '会话列表菜单'}
+            style={{ left: `${menu.x}px`, top: `${menu.y}px` }}
+            onContextmenu={(event: MouseEvent) => event.preventDefault()}
+          >
+            {menu.thread ? (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const target = menu.thread!;
+                    closeMenu();
+                    if (selected?.id === target.id && onReloadThread) onReloadThread(target);
+                    else onSelect(target);
+                  }}
+                >
+                  <Icon name={selected?.id === menu.thread.id ? 'refresh' : 'chat'} size={15} />
+                  <span>{selected?.id === menu.thread.id ? '重新加载会话' : '打开会话'}</span>
+                </button>
+                {canRename && onRenameThread && menu.thread.id !== 'new' && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!online}
+                    onClick={() => {
+                      const target = menu.thread!;
+                      closeMenu();
+                      onRenameThread(target);
+                    }}
+                  >
+                    <Icon name="document" size={15} />
+                    <span>会话改名</span>
+                  </button>
+                )}
+                {canFork && onForkThread && menu.thread.id !== 'new' && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!online}
+                    onClick={() => {
+                      const target = menu.thread!;
+                      closeMenu();
+                      onForkThread(target);
+                    }}
+                  >
+                    <Icon name="branch" size={15} />
+                    <span>创建会话分支</span>
+                  </button>
+                )}
+                {canExportLog && onExportThread && menu.thread.id !== 'new' && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!online}
+                    onClick={() => {
+                      const target = menu.thread!;
+                      closeMenu();
+                      onExportThread(target);
+                    }}
+                  >
+                    <Icon name="download" size={15} />
+                    <span>{backend?.product === 'antigravity' ? '导出会话日志' : '下载日志 ZIP'}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const title = menu.thread!.title || '未命名会话';
+                    closeMenu();
+                    void navigator.clipboard?.writeText(title).catch(() => {});
+                  }}
+                >
+                  <Icon name="copy" size={15} />
+                  <span>复制会话标题</span>
+                </button>
+                <div class="thread-context-divider" role="separator" />
+                {canCreate && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      const projectId = menu.thread?.projectId ?? undefined;
+                      closeMenu();
+                      onCreate(projectId);
+                    }}
+                  >
+                    <Icon name="plusCircle" size={15} />
+                    <span>在此项目新建会话</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={loading}
+                  onClick={() => {
+                    closeMenu();
+                    onRefresh();
+                  }}
+                >
+                  <Icon name="refresh" size={15} />
+                  <span>刷新会话列表</span>
+                </button>
+              </>
+            ) : (
+              <>
+                {canCreate && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu();
+                      onCreate([...expanded].find((id) => id !== 'none'));
+                    }}
+                  >
+                    <Icon name="plusCircle" size={15} />
+                    <span>新建会话</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={loading}
+                  onClick={() => {
+                    closeMenu();
+                    onRefresh();
+                  }}
+                >
+                  <Icon name="refresh" size={15} />
+                  <span>刷新会话列表</span>
+                </button>
+                <div class="thread-context-divider" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu();
+                    setTab(tab === 'recent' ? 'projects' : 'recent');
+                  }}
+                >
+                  <Icon name={tab === 'recent' ? 'folder' : 'clock'} size={15} />
+                  <span>{tab === 'recent' ? '按项目分组查看' : '按最近会话查看'}</span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </aside>
     );
   };
 });
 function relativeTime(ms: number) {
-  const day = Math.floor((Date.now() - ms) / 86400000);
-  return day < 1
-    ? '今天'
-    : day === 1
-      ? '昨天'
-      : new Date(ms).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+  if (!ms || ms <= 0) return '';
+  const date = new Date(ms);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return '昨天';
+  return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
 }

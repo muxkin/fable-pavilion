@@ -57,6 +57,19 @@ export const OutgoingMessageCard = tsxComponent(function OutgoingMessageCard(_pr
       <OutgoingStatus activity={operationActivity(operation)}>
         {() => (
           <>
+            {operation.createdAt > 0 && (
+              <time
+                class="message-time"
+                datetime={new Date(operation.createdAt).toISOString()}
+                title={new Date(operation.createdAt).toLocaleString('zh-CN')}
+              >
+                {new Date(operation.createdAt).toLocaleTimeString('zh-CN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false,
+                })}
+              </time>
+            )}
             {operation.state === 'accepted' && <span>已发送</span>}
             <OperationFeedback operation={operation} onCheck={onCheck} onRetry={onRetry} />
             {hasFailure && (

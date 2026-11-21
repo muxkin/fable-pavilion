@@ -101,6 +101,11 @@ pub(super) fn messages(steps: &[Value], offset: usize, full: bool) -> Vec<Value>
         let index = index + offset;
         let id = format!("antigravity-step-{index}");
         let turn = &step["metadata"]["executionId"];
+        let created_at = step["metadata"]["createdAt"]
+            .as_str()
+            .or(step["createdAt"].as_str())
+            .map(crate::state::rfc3339_ms)
+            .filter(|&ts| ts > 0);
         if let Some(user) = step.get("userInput") {
             let text = user["items"]
                 .as_array()
@@ -122,6 +127,9 @@ pub(super) fn messages(steps: &[Value], offset: usize, full: bool) -> Vec<Value>
                 "turnId": turn,
                 "clientMessageId": user["clientMessageId"],
             });
+            if let Some(ts) = created_at {
+                message["createdAt"] = json!(ts);
+            }
             let mut attachments = media::attachments(user, index);
             attachments.extend(file_attachments);
             if !attachments.is_empty() {
@@ -135,10 +143,19 @@ pub(super) fn messages(steps: &[Value], offset: usize, full: bool) -> Vec<Value>
                 .or(response["response"].as_str())
                 .unwrap_or("");
             if !text.is_empty() {
-                messages.push(json!({"id": id, "role": "assistant", "text": text, "turnId": turn}));
+                let mut message =
+                    json!({"id": id, "role": "assistant", "text": text, "turnId": turn});
+                if let Some(ts) = created_at {
+                    message["createdAt"] = json!(ts);
+                }
+                messages.push(message);
             }
         } else {
-            messages.push(project_tool_step(step, &id, turn));
+            let mut message = project_tool_step(step, &id, turn);
+            if let Some(ts) = created_at {
+                message["createdAt"] = json!(ts);
+            }
+            messages.push(message);
         }
     }
     let mut last_assistant_by_turn: HashMap<String, usize> = HashMap::new();

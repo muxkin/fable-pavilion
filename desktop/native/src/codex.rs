@@ -690,6 +690,18 @@ fn read_thread(row: &Row<'_>, names: &HashMap<String, String>) -> rusqlite::Resu
 
 fn rollout_message(line: &[u8], thread: &str, offset: u64, full: bool) -> Option<Value> {
     let record: Value = serde_json::from_slice(line).ok()?;
+    let created_at = record["timestamp"]
+        .as_str()
+        .map(crate::state::rfc3339_ms)
+        .filter(|&ts| ts > 0);
+    let attach_ts = |mut entry: Value| {
+        if let Some(ts) = created_at
+            && entry.get("createdAt").is_none()
+        {
+            entry["createdAt"] = json!(ts);
+        }
+        entry
+    };
     let message = &record["payload"];
     if record["type"] == "realtime_item" && message["type"] == "transcript_segment" {
         let role = message["role"].as_str()?;
@@ -702,7 +714,8 @@ fn rollout_message(line: &[u8], thread: &str, offset: u64, full: bool) -> Option
             message["text"].as_str()?.to_owned(),
             Vec::new(),
             full,
-        );
+        )
+        .map(attach_ts);
     }
     if record["type"] == "event_msg" && message["type"] == "task_complete" {
         return crate::tool_activity::turn_timing(
@@ -731,10 +744,10 @@ fn rollout_message(line: &[u8], thread: &str, offset: u64, full: bool) -> Option
                 attachments,
                 full,
             )
-            .map(|entry| with_native_fields(entry, item, turn));
+            .map(|entry| attach_ts(with_native_fields(entry, item, turn)));
         }
         if let Some(event) = crate::tool_activity::timeline_event(item, &id, turn) {
-            return Some(with_native_fields(event, item, turn));
+            return Some(attach_ts(with_native_fields(event, item, turn)));
         }
         let text = crate::tool_activity::summary(item)?;
         let mut projected = json!({
@@ -751,7 +764,7 @@ fn rollout_message(line: &[u8], thread: &str, offset: u64, full: bool) -> Option
                 projected["deferred"] = json!(true);
             }
         }
-        return Some(with_native_fields(projected, item, turn));
+        return Some(attach_ts(with_native_fields(projected, item, turn)));
     }
     if record["type"] != "response_item" {
         return None;
@@ -760,8 +773,8 @@ fn rollout_message(line: &[u8], thread: &str, offset: u64, full: bool) -> Option
     if message["type"] != "message" || !matches!(role, "user" | "assistant") {
         let attachments = crate::history_media::attachments(Vec::new(), message);
         return (!attachments.is_empty()).then(|| {
-            json!({"id":format!("rollout-{offset}:media:0"),
-            "role":"assistant","text":"","attachments":attachments})
+            attach_ts(json!({"id":format!("rollout-{offset}:media:0"),
+            "role":"assistant","text":"","attachments":attachments}))
         });
     }
     let metadata = &message["internal_chat_message_metadata_passthrough"];
@@ -782,7 +795,7 @@ fn rollout_message(line: &[u8], thread: &str, offset: u64, full: bool) -> Option
     };
     let attachments = crate::history_media::attachments(explicit, message);
     text_message(offset, role, text, attachments, full)
-        .map(|entry| with_native_fields(entry, message, metadata["turn_id"].as_str()))
+        .map(|entry| attach_ts(with_native_fields(entry, message, metadata["turn_id"].as_str())))
 }
 
 fn with_native_fields(mut message: Value, item: &Value, turn: Option<&str>) -> Value {

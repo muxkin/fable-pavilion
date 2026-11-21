@@ -296,16 +296,33 @@
 }
 .computer-recents button {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
   width: 100%;
   min-height: 37px;
   padding-inline: 7px;
   font-size: 14px;
 }
-.computer-recents span {
+.computer-recent-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+.computer-recent-icon .backend-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+}
+.computer-recent-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.computer-recent-time {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .computer-empty {
   margin: 14px 16px;

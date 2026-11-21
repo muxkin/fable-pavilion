@@ -15,6 +15,15 @@
   background: var(--soft);
   color: var(--on-soft);
 }
+.message.user::selection,
+.message.user ::selection,
+.mine .im-bubble::selection,
+.mine .im-bubble ::selection,
+.composer textarea::selection,
+.im-composer textarea::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
 input::placeholder,
 textarea::placeholder {
   color: var(--muted);

@@ -50,3 +50,53 @@
     background: var(--soft);
   }
 }
+.thread-button.context-active {
+  outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.thread-context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 184px;
+  max-width: min(240px, calc(100vw - 16px));
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 12px 32px color-mix(in srgb, #000 32%, transparent);
+}
+.thread-context-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.thread-context-menu button:hover:not(:disabled),
+.thread-context-menu button:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  outline: none;
+}
+.thread-context-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.thread-context-menu button svg {
+  flex: none;
+  color: var(--muted);
+}
+.thread-context-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}

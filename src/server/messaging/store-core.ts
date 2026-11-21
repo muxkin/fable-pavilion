@@ -51,6 +51,16 @@ function logical(value: any): any {
 }
 
 /** One database authority. All multi-row mutations commit before notifying clients. */
+export interface LoginDeviceMeta {
+  name: string;
+  platform?: string;
+  os?: string;
+  browser?: string;
+  ip?: string;
+  location?: string;
+  origin?: string;
+}
+
 export class MessagingStore {
   calls?: CallStore;
   push?: PushNotifications;
@@ -162,6 +172,25 @@ export class MessagingStore {
         .some((r) => r.name === 'removed')
     )
       this.db.exec('ALTER TABLE im_files ADD COLUMN removed INTEGER NOT NULL DEFAULT 0');
+    const loginDeviceColumns = new Set(
+      this.db
+        .prepare('PRAGMA table_info(im_login_devices)')
+        .all()
+        .map((r) => String(r.name)),
+    );
+    for (const [col, def] of [
+      ['created_at', 'INTEGER'],
+      ['platform', 'TEXT'],
+      ['os', 'TEXT'],
+      ['browser', 'TEXT'],
+      ['ip', 'TEXT'],
+      ['location', 'TEXT'],
+      ['origin', 'TEXT'],
+      ['custom_name', 'TEXT'],
+    ] as const) {
+      if (!loginDeviceColumns.has(col))
+        this.db.exec(`ALTER TABLE im_login_devices ADD COLUMN ${col} ${def}`);
+    }
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS im_object_gc(key TEXT PRIMARY KEY, not_before INTEGER NOT NULL)',
     );
@@ -229,7 +258,7 @@ export class MessagingStore {
     // Agent registration already owns a transaction; both paths serialize allocation with insertion.
     return this.db.isTransaction ? create() : this.transaction(create);
   }
-  issueSession(userId: string, device?: { name: string; verified: boolean }) {
+  issueSession(userId: string, device?: LoginDeviceMeta & { verified: boolean }) {
     const token = secret();
     const now = Date.now();
     const expiresAt = now + (this.user(userId).kind === 'agent' ? 365 : 30) * DAY;
@@ -239,8 +268,25 @@ export class MessagingStore {
       this.db.prepare('INSERT INTO im_sessions VALUES (?,?,?)').run(hash, userId, expiresAt);
       if (device)
         this.db
-          .prepare('INSERT INTO im_login_devices VALUES (?,?,?,?,?)')
-          .run(hash, randomUUID(), device.name, now, device.verified ? now : null);
+          .prepare(
+            `INSERT INTO im_login_devices
+             (session_hash,id,name,last_active_at,verified_at,created_at,platform,os,browser,ip,location,origin)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          )
+          .run(
+            hash,
+            randomUUID(),
+            device.name,
+            now,
+            device.verified ? now : null,
+            now,
+            device.platform ?? null,
+            device.os ?? null,
+            device.browser ?? null,
+            device.ip ?? null,
+            device.location ?? null,
+            device.origin ?? null,
+          );
     };
     if (this.db.isTransaction) issue();
     else this.transaction(issue);
@@ -252,17 +298,42 @@ export class MessagingStore {
       .get(digest(token), Date.now());
     return row ? this.user(String(row.user_id)) : null;
   }
-  touchSession(token: string, name: string) {
+  touchSession(token: string, device: string | LoginDeviceMeta, force = false) {
     const now = Date.now();
+    const meta: LoginDeviceMeta = typeof device === 'string' ? { name: device } : device;
     this.db
       .prepare(
-        `INSERT INTO im_login_devices(session_hash,id,name,last_active_at)
-       SELECT hash,?,?,? FROM im_sessions WHERE hash=? AND expires_at>?
-       ON CONFLICT(session_hash) DO UPDATE SET name=COALESCE(im_login_devices.name,excluded.name),
+        `INSERT INTO im_login_devices
+         (session_hash,id,name,last_active_at,created_at,platform,os,browser,ip,location,origin)
+       SELECT hash,?,?,?,?,?,?,?,?,?,? FROM im_sessions WHERE hash=? AND expires_at>?
+       ON CONFLICT(session_hash) DO UPDATE SET
+         name=COALESCE(NULLIF(excluded.name,''),im_login_devices.name),
+         platform=COALESCE(NULLIF(excluded.platform,''),im_login_devices.platform),
+         os=COALESCE(NULLIF(excluded.os,''),im_login_devices.os),
+         browser=COALESCE(NULLIF(excluded.browser,''),im_login_devices.browser),
+         ip=COALESCE(NULLIF(excluded.ip,''),im_login_devices.ip),
+         location=COALESCE(NULLIF(excluded.location,''),im_login_devices.location),
+         origin=COALESCE(NULLIF(excluded.origin,''),im_login_devices.origin),
          last_active_at=excluded.last_active_at
-       WHERE im_login_devices.last_active_at IS NULL OR im_login_devices.last_active_at<?`,
+       WHERE ? OR im_login_devices.last_active_at IS NULL OR im_login_devices.last_active_at<?
+         OR im_login_devices.ip IS NULL OR im_login_devices.platform IS NULL`,
       )
-      .run(randomUUID(), name, now, digest(token), now, now - 5 * 60_000);
+      .run(
+        randomUUID(),
+        meta.name,
+        now,
+        now,
+        meta.platform ?? null,
+        meta.os ?? null,
+        meta.browser ?? null,
+        meta.ip ?? null,
+        meta.location ?? null,
+        meta.origin ?? null,
+        digest(token),
+        now,
+        force ? 1 : 0,
+        now - 5 * 60_000,
+      );
   }
   recentlyVerified(userId: string, sessionHash: string) {
     const now = Date.now();
@@ -287,13 +358,35 @@ export class MessagingStore {
     }
     return this.db
       .prepare(
-        `SELECT d.id, COALESCE(d.name,'浏览器') AS name, d.last_active_at AS lastActiveAt,
-              s.hash=? AS current
+        `SELECT d.id,
+                COALESCE(d.name,'浏览器') AS name,
+                d.custom_name AS customName,
+                d.platform AS platform,
+                d.os AS os,
+                d.browser AS browser,
+                d.ip AS ip,
+                d.location AS location,
+                d.origin AS origin,
+                d.created_at AS createdAt,
+                d.last_active_at AS lastActiveAt,
+                d.verified_at AS verifiedAt,
+                s.expires_at AS expiresAt,
+                s.hash=? AS current
        FROM im_sessions s JOIN im_login_devices d ON d.session_hash=s.hash
        WHERE s.user_id=? AND s.expires_at>? ORDER BY current DESC, last_active_at DESC`,
       )
       .all(digest(token), userId, now)
       .map((row) => ({ ...row, current: Boolean(row.current) }));
+  }
+  renameLoginDevice(userId: string, deviceId: string, customName: string) {
+    const cleaned = customName.trim();
+    const updated = this.db
+      .prepare(
+        `UPDATE im_login_devices SET custom_name=?
+         WHERE id=? AND session_hash IN (SELECT hash FROM im_sessions WHERE user_id=? AND expires_at>?)`,
+      )
+      .run(cleaned ? cleaned : null, deviceId, userId, Date.now());
+    if (!updated.changes) throw new ChatError(404, '登录设备不存在或已退出');
   }
   logoutDevice(userId: string, token: string, deviceId: string) {
     const removed = this.db
