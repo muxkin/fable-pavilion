@@ -2,6 +2,8 @@
 
 <img src="src/web/public/app-icons/pavilion-192.png" alt="子虚亭应用图标" width="96" height="96">
 
+**官方网站：[https://fablepavilion.com](https://fablepavilion.com)** · **网页客户端：[https://app.fablepavilion.com](https://app.fablepavilion.com)** · **安装包下载：[GitHub Releases](https://github.com/muxkin/fable-pavilion/releases)**
+
 **随时随地在手机、平板或网页上，安全接续电脑上的 AI Agent 会话，并与你的 Agent 进行端到端加密聊天和实时通话。**
 
 子虚亭（Fable Pavilion）是一个可自行部署的远程 Agent 工作台与加密消息应用。通过运行在电脑上的**纯 Rust 桌面适配器**和独立插件进程，你可以在移动设备上实时查看本机运行的 **Codex**、**DSH** 与 **Antigravity** 会话进度、继续发送指令、回答提问、处理审批及收发文件；也可以在独立的消息账户中与自己的 Agent 单聊、群聊协作，或发起实时语音和视频通话。
@@ -19,13 +21,34 @@
 - **无缝接续桌面 Agent**：按项目浏览和搜索本机 Codex、DSH、Antigravity 会话，实时同步回复与工具活动；手机与电脑共享同一会话，关闭网页不会中断本机任务。
 - **完整交互与任务控制**：支持发送、运行中追加、排队下一轮、中断任务、切换模型与计划模式、选择本机技能/插件、逐题回答提问以及处理命令和文件审批。
 - **富媒体与附件传输**：支持 Markdown、代码高亮、KaTeX 公式、Mermaid 图表、Diff、图片缩放与音视频播放；支持分块校验与断点续传，优先经由设备级 WebRTC 直连传输，失败时自动回退至加密中继或可选对象存储。
-- **人与 Agent 加密消息**：独立的永久字符串 UID 账号体系，支持单聊、群聊、流式回复、交互审批/提问卡片、表情包与语音消息；正文与附件在客户端加密，云端仅保存密文。
+- **人与 Agent 加密消息**：独立的永久字符串 UID 账号体系，支持单聊、群聊、流式回复、交互审批/提问卡片、表情包与语音消息；正文与附件在客户端加密，云端仅保存密文且满 7 天自动清理（头像与表情包永久保留），本地加密缓存不受影响并支持 Markdown / JSON 导出。
 - **实时音视频通话**：支持与已接入媒体处理器的 Agent 进行 WebRTC 双向语音与视频通话。
 - **纯 Rust 桌面适配器**：无 Node / Python 运行时依赖，系统托盘静默运行，支持 Windows、macOS、Linux 安装包与无头网关，内置离线**秘钥簿**（TOTP 动态码与恢复码本地安全存储）及独立插件在线升级/回滚。
-- **统一云端架构**：支持 **VPS / Node** 与 **Cloudflare Workers + Durable Objects + R2** 两种部署方式，共用同一套前端、加密协议与业务逻辑。
-- **跨平台客户端与主题**：提供 Web / PWA 与 [Android 客户端](android/README.md)，内置子虚亭月白/夜亭昼夜主题及 Material Color 自定义主题导入导出。
+- **统一云端架构与独立管理台**：支持 **VPS / Node** 与 **Cloudflare Workers + Durable Objects + R2** 两种部署方式，共用同一套前端、加密协议与业务逻辑，并配备独立的零知识运维管理台。
+- **跨平台客户端、双语与统一主题**：提供 Web / PWA 与 [Android 客户端](android/README.md)（支持核心壳增量验签热更新），全面支持中 / 英双语（跟随系统 / 简体中文 / English），内置行为统一的三套预设主题（月白/夜亭、青竹/墨绿、晴空/深海）、可开关的亭台背景画及 Material Color 自定义主题导入导出。
 
 ## 快速开始
+
+- **访问官网了解更多**：[https://fablepavilion.com](https://fablepavilion.com)
+- **直接打开网页端**：[https://app.fablepavilion.com](https://app.fablepavilion.com)
+
+### 将网页添加到桌面（PWA 独立应用安装）
+
+子虚亭支持标准 PWA，无需下载商店即可直接安装到手机主屏幕或电脑桌面，获得接近原生应用的独立窗口、全屏沉浸体验与离线缓存：
+
+- **电脑端（Chrome / Edge）**
+  1. 使用 Chrome 或 Edge 打开 [https://app.fablepavilion.com](https://app.fablepavilion.com)（或你自部署的站点）。
+  2. 点击地址栏最右侧的 **「安装子虚亭」** 图标（或打开浏览器右上角菜单 → **「投放、保存和分享 / 应用 → 安装此站点为应用」**）。
+  3. 确认安装后，即可在桌面、开始菜单、任务栏或 macOS 程序坞中作为独立窗口启动。
+- **Android 手机 / 平板**
+  - **PWA 方式**：在 Chrome / Edge 打开网页后，点击应用内的 **「安装应用」** 提示，或在浏览器菜单选择 **「添加到主屏幕 / 安装应用」**。
+  - **原生外壳 APK**：也可在网页端「我的 → 软件下载」或 [GitHub Releases](https://github.com/muxkin/fable-pavilion/releases) 直接下载签名 Android 安装包（支持验签热更新与应用内静默检测升级）。
+- **iPhone / iPad（Safari）**
+  1. 使用系统自带 **Safari** 浏览器打开 [https://app.fablepavilion.com](https://app.fablepavilion.com)。
+  2. 点击底部（或地址栏）的 **「分享」** 按钮（带向上箭头的方框）。
+  3. 向下滑动并点击 **「添加到主屏幕」** → 右上角点击 **「添加」**，之后从主屏幕图标打开即可全屏使用。
+- **鸿蒙 / 其他移动浏览器**
+  - 在浏览器底部或右上角菜单中选择 **「添加到桌面 / 添加到主屏幕」**，即可生成桌面快捷入口。
 
 ### 方式一：使用桌面适配器（推荐）
 
