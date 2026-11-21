@@ -20,6 +20,11 @@ jobs:
           version=$(sed -n 's/^version = "\([0-9][0-9.]*\)"$/\1/p' desktop/native/Cargo.toml)
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test "$GITHUB_REF_NAME" = "native-rust-v$version"
+          if gh release view "$GITHUB_REF_NAME" --json tagName >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already published; skipping duplicate publish."
+            echo "skip_publish=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
           commit=$(git rev-parse HEAD)
           run_id=$(gh api "repos/$GH_REPO/actions/workflows/desktop-native.yml/runs?head_sha=$commit&status=success&event=push&per_page=30" \
             --jq '.workflow_runs | map(select(.conclusion == "success" and (.head_branch | startswith("native-rust-qa-v")))) | first | .id // empty')
@@ -68,6 +73,7 @@ jobs:
           sha256sum AgentSpace-* > SHA256SUMS
           sha256sum --check --strict SHA256SUMS
       - name: Publish the verified installers, plugins and Cargo source package
+        if: env.skip_publish != 'true'
         run: |
           set -euo pipefail
           version=${GITHUB_REF_NAME#native-rust-v}
