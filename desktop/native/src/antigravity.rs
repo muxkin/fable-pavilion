@@ -85,7 +85,6 @@ pub struct Backend {
     home: PathBuf,
     read_only: bool,
     write_in_question_ids: bool,
-    bounded_question_responses: bool,
     client: reqwest::Client,
     subscriptions: Arc<Mutex<HashMap<String, Weak<Subscription>>>>,
     oversized_history: Arc<Mutex<VecDeque<OversizedHistory>>>,
@@ -151,7 +150,6 @@ impl Backend {
             home,
             read_only: read_only || config["readOnly"] == true,
             write_in_question_ids: host_capabilities["writeInQuestionIds"] == true,
-            bounded_question_responses: host_capabilities["boundedQuestionResponses"] == true,
             client: reqwest::Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
@@ -622,11 +620,32 @@ impl Backend {
         }
     }
 
-    // Send and interrupt still require the complete native trajectory.
     async fn snapshot(&self, id: &str) -> Result<View> {
-        let (daemon, summary) = self.conversation(id).await?;
-        let data = self.trajectory(&daemon, id).await?;
-        self.full_view(id, &summary, &daemon, data).await
+        self.history_view(id, None).await.map(HistoryView::view)
+    }
+
+    fn thread_reason(&self, requests: &[Value], active: bool) -> Option<&'static str> {
+        if self.read_only {
+            Some("Antigravity 当前为只读模式")
+        } else if requests
+            .iter()
+            .any(|request| request["actionable"] == true && request["kind"] == "question")
+        {
+            Some("请先回答 Antigravity 的问题")
+        } else if requests
+            .iter()
+            .any(|request| request["actionable"] == true && request["kind"] == "file")
+        {
+            Some("请先处理 Antigravity 的文件修改审批")
+        } else if requests.iter().any(|request| request["actionable"] == true) {
+            Some("请先处理 Antigravity 的命令审批")
+        } else if !requests.is_empty() {
+            Some("请在 Antigravity 本机处理请求")
+        } else if active {
+            Some("Antigravity 正在运行")
+        } else {
+            None
+        }
     }
 
     async fn history_view(
@@ -648,49 +667,102 @@ impl Backend {
             .context("Antigravity 会话版本不可用")?;
         let latest = cursor.is_none();
         let page = history::browse(self, &daemon, id, trajectory, cursor).await?;
-        let mut requests = Vec::new();
-        if latest
-            && !self.read_only
-            && self.bounded_question_responses
-            && let Some((index, step)) = page.waiting_question()
-            && let Some(request) = interactions::bounded_question(id, trajectory, index, step)
-        {
-            requests.push(request);
-            self.apply_question_capabilities(&mut requests);
-        }
+        let live_tail = latest && page.is_tail();
         let projects = self.projects().await.unwrap_or_else(|_| json!([]));
         let mut thread = summary_with_projects(id, &summary, &projects);
         thread["historyTrajectoryId"] = json!(trajectory);
         thread["historyStepCount"] = json!(page.total_steps());
-        // The projected window may omit blocking interactions or changes to an
-        // earlier execution. A question at the live tail has its own gate.
         thread["revision"] = json!(0);
-        thread["owner"] = json!(false);
-        thread["synchronized"] = json!(false);
-        thread["activeTurnId"] = Value::Null;
-        thread["runtimeStatus"] = json!("unknown");
-        thread["model"] = Value::Null;
         thread["mode"] = json!("default");
-        let can_answer = !requests.is_empty();
-        if can_answer {
-            thread["boundedQuestionAvailable"] = json!(true);
-        }
-        thread["pendingRequests"] = json!(requests.len());
-        thread["requests"] = json!(requests);
-        for capability in ["canSend", "canSteer", "canInterrupt"] {
-            thread[capability] = json!(false);
-        }
-        thread["reason"] = json!(if can_answer {
-            "请先回答 Antigravity 的问题"
+        let observations = if live_tail {
+            let status = page.status();
+            let active = matches!(
+                status.as_str(),
+                Some(
+                    "CASCADE_RUN_STATUS_RUNNING"
+                        | "CASCADE_RUN_STATUS_BUSY"
+                        | "CASCADE_RUN_STATUS_CANCELING"
+                )
+            );
+            let idle = status == "CASCADE_RUN_STATUS_IDLE";
+            let steps = page.steps();
+            let execution = active_execution(steps);
+            let mut requests =
+                interactions::views_slice(Some(id), Some(trajectory), page.start(), steps, self.read_only);
+            self.apply_question_capabilities(&mut requests);
+            let model = current_model(&Value::Null, steps);
+            let catalog = if model.is_some() {
+                self.model_catalog().await
+            } else {
+                Vec::new()
+            };
+            let selected = model.and_then(|id| catalog.iter().find(|m| m.id == id || m.native == id));
+            thread["owner"] = json!(!self.read_only);
+            thread["synchronized"] = json!(true);
+            thread["activeTurnId"] = if active {
+                json!(execution)
+            } else {
+                Value::Null
+            };
+            thread["runtimeStatus"] = json!(if active {
+                "running"
+            } else if idle {
+                "idle"
+            } else {
+                "unknown"
+            });
+            if let Some(activity) = activity_state(steps, active) {
+                thread["codexActivity"] = json!(activity);
+            }
+            thread["model"] = json!(selected.map(|m| &m.id));
+            thread["modelName"] = json!(
+                selected
+                    .map(|m| m.name.as_str())
+                    .unwrap_or("Antigravity 模型")
+            );
+            thread["pendingRequests"] = json!(requests.len());
+            thread["requests"] = json!(requests);
+            let finished = execution.is_some_and(|exec| {
+                execution_finished(&json!({"executorMetadatas": page.executor_metadatas()}), exec)
+            });
+            thread["canSend"] = json!(!self.read_only && idle && requests.is_empty());
+            thread["canSteer"] = json!(
+                !self.read_only
+                    && supports_append(status)
+                    && execution.is_some()
+                    && !finished
+                    && requests.is_empty()
+            );
+            thread["canInterrupt"] = json!(!self.read_only && active && execution.is_some());
+            if let Some(queue) = page.queue() {
+                queue.display(&mut thread);
+            }
+            thread["reason"] = json!(self.thread_reason(&requests, active));
+            page.observations()
         } else {
-            "Antigravity 会话较长，已按页读取历史。请在本机 App 处理当前任务。"
-        });
+            thread["owner"] = json!(false);
+            thread["synchronized"] = json!(false);
+            thread["activeTurnId"] = Value::Null;
+            thread["runtimeStatus"] = json!("unknown");
+            thread["model"] = Value::Null;
+            thread["pendingRequests"] = json!(0);
+            thread["requests"] = json!([]);
+            for capability in ["canSend", "canSteer", "canInterrupt"] {
+                thread[capability] = json!(false);
+            }
+            thread["reason"] = json!(if latest {
+                "最新记录单条过大，请在 Antigravity 本机 App 处理当前任务。"
+            } else {
+                "正在浏览更早的历史记录"
+            });
+            Vec::new()
+        };
         let older = page.older_cursor();
         let view = View {
             thread,
             messages: page.messages().into(),
             streamed: None,
-            observations: Arc::from([]),
+            observations: observations.into(),
             image_limits: Value::Null,
             continued_questions: Value::Null,
             plugin_epoch: None,
@@ -797,27 +869,7 @@ impl Backend {
         if let Ok(queue) = queue::read(self, daemon, id).await {
             queue.display(&mut view);
         }
-        view["reason"] = json!(if self.read_only {
-            Some("Antigravity 当前为只读模式")
-        } else if requests
-            .iter()
-            .any(|request| request["actionable"] == true && request["kind"] == "question")
-        {
-            Some("请先回答 Antigravity 的问题")
-        } else if requests
-            .iter()
-            .any(|request| request["actionable"] == true && request["kind"] == "file")
-        {
-            Some("请先处理 Antigravity 的文件修改审批")
-        } else if requests.iter().any(|request| request["actionable"] == true) {
-            Some("请先处理 Antigravity 的命令审批")
-        } else if !requests.is_empty() {
-            Some("请在 Antigravity 本机处理请求")
-        } else if active {
-            Some("Antigravity 正在运行")
-        } else {
-            None
-        });
+        view["reason"] = json!(self.thread_reason(&requests, active));
         let observations = observations(&data);
         Ok(View {
             thread: view,
@@ -840,7 +892,7 @@ impl Backend {
         }
     }
 
-    async fn bounded_question_response(
+    async fn paged_interaction_response(
         &self,
         daemon: &Daemon,
         thread: &str,
@@ -854,11 +906,11 @@ impl Backend {
             .context("Antigravity 会话版本不可用")?;
         let page = history::step_page(self, daemon, thread, trajectory, index)
             .await?
-            .context("Antigravity 问题已处理或过期")?;
-        let (index, step) = page
-            .waiting_question()
-            .context("Antigravity 问题已处理或过期")?;
-        interactions::bounded_question_response(thread, trajectory, index, step, answer)
+            .context("Antigravity 请求已处理或过期")?;
+        let step = page
+            .waiting_step(index)
+            .context("Antigravity 请求已处理或过期")?;
+        interactions::step_response(thread, trajectory, index, step, answer)
     }
 
     async fn respond_to_interaction(
@@ -880,8 +932,8 @@ impl Backend {
                 }
                 interactions::response(trajectory, answer)
             }
-            Ok(None) if self.bounded_question_responses => {
-                self.bounded_question_response(&daemon, thread, answer)
+            Ok(None) => {
+                self.paged_interaction_response(&daemon, thread, answer)
                     .await
             }
             _ => return Delivery::Rejected("Antigravity 会话尚未同步"),

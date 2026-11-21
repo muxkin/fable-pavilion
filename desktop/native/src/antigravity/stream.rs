@@ -15,11 +15,16 @@ pub(super) async fn first_update(
     timeout: Duration,
 ) -> Result<Value> {
     let empty = json!({"startIndex":0,"endIndexExclusive":0});
+    let executors = if steps.end > steps.start {
+        json!({"startIndex":0,"endIndexExclusive":1000})
+    } else {
+        empty.clone()
+    };
     let payload = serde_json::to_vec(&json!({
         "conversationId":thread,"subscriberId":Uuid::new_v4(),
         "initialStepsPageBounds":{"startIndex":steps.start,"endIndexExclusive":steps.end},
         "initialGeneratorMetadatasPageBounds":empty,
-        "initialExecutorMetadatasPageBounds":empty,
+        "initialExecutorMetadatasPageBounds":executors,
     }))?;
     let mut request = vec![0];
     request.extend_from_slice(&(payload.len() as u32).to_be_bytes());

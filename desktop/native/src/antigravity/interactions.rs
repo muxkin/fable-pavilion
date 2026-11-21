@@ -57,16 +57,34 @@ fn bounded_text(value: &Value, limit: usize) -> Option<&str> {
 }
 
 pub(super) fn views(trajectory: &Value, read_only: bool) -> Vec<Value> {
-    trajectory["steps"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let Some(steps) = trajectory["steps"].as_array() else {
+        return Vec::new();
+    };
+    views_slice(
+        trajectory["cascadeId"].as_str(),
+        trajectory["trajectoryId"].as_str(),
+        0,
+        steps,
+        read_only,
+    )
+}
+
+pub(super) fn views_slice(
+    thread: Option<&str>,
+    trajectory_id: Option<&str>,
+    offset: usize,
+    steps: &[Value],
+    read_only: bool,
+) -> Vec<Value> {
+    steps
+        .iter()
         .enumerate()
-        .filter_map(|(index, step)| {
+        .filter_map(|(rel, step)| {
+            let index = offset + rel;
             if !pending_interaction(step) && questions::asked(step).is_none() {
                 return None;
             }
-            if let Some(target) = target_in_trajectory(trajectory, index, step) {
+            if let Some(target) = Target::read(thread, trajectory_id, index, step) {
                 if let Some(question) = questions::QuestionBatch::read(step) {
                     return Some(question.view(&target, !read_only));
                 }
@@ -95,7 +113,24 @@ pub(super) fn response(trajectory: &Value, answer: &Response) -> Result<Value> {
         .as_array()
         .and_then(|steps| steps.get(index))
         .context("Antigravity 请求已处理或过期")?;
-    let target = target_in_trajectory(trajectory, index, step).context("Antigravity 请求已变化")?;
+    step_response(
+        trajectory["cascadeId"].as_str().context("Antigravity 请求已变化")?,
+        trajectory["trajectoryId"].as_str().context("Antigravity 请求已变化")?,
+        index,
+        step,
+        answer,
+    )
+}
+
+pub(super) fn step_response(
+    thread: &str,
+    trajectory: &str,
+    index: usize,
+    step: &Value,
+    answer: &Response,
+) -> Result<Value> {
+    let target = Target::read(Some(thread), Some(trajectory), index, step)
+        .context("Antigravity 请求已变化")?;
     if let Some(question) = questions::QuestionBatch::read(step) {
         return reply_to_question(&question, &target, answer);
     }
@@ -116,30 +151,6 @@ pub(super) fn request_index(answer: &Response) -> Result<usize> {
         .strip_prefix("antigravity-")
         .and_then(|index| index.parse::<usize>().ok())
         .context("Antigravity 请求标识无效")
-}
-
-pub(super) fn bounded_question(
-    thread: &str,
-    trajectory: &str,
-    index: usize,
-    step: &Value,
-) -> Option<Value> {
-    let target = Target::read(Some(thread), Some(trajectory), index, step)?;
-    let question = questions::QuestionBatch::read(step)?;
-    Some(question.view(&target, true))
-}
-
-pub(super) fn bounded_question_response(
-    thread: &str,
-    trajectory: &str,
-    index: usize,
-    step: &Value,
-    answer: &Response,
-) -> Result<Value> {
-    let target = Target::read(Some(thread), Some(trajectory), index, step)
-        .context("Antigravity 请求已变化")?;
-    let question = questions::QuestionBatch::read(step).context("Antigravity 问题已处理或过期")?;
-    reply_to_question(&question, &target, answer)
 }
 
 pub(super) fn question_recorded(
@@ -177,19 +188,6 @@ pub(super) fn question_recorded(
             &sent["askQuestion"]["responses"],
             &response["askQuestion"]["responses"],
         )
-}
-
-fn target_in_trajectory<'a>(
-    trajectory: &'a Value,
-    index: usize,
-    step: &'a Value,
-) -> Option<Target<'a>> {
-    Target::read(
-        trajectory["cascadeId"].as_str(),
-        trajectory["trajectoryId"].as_str(),
-        index,
-        step,
-    )
 }
 
 fn reply_to_question(

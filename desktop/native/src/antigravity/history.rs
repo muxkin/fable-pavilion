@@ -40,13 +40,50 @@ pub(super) struct Page {
     total: usize,
     start: usize,
     steps: Vec<Value>,
+    status: Value,
     running: bool,
     oversized_step: bool,
+    executor_metadatas: Vec<Value>,
+    queue: Option<super::queue::Snapshot>,
 }
 
 impl Page {
     pub(super) fn total_steps(&self) -> usize {
         self.total
+    }
+
+    pub(super) fn is_tail(&self) -> bool {
+        !self.oversized_step && self.start + self.steps.len() == self.total
+    }
+
+    pub(super) fn status(&self) -> &Value {
+        &self.status
+    }
+
+    pub(super) fn steps(&self) -> &[Value] {
+        &self.steps
+    }
+
+    pub(super) fn start(&self) -> usize {
+        self.start
+    }
+
+    pub(super) fn executor_metadatas(&self) -> &[Value] {
+        &self.executor_metadatas
+    }
+
+    pub(super) fn queue(&self) -> Option<&super::queue::Snapshot> {
+        self.queue.as_ref()
+    }
+
+    pub(super) fn observations(&self) -> Vec<crate::plugins::Observation> {
+        super::observations(&json!({
+            "status": self.status,
+            "trajectory": {
+                "steps": self.steps,
+                "executorMetadatas": self.executor_metadatas,
+            },
+        }))
     }
 
     pub(super) fn older_cursor(&self) -> Option<String> {
@@ -69,17 +106,16 @@ impl Page {
         super::messages(&self.steps, self.start, false)
     }
 
-    pub(super) fn waiting_question(&self) -> Option<(usize, &Value)> {
-        // An older slice and any slice that stopped being the tail cannot
-        // prove the question still belongs to the current native execution.
-        if !self.running || self.oversized_step || self.start + self.steps.len() != self.total {
+    pub(super) fn waiting_step(&self, index: usize) -> Option<&Value> {
+        if !self.running || !self.is_tail() || index < self.start {
             return None;
         }
-        let last = self.steps.last()?;
-        (last["status"] == "CORTEX_STEP_STATUS_WAITING").then_some((self.total - 1, last))
+        let step = self.steps.get(index - self.start)?;
+        (step["status"] == "CORTEX_STEP_STATUS_WAITING").then_some(step)
     }
 
     fn parse(mut frame: Value, thread: &str, requested: Range<usize>) -> Result<Self> {
+        let queue = super::queue::Snapshot::from_frame(&frame, thread).ok();
         let update = &mut frame["update"];
         ensure!(update["conversationId"] == thread, "Antigravity 会话已变化");
         let trajectory = update["trajectoryId"]
@@ -87,7 +123,13 @@ impl Page {
             .context("Antigravity 会话版本不可用")?
             .to_owned();
         valid_id(&trajectory)?;
-        let running = supports_append(&update["status"]);
+        let status = update["status"].clone();
+        let running = supports_append(&status);
+        let executor_metadatas = update["mainTrajectoryUpdate"]["executorMetadatasUpdate"]
+            ["executorMetadatas"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         let ranged = &mut update["mainTrajectoryUpdate"]["stepsUpdate"];
         ensure!(
             ranged["pageBounds"].is_object(),
@@ -119,8 +161,11 @@ impl Page {
             total,
             start,
             steps,
+            status,
             running,
             oversized_step: false,
+            executor_metadatas,
+            queue,
         })
     }
 
@@ -428,6 +473,11 @@ mod tests {
                 }
                 data(json!({}))
             }
+            "SendUserCascadeMessage" => {
+                let sent: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(sent["cascadeId"], THREAD);
+                data(json!({}))
+            }
             other => panic!("Unexpected native RPC: {other}"),
         };
         Response::new(response)
@@ -586,17 +636,13 @@ mod tests {
             .await?
             .context("Missing current history")?;
         let thread = &initial["thread"];
-        assert_eq!(thread["boundedQuestionAvailable"], true);
+        assert_eq!(thread["owner"], true);
+        assert_eq!(thread["synchronized"], true);
         assert_eq!(thread["pendingRequests"], 1);
-        for field in [
-            "owner",
-            "synchronized",
-            "canSend",
-            "canSteer",
-            "canInterrupt",
-        ] {
+        for field in ["canSend", "canSteer"] {
             assert_eq!(thread[field], false);
         }
+        assert_eq!(thread["canInterrupt"], true);
         let question = &thread["requests"][0];
         assert_eq!(question["id"], format!("antigravity-{QUESTION_INDEX}"));
         assert_eq!(question["turnId"], "fixture-execution");
@@ -619,29 +665,14 @@ mod tests {
             .read("thread.read", &params, &Value::Null)
             .await?
             .context("Missing read-only history")?;
-        assert_eq!(reader_view["thread"]["requests"], json!([]));
+        assert_eq!(reader_view["thread"]["owner"], false);
+        assert_eq!(reader_view["thread"]["requests"][0]["actionable"], false);
         assert!(matches!(
             answer_question(&read_only, &answer).await,
             Delivery::Rejected(_)
         ));
-        let legacy = Backend::from_config(
-            "legacy".into(),
-            "Legacy".into(),
-            &config,
-            false,
-            &Value::Null,
-        )?;
-        let legacy_view = legacy
-            .read("thread.read", &params, &Value::Null)
-            .await?
-            .context("Missing legacy history")?;
-        assert_eq!(legacy_view["thread"]["requests"], json!([]));
-        assert!(matches!(
-            answer_question(&legacy, &answer).await,
-            Delivery::Rejected(_)
-        ));
         let full_reads = fixture.lock().unwrap().full_reads;
-        assert_eq!(full_reads, 3);
+        assert_eq!(full_reads, 2);
 
         let mut stale = answer.clone();
         stale.expected_fingerprint = "0".repeat(64);
@@ -751,14 +782,15 @@ mod tests {
             .borrow_and_update()
             .clone()
             .context("Missing live question")?;
-        assert_eq!(initial.thread["boundedQuestionAvailable"], true);
+        assert_eq!(initial.thread["synchronized"], true);
+        assert_eq!(initial.thread["requests"][0]["actionable"], true);
         fixture.lock().unwrap().invalid_indices = true;
         tokio::time::timeout(Duration::from_secs(5), watcher.changed()).await??;
         let stale = watcher
             .borrow_and_update()
             .clone()
             .context("Missing stale live view")?;
-        assert_eq!(stale.thread["boundedQuestionAvailable"], false);
+        assert_eq!(stale.thread["synchronized"], false);
         assert_eq!(stale.thread["requests"][0]["actionable"], false);
         fixture.lock().unwrap().invalid_indices = false;
         tokio::time::timeout(Duration::from_secs(5), watcher.changed()).await??;
@@ -766,7 +798,7 @@ mod tests {
             .borrow()
             .clone()
             .context("Missing recovered live view")?;
-        assert_eq!(recovered.thread["boundedQuestionAvailable"], true);
+        assert_eq!(recovered.thread["synchronized"], true);
         assert_eq!(recovered.thread["requests"][0]["actionable"], true);
         assert_eq!(fixture.lock().unwrap().full_reads, 1);
         server.abort();
@@ -774,7 +806,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oversized_history_browses_absolute_step_ranges_without_authorizing_writes()
+    async fn oversized_history_browses_absolute_step_ranges_and_supports_live_tail_writes()
     -> Result<()> {
         let home = tempfile::tempdir()?;
         let directory = home
@@ -803,9 +835,9 @@ mod tests {
         assert_eq!(view.thread["id"], THREAD);
         assert_eq!(view.thread["historyTrajectoryId"], TRAJECTORY);
         assert_eq!(view.thread["historyStepCount"], TOTAL);
-        assert_eq!(view.thread["synchronized"], false);
-        assert_eq!(view.thread["owner"], false);
-        assert_eq!(view.thread["canSend"], false);
+        assert_eq!(view.thread["synchronized"], true);
+        assert_eq!(view.thread["owner"], true);
+        assert_eq!(view.thread["canSend"], true);
         assert_eq!(view.thread["canSteer"], false);
         assert_eq!(view.thread["canInterrupt"], false);
         assert_eq!(view.thread["requests"], json!([]));
@@ -831,6 +863,8 @@ mod tests {
             .await?
             .unwrap();
         assert_eq!(older["nextCursor"], Value::Null);
+        assert_eq!(older["thread"]["synchronized"], false);
+        assert_eq!(older["thread"]["canSend"], false);
         assert_eq!(older["messages"][0]["id"], "antigravity-step-0");
         assert_eq!(older["messages"][96]["id"], "antigravity-step-96");
         assert_eq!(older["messages"][17]["truncated"], true);
@@ -886,30 +920,33 @@ mod tests {
                     .is_err()
             );
         }
-
-        let result = backend
+        {
+            let mut fixture = fixture.lock().unwrap();
+            fixture.trajectory = TRAJECTORY;
+            fixture.total = TOTAL;
+            fixture.invalid_indices = false;
+        }
+        let sent = backend
             .write(
                 THREAD,
                 Uuid::new_v4(),
                 Write::Send {
-                    text: "fixture".to_owned(),
+                    text: "fixture live tail send".to_owned(),
                     files: Vec::new(),
                     skills: Vec::new(),
                     plugin_ids: Vec::new(),
                     model: None,
                 },
                 None,
-                &|_| panic!("Read-only history must not create"),
+                &|_| panic!("Sending must not create"),
             )
             .await;
-        assert!(matches!(result, Delivery::Rejected(_)));
-        assert_eq!(fixture.lock().unwrap().full_reads, 2);
+        assert!(matches!(sent, Delivery::Accepted(None)));
+        assert_eq!(fixture.lock().unwrap().full_reads, 1);
 
         {
             let mut fixture = fixture.lock().unwrap();
             fixture.oversized = false;
-            fixture.trajectory = TRAJECTORY;
-            fixture.invalid_indices = false;
         }
         backend.oversized_history.lock().unwrap().clear();
         let normal = backend

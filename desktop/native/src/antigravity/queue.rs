@@ -40,7 +40,7 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
-    fn from_frame(frame: &Value, thread: &str) -> Result<Self> {
+    pub(super) fn from_frame(frame: &Value, thread: &str) -> Result<Self> {
         let update = &frame["update"];
         ensure!(
             update["conversationId"] == thread && update["mainTrajectoryUpdate"].is_object(),

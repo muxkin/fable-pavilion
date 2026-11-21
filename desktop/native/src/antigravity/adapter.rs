@@ -98,11 +98,16 @@ impl Adapter for Backend {
         }
         let uris = self.conversation_workspaces(thread).await?;
         let roots = export::workspace_roots(&uris);
-        let (daemon, _) = self.conversation(thread).await?;
+        let (daemon, summary) = self.conversation(thread).await?;
         let steps = if let Some(data) = self.readable_trajectory(&daemon, thread).await? {
             data["trajectory"]["steps"]
                 .as_array()
                 .cloned()
+                .unwrap_or_default()
+        } else if let Some(trajectory) = summary["trajectoryId"].as_str() {
+            history::browse(self, &daemon, thread, trajectory, None)
+                .await
+                .map(|page| page.steps().to_vec())
                 .unwrap_or_default()
         } else {
             Vec::new()
@@ -273,46 +278,24 @@ impl Adapter for Backend {
                 if !files.is_empty() || !valid_text(text.trim()) {
                     return Delivery::Rejected("Antigravity 追加指令仅支持文本");
                 }
-                if valid_id(thread).is_err() {
-                    return Delivery::Rejected("Antigravity 会话标识无效");
-                }
-                let Ok(daemon) = self.daemon().await else {
-                    return Delivery::Rejected("Antigravity 本地服务不可用");
-                };
-                let Ok(data) = self
-                    .call_at(
-                        &daemon,
-                        "GetCascadeTrajectory",
-                        &json!({"cascadeId":thread}),
-                        false,
-                    )
-                    .await
-                else {
+                let Ok(view) = self.snapshot(thread).await else {
                     return Delivery::Rejected("Antigravity 会话尚未同步");
                 };
-                let trajectory = &data["trajectory"];
-                let active = trajectory["steps"]
-                    .as_array()
-                    .and_then(|steps| active_execution(steps));
-                if trajectory["cascadeId"] != thread
-                    || !supports_append(&data["status"])
-                    || active != Some(expected.as_str())
-                    || execution_finished(trajectory, &expected)
-                    || !interactions::views(trajectory, false).is_empty()
+                if view.thread["canSteer"] != true
+                    || view.thread["activeTurnId"] != expected
+                    || view.thread["pendingRequests"] != 0
                 {
                     return Delivery::Rejected("Antigravity 当前任务已变化或正在等待确认");
                 }
                 delivery(
-                    self.call_at(
-                        &daemon,
+                    self.dispatch(
                         "SendUserCascadeMessage",
-                        &json!({
+                        json!({
                             "cascadeId":thread,
                             "items":[{"text":text.trim()}],
                             "clientMessageId":request,
                             "deliveryStrategy":NEXT_INVOCATION,
                         }),
-                        true,
                     )
                     .await,
                     Delivery::Accepted(None),
