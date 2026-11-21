@@ -125,13 +125,21 @@ onUnmounted(() => installerRequests.abort());
             {{ androidUpdate ? '下载新版' : '下载' }}
           </a>
         </li>
-        <li v-if="pwaInstall.available.value" class="installer-row">
+        <li v-if="pwaInstall.available.value || pwaInstall.feedback.value" class="installer-row">
           <span class="platform-icon"><SvgIcon name="phone" :size="22" /></span>
           <div class="installer-info">
             <strong>网页应用（PWA）</strong>
-            <small>添加到主屏幕，以独立窗口运行</small>
+            <small>{{ pwaInstall.feedback.value || '添加到主屏幕，以独立窗口运行' }}</small>
           </div>
-          <button type="button" class="installer-download" @click="pwaInstall.install()">安装应用</button>
+          <button
+            v-if="pwaInstall.available.value"
+            type="button"
+            class="installer-download"
+            :disabled="pwaInstall.busy.value"
+            @click="pwaInstall.install()"
+          >
+            安装应用
+          </button>
         </li>
       </ul>
     </section>

@@ -161,11 +161,12 @@ export default tsxComponent(function MePages(_props: {
               <h2 class="settings-section-title" id="me-preferences-group">
                 偏好
               </h2>
-              {pwaInstall.available.value && (
+              {(pwaInstall.available.value || pwaInstall.feedback.value) && (
                 <Row
                   icon="phone"
                   title="安装到主屏幕"
-                  detail="以独立应用方式打开子虚亭"
+                  detail={pwaInstall.feedback.value || '以独立应用方式打开子虚亭'}
+                  disabled={!pwaInstall.available.value || pwaInstall.busy.value}
                   onClick={() => void pwaInstall.install()}
                 />
               )}
