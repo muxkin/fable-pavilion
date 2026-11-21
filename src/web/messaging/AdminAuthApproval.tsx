@@ -17,20 +17,33 @@ interface AuthInfo {
   expiresAt: number;
 }
 
-/** Capture ?admin-auth=...&code=... synchronously at boot before router history replaces the URL. */
-export function takeAdminAuthParams(): AdminAuthParams | null {
+/** Parse an admin-auth handoff URL scanned from the standalone Admin Console QR code. */
+export function parseAdminAuthUrl(text: string): AdminAuthParams | null {
   try {
-    const url = new URL(location.href);
+    const url = new URL(text.trim());
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return null;
     const id = url.searchParams.get('admin-auth') ?? '';
     const code = url.searchParams.get('code') ?? '';
     if (
       /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id) &&
       /^\d{6}$/.test(code)
     ) {
+      return { id, code };
+    }
+  } catch {}
+  return null;
+}
+
+/** Capture ?admin-auth=...&code=... synchronously at boot before router history replaces the URL. */
+export function takeAdminAuthParams(): AdminAuthParams | null {
+  try {
+    const parsed = parseAdminAuthUrl(location.href);
+    if (parsed) {
+      const url = new URL(location.href);
       url.searchParams.delete('admin-auth');
       url.searchParams.delete('code');
       history.replaceState(history.state, '', url.pathname + url.search + url.hash);
-      return { id, code };
+      return parsed;
     }
   } catch {}
   return null;

@@ -23,6 +23,7 @@ import { defaultTrustedDeviceName, loginMatchCode } from './TrustedLogin';
 import { TrustedLoginCodes } from './TrustedLoginCodes';
 import { Confirm, Notice, errorText, time } from './ui';
 import { deviceLoginRequired } from './context';
+import { AdminAuthApproval, parseAdminAuthUrl, type AdminAuthParams } from './AdminAuthApproval';
 
 export const TrustedDevices = tsxComponent(function TrustedDevices(props: {
   accountId: string;
@@ -37,6 +38,7 @@ export const TrustedDevices = tsxComponent(function TrustedDevices(props: {
   const revoke = shallowRef<TrustedDevicesState['devices'][number]>();
   const inviteOpen = shallowRef(false);
   const scannerOpen = shallowRef(false);
+  const adminAuth = shallowRef<AdminAuthParams | null>(null);
   const approval = shallowRef<QrApprovalRequest>();
   const checkingQr = shallowRef(false);
   const matchCode = shallowRef('');
@@ -134,6 +136,12 @@ export const TrustedDevices = tsxComponent(function TrustedDevices(props: {
   }
 
   function readQrLogin(text: string) {
+    const adminReq = parseAdminAuthUrl(text);
+    if (adminReq) {
+      scannerOpen.value = false;
+      adminAuth.value = adminReq;
+      return;
+    }
     const { id, fingerprint } = parseQrLoginUrl(text);
     void openApproval(id, fingerprint);
   }
@@ -451,6 +459,13 @@ export const TrustedDevices = tsxComponent(function TrustedDevices(props: {
               </div>
             )}
           </Dialog>
+        )}
+        {adminAuth.value && (
+          <AdminAuthApproval
+            key={adminAuth.value.id}
+            request={adminAuth.value}
+            onClose={() => (adminAuth.value = null)}
+          />
         )}
         {revoke.value && (
           <Confirm
