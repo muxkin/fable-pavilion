@@ -11,12 +11,14 @@
 | 能力域 | 共享核心位置 | 运行时差异 |
 | --- | --- | --- |
 | Web / PWA 界面与工作台 | `src/web` | Node 静态服务 / Cloudflare Worker Static Assets |
+| 独立零知识运维管理台 | `src/admin`、`scripts/admin-release` | Node `/admin/` 静态挂载 / 独立 Cloudflare Pages 站点 |
 | 客户端加密账号、消息与协议 | `src/client`、`src/shared` | 无平台分支 |
-| 账户、联系人、消息、附件与清理 API | `src/server/messaging/service-core.ts`、`store-core.ts` | Fastify / Worker HTTP；本机 SQLite / DO SQLite |
+| 账户、联系人、消息、附件、7 天清理与管理 API | `src/server/messaging/service-core.ts`、`store-core.ts`、`admin-queries.ts` | Fastify / Worker HTTP；本机 SQLite / DO SQLite |
 | 密文中继路由、鉴权、连接配额与转发 | `src/server/relay-core.ts` | Node `ws` / Durable Object 休眠 WebSocket |
 | 资源策略计量与 Lago 适配 | `src/server/resources/service.ts`、`lago.ts` | 同名环境变量 / Worker bindings |
 | 浏览器安全头与 CSP | `src/server/edge-policy.ts` | 各运行时写入 HTTP 响应头 |
 | 桌面适配、离线秘钥簿与插件宿主 | `desktop/native` | Windows/macOS/Linux 仅在系统凭据保护与托盘 I/O 层区分 |
+| Android 客户端与增量验签热更新 | `android/` | 仅预取核心入口壳文件，其余 chunk 按需验签缓存并复用 HTTP/2 连接 |
 
 ### 架构一致性约束
 

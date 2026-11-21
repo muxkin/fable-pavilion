@@ -17,7 +17,16 @@ interface WechatReward {
 interface SupportConfig {
   platform?: SupportPlatform;
   wechat?: WechatReward;
+  github?: string | false;
 }
+const defaultGithubRepo = (() => {
+  const configured =
+    typeof __POCKET_RELEASE_REPO__ === 'string'
+      ? __POCKET_RELEASE_REPO__.trim()
+      : 'https://github.com/muxkin/fable-pavilion';
+  if (!configured || configured.toLowerCase() === 'none') return undefined;
+  return configured.replace(/\/+$/, '');
+})();
 function safeURL(value: unknown, image = false): string | undefined {
   if (typeof value !== 'string' || !value.trim()) return;
   try {
@@ -60,6 +69,12 @@ function parseConfig(value: any): SupportConfig {
         : undefined;
     config.wechat = { qr, recipient: w.recipient.trim().slice(0, 80), previewCrop: crop };
   }
+  if (value.github === false) {
+    config.github = false;
+  } else if (typeof value.github === 'string') {
+    const repo = safeURL(value.github);
+    if (repo) config.github = repo.replace(/\/+$/, '');
+  }
   return config;
 }
 const config = shallowRef<SupportConfig>({});
@@ -69,6 +84,19 @@ const imageError = ref(false);
 const imageRevision = ref(0);
 const platform = computed(() => config.value.platform);
 const wechat = computed(() => config.value.wechat);
+const githubRepo = computed(() => {
+  if (config.value.github === false) return undefined;
+  return config.value.github ?? defaultGithubRepo;
+});
+const githubSlug = computed(() => {
+  const repo = githubRepo.value;
+  if (!repo) return '';
+  try {
+    return new URL(repo).pathname.replace(/^\/+|\/+$/g, '');
+  } catch {
+    return '';
+  }
+});
 const crop = computed(() => wechat.value?.previewCrop);
 const imageStyle = computed(() => {
   const area = crop.value;
@@ -172,10 +200,72 @@ function retryImage() {
         </a>
         <div v-else class="support-notice" role="status">{{ platform.name }}主页正在准备中。</div>
       </template>
-      <p v-if="!wechat && !platform" class="support-notice" role="status">
+      <p v-if="!wechat && !platform && !githubRepo" class="support-notice" role="status">
         支持方式正在准备中，谢谢你的心意。
       </p>
     </template>
+    <section v-if="githubRepo" class="support-github-card" aria-labelledby="support-github-title">
+      <div class="support-github-head">
+        <span class="support-platform-icon">
+          <SvgIcon name="github" :size="22" />
+        </span>
+        <div class="support-platform-text">
+          <strong id="support-github-title">开源共建 · GitHub</strong>
+          <small>{{ githubSlug || '访问开源仓库，一起打磨子虚亭' }}</small>
+        </div>
+        <a
+          class="support-github-repo-link"
+          :href="githubRepo"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="打开 GitHub 仓库（新窗口）"
+        >
+          <span>仓库主页</span>
+          <SvgIcon name="external" :size="14" />
+        </a>
+      </div>
+      <div class="support-github-actions">
+        <a
+          class="support-github-action"
+          :href="githubRepo"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="前往 GitHub 为项目点 Star（新窗口）"
+        >
+          <span class="support-github-action-icon">
+            <SvgIcon name="star" :size="18" />
+          </span>
+          <strong>点个 Star</strong>
+          <small>收藏项目，关注更新</small>
+        </a>
+        <a
+          class="support-github-action"
+          :href="`${githubRepo}/issues/new/choose`"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="前往 GitHub 提交 Issue（新窗口）"
+        >
+          <span class="support-github-action-icon">
+            <SvgIcon name="info" :size="18" />
+          </span>
+          <strong>提交 Issue</strong>
+          <small>反馈问题或提出建议</small>
+        </a>
+        <a
+          class="support-github-action"
+          :href="`${githubRepo}/pulls`"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="前往 GitHub 参与贡献加入项目（新窗口）"
+        >
+          <span class="support-github-action-icon">
+            <SvgIcon name="branch" :size="18" />
+          </span>
+          <strong>加入项目</strong>
+          <small>贡献代码、插件或文档</small>
+        </a>
+      </div>
+    </section>
     <section class="support-purpose">
       <h3>每一份支持，都用在持续改进上</h3>
       <p>改进跨端体验与适配器，支持开发、测试和服务维护。</p>

@@ -29,7 +29,7 @@ POCKET_SUPPORT_QR_FILE=/absolute/path/to/private/wechat-reward.png
 }
 ```
 
-- 两个渠道均可独立省略；未设置 `POCKET_SUPPORT_CONFIG` 时，页面显示「支持方式正在准备中」。
+- 两个渠道均可独立省略；页面同时默认展示 **GitHub 开源共建卡片**（点个 Star、提交 Issue、加入项目），链接默认取自构建参数 `POCKET_RELEASE_REPO`（设为 `none` 或在 `support.json` 中配置 `"github": false` 可隐藏，也可在 `support.json` 中通过 `"github": "https://github.com/..."` 覆盖）。
 - **微信赞赏码**：`wechat.qr` 须为 `/support/<文件名>` 形式的同源路径，`POCKET_SUPPORT_QR_FILE` 指向的原图会在构建时原样输出到该路径（不重新压缩损坏码点）；可选 `previewCrop` 按比例裁剪预览可见区域。触屏设备自动提示长按图片保存扫码，桌面端直接展示。
 - **外部赞助平台**：`url` 必须是不含凭据的绝对 HTTPS 地址，`enabled: false` 时显示准备中状态。
 - 所有字段均为公开静态配置，**切勿**写入商户密钥、平台 API Token 或任何私密凭据。
