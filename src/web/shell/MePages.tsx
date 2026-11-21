@@ -23,6 +23,7 @@ const AppearanceSettings = lazy(() => import('../theme/AppearanceSettings.vue'))
 const LoginSecurity = lazy(() => import('../messaging/LoginSecurity'));
 const AccountCredentials = lazy(() => import('../messaging/AccountCredentials'));
 const ResourceSettings = lazy(() => import('../messaging/ResourceSettings'));
+const AdminConsole = lazy(() => import('../messaging/AdminConsole'));
 
 const Row = tsxComponent(function Row(_props: {
   icon: IconName;
@@ -113,13 +114,14 @@ export default tsxComponent(function MePages(_props: {
       'account-recovery': '账户恢复',
       'account-credentials': '密码与恢复码',
       resources: '账号资源',
+      admin: '管理后台',
       about: '关于',
       donation: '支持项目',
       downloads: '软件下载',
     };
     return (
       <main
-        class={`module-page me-page${['me', 'settings', 'resources', 'account-credentials', 'login-security', 'trusted-devices', 'login-devices', 'authenticators', 'account-recovery'].includes(route.page) ? ' settings-hierarchy' : ''}`}
+        class={`module-page me-page${['me', 'settings', 'resources', 'admin', 'account-credentials', 'login-security', 'trusted-devices', 'login-devices', 'authenticators', 'account-recovery'].includes(route.page) ? ' settings-hierarchy' : ''}`}
       >
         <PageHeader title={titles[route.page] ?? '我的'} back={route.page === 'me' ? undefined : back} />
         {route.page === 'me' && (
@@ -156,6 +158,14 @@ export default tsxComponent(function MePages(_props: {
                 title="Agent 接入"
                 onClick={() => navigate({ page: 'integrations', from: 'me' })}
               />
+              {user?.isAdmin && (
+                <Row
+                  icon="gauge"
+                  title="管理后台"
+                  detail="运行统计、7 天留存清理与会话管理"
+                  onClick={() => navigate({ page: 'admin' })}
+                />
+              )}
             </section>
             <section class="settings-section" aria-labelledby="me-preferences-group">
               <h2 class="settings-section-title" id="me-preferences-group">
@@ -316,6 +326,21 @@ export default tsxComponent(function MePages(_props: {
           ) : (
             <div class="pavilion-flow">
               <AccountForm description="登录后查看云端空间与流量。" />
+            </div>
+          ))}
+        {route.page === 'admin' &&
+          (user ? (
+            <div class="settings-hierarchy-content settings-admin-content">
+              <Suspense timeout={0}>
+                {{
+                  fallback: () => <div class="page-loading">正在读取管理后台…</div>,
+                  default: () => <AdminConsole key={user.id} />,
+                }}
+              </Suspense>
+            </div>
+          ) : (
+            <div class="pavilion-flow">
+              <AccountForm description="请使用管理员账号登录后访问管理后台。" />
             </div>
           ))}
         {route.page === 'downloads' && (

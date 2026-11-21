@@ -22,6 +22,13 @@ import { readDraft, subscribeDrafts, updateDraft, type MessagingDraft, type Pend
 import { Avatar, Dialog, Notice, errorText, time, type Navigate } from './ui';
 import { loadMessagingMedia, peekMessagingMedia } from './media-cache';
 import { cachedHistory, forgetHistory, peekHistory, saveHistory } from './history-cache';
+import {
+  exportFilename,
+  formatChatExportJson,
+  formatChatExportMarkdown,
+  triggerTextDownload,
+  type ChatExportFormat,
+} from './chat-export';
 import { GroupDetails } from './Groups';
 import { AgentCallActions } from './AgentCall';
 import { ComposerPopover } from '../ComposerPopover';
@@ -100,6 +107,9 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
   const setSecurity = writeRef(securityState);
   const approvalsOpen = shallowRef(false);
   const chatTools = shallowRef(false);
+  const exportOpen = shallowRef(false);
+  const exportBusy = shallowRef(false);
+  const exportStatus = shallowRef('');
   const latest = { current: initialHistory?.messages.at(-1)?.sequence ?? 0 };
   const scroll = shallowRef<HTMLDivElement | null>(null);
   const follow = { current: true };
@@ -146,11 +156,30 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
     const security = securityState.value;
     const chatActions = [
       { label: '搜索聊天记录', icon: 'search', open: () => setSearch(true) },
+      {
+        label: '导出聊天记录',
+        icon: 'download',
+        open: () => {
+          exportStatus.value = '';
+          exportOpen.value = true;
+        },
+      },
       { label: '查看加密安全码', icon: 'shield', open: () => setSecurity(true) },
       ...(conversation?.kind === 'group'
         ? [{ label: '成员', icon: 'contacts' as const, open: () => setDetails(true) }]
         : []),
     ] as const;
+    function currentHistoryOwner() {
+      const { secrets: currentSecrets } = messaging.account;
+      return currentSecrets && user?.id === messaging.account.user?.id
+        ? { id: user!.id, secrets: currentSecrets }
+        : undefined;
+    }
+    function persistMessages(items: ChatMessage[], cursor?: number) {
+      const owner = currentHistoryOwner();
+      if (!owner || (!items.length && cursor === undefined)) return;
+      void saveHistory(owner, id, { messages: items, ...(cursor !== undefined ? { before: cursor } : {}) });
+    }
 
     const access = readAccess<AttachmentAccess>(
       () => ({
@@ -233,6 +262,8 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
             cursor = p.before;
           }
           if (abort.signal.aborted) return;
+          if (owner && messaging.account.secrets === secrets)
+            void saveHistory(owner, id, { messages: rows, ...(cursor !== undefined ? { before: cursor } : {}) });
           if (!initialized.current) {
             setBefore(cursor);
             initialized.current = true;
@@ -270,6 +301,7 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
         const incoming = updates.filter((m) => m.conversationId === id);
         if (incoming.length) {
           setMessages((old) => merge(old, incoming));
+          persistMessages(incoming);
         }
       }
     }, [updates, conversation, id]);
@@ -317,6 +349,7 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
         const page = await messaging.history(id, before);
         setBefore(page.before);
         setMessages((old) => merge(page.messages, old));
+        persistMessages(page.messages, page.before);
         requestAnimationFrame(() => {
           if (scroll.value) scroll.value.scrollTop += scroll.value.scrollHeight - height;
         });
@@ -416,6 +449,7 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
       try {
         const { message } = await messaging.send(id, request.text, request.id, request.options);
         setMessages((old) => merge(old, [message]));
+        persistMessages([message]);
         finishSend(request.id);
       } catch (e) {
         recordDiagnostic({ code: 'im-send-failed', page: 'messages', status: diagnosticStatus(e) });
@@ -441,6 +475,7 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
       try {
         const result = await messaging.cancel(id, message.id);
         setMessages((old) => merge(old, [result.message]));
+        persistMessages([result.message]);
       } catch (e) {
         setError(errorText(e));
       }
@@ -454,6 +489,7 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
       follow.current = true;
       setFollowing(true);
       setMessages((old) => merge(old, [result.message]));
+      persistMessages([result.message]);
       specialRequest.current = undefined;
     }
     async function sendVoice(file: File) {
@@ -473,9 +509,56 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
         follow.current = true;
         setFollowing(true);
         setMessages((old) => merge(old, [message]));
+        persistMessages([message]);
         voiceRequest.current = undefined;
       } finally {
         setBusy(false);
+      }
+    }
+    async function exportHistory(format: ChatExportFormat) {
+      if (!conversation || exportBusy.value) return;
+      exportBusy.value = true;
+      exportStatus.value = '正在汇总本机缓存与云端近 7 天记录…';
+      try {
+        let collected = [...messages];
+        const owner = currentHistoryOwner();
+        if (owner) {
+          const cached = await cachedHistory(owner, id);
+          if (cached?.messages.length) collected = merge(cached.messages, collected);
+        }
+        let cursor = before;
+        let pages = 0;
+        while (cursor && pages < 100) {
+          try {
+            const page = await messaging.history(id, cursor);
+            collected = merge(page.messages, collected);
+            cursor = page.before;
+            pages++;
+          } catch {
+            // Keep already-collected local + cloud messages if older cloud pages are unavailable.
+            break;
+          }
+        }
+        if (collected.length) {
+          setMessages((old) => merge(collected, old));
+          persistMessages(collected, cursor);
+        }
+        const now = Date.now();
+        const filename = exportFilename(conversation.name, format, now);
+        const content =
+          format === 'json'
+            ? formatChatExportJson(conversation, collected, now)
+            : formatChatExportMarkdown(conversation, collected, now);
+        triggerTextDownload(
+          filename,
+          content,
+          format === 'json' ? 'application/json;charset=utf-8' : 'text/markdown;charset=utf-8',
+        );
+        exportStatus.value = `已导出 ${collected.length} 条记录（${filename}）`;
+      } catch (e) {
+        exportStatus.value = errorText(e);
+      } finally {
+        exportBusy.value = false;
       }
     }
     async function favorite(file: ChatAttachment) {
@@ -1101,6 +1184,47 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
               )}
               {security && conversation && (
                 <SecurityCodes users={conversation.members} onClose={() => setSecurity(false)} />
+              )}
+              {exportOpen.value && conversation && (
+                <Dialog
+                  title="导出聊天记录"
+                  className="im-export-dialog"
+                  onClose={() => {
+                    if (!exportBusy.value) exportOpen.value = false;
+                  }}
+                >
+                  {() => (
+                    <div class="im-export-body">
+                      <p class="im-export-note">
+                        云端消息与附件最多保留 7 天，过期会自动清理；本机缓存不受影响。导出会自动合并本机已缓存与云端可用记录，并在本机解密生成文件。
+                      </p>
+                      <div class="im-export-actions">
+                        <button
+                          type="button"
+                          disabled={exportBusy.value}
+                          onClick={() => void exportHistory('markdown')}
+                        >
+                          <Icon name="document" size={16} />
+                          <span>{exportBusy.value ? '正在导出…' : '导出为 Markdown (.md)'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          class="secondary"
+                          disabled={exportBusy.value}
+                          onClick={() => void exportHistory('json')}
+                        >
+                          <Icon name="code" size={16} />
+                          <span>导出为 JSON (.json)</span>
+                        </button>
+                      </div>
+                      {exportStatus.value && (
+                        <p class="im-export-status" role="status">
+                          {exportStatus.value}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </Dialog>
               )}
               {search && <SearchMessages id={id} onClose={() => setSearch(false)} onSelect={showQuote} />}
               {quoted && quoted.interaction?.kind !== 'approval' && (

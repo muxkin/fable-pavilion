@@ -36,6 +36,16 @@ const opaque = z.string().min(20).max(256);
 const integer = z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const isBuffer = (value: unknown): value is Buffer => Buffer.isBuffer(value);
 const COOKIE = 'pocket_im_session';
+/** Browser maximum cookie lifetime (RFC 6265bis); refreshed on activity so logins stay persistent. */
+const COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
+export function parseAdminUserIds(raw?: string): Set<string> {
+  const ids = new Set<string>();
+  for (const part of (raw ?? '').split(/[\s,]+/)) {
+    const trimmed = part.trim();
+    if (USER_ID_PATTERN.test(trimmed)) ids.add(trimmed);
+  }
+  return ids;
+}
 function publicArtworkBase(value?: string): string | undefined {
   if (!value?.startsWith('https://') || /[\s\\?#]/u.test(value)) return;
   try {
@@ -74,11 +84,15 @@ export interface MessagingConfig {
   desktops?: DesktopAuthorizations;
   translate?: SelectionTranslator;
   push?: PushConfig;
+  adminUserIds?: ReadonlySet<string>;
 }
 
 /** Shared account/message routes; each provider supplies its HTTP and persistence adapters. */
 export async function registerMessaging(app: MessagingHttp, config: MessagingConfig) {
   const { store, objects } = config;
+  const adminUserIds = config.adminUserIds ?? new Set<string>();
+  const withRole = (user: ChatUser): ChatUser =>
+    adminUserIds.has(user.id) ? { ...user, isAdmin: true } : user;
   const loginArtworkBase = publicArtworkBase(config.loginArtworkBase);
   const requestOrigin = (req: MessagingRequest) => req.origin ?? config.origin;
   store.humanContacts = config.humanContacts === true;
@@ -128,6 +142,25 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
     const user = identity(req);
     if (user.kind !== 'human') throw new ChatError(403, '此操作需要个人账户');
     return user;
+  };
+  const requireAdmin = (req: MessagingRequest) => {
+    const user = human(req);
+    if (!adminUserIds.has(user.id)) throw new ChatError(403, '需要管理员权限');
+    return user;
+  };
+  const setSessionCookie = (reply: MessagingReply, value: string) => {
+    reply.setCookie(COOKIE, value, {
+      path: '/api/im',
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: config.origin.startsWith('https:'),
+      maxAge: COOKIE_MAX_AGE_SECONDS,
+    });
+  };
+  const refreshSessionCookie = (req: MessagingRequest, reply: MessagingReply, current: string) => {
+    if (current && !req.headers.authorization && req.cookies[COOKIE] === current) {
+      setSessionCookie(reply, current);
+    }
   };
   const pushId = z.string().regex(notificationId);
   app.get('/notifications', (req) => {
@@ -263,16 +296,10 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
     onIssued?: (sessionHash: string) => void,
     verified = true,
   ) => {
-    const { token: value, expiresAt } = store.issueSession(user.id, { ...deviceInfo(req), verified });
+    const { token: value } = store.issueSession(user.id, { ...deviceInfo(req), verified });
     onIssued?.(digest(value));
-    reply.setCookie(COOKIE, value, {
-      path: '/api/im',
-      httpOnly: true,
-      sameSite: 'strict',
-      secure: config.origin.startsWith('https:'),
-      expires: new Date(expiresAt),
-    });
-    return { user };
+    setSessionCookie(reply, value);
+    return { user: withRole(user) };
   };
   const cid = (req: MessagingRequest) => z.object({ id: z.string().uuid() }).parse(req.params).id;
   await registerAccounts(app, {
@@ -454,18 +481,19 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
     const id = store.setAvatar(user.id, data);
     const object = config.storage ? await objects.put(data, 'image/webp') : undefined;
     if (object) objects.commit('avatar', id, object);
-    return { user: store.user(user.id) };
+    return { user: withRole(store.user(user.id)) };
   });
-  app.delete('/me/avatar', async (req) => ({ user: store.removeAvatar(identity(req).id) }));
+  app.delete('/me/avatar', async (req) => ({ user: withRole(store.removeAvatar(identity(req).id)) }));
   app.get('/users/:userId/avatar/:version', async (req, reply) => {
     const params = z.object({ userId, version: z.string().uuid() }).parse(req.params);
     const file = store.avatar(identity(req).id, params.userId, params.version);
     return serveMedia(req, reply, 'avatar', file.id, file);
   });
-  app.get('/login-devices', (req) => {
+  app.get('/login-devices', (req, reply) => {
     const user = human(req);
     const current = token(req);
     store.touchSession(current, deviceInfo(req), true);
+    refreshSessionCookie(req, reply, current);
     return { devices: store.loginDevices(user.id, current) };
   });
   app.patch('/login-devices/:id', { bodyLimit: 1024 }, (req) => {
@@ -689,6 +717,7 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
       : setInterval(() => {
           store.expireStreams();
           store.expireInteractions();
+          store.pruneExpiredCloudData();
           calls.expire();
           if (config.storage) void objects.collectGarbage?.().catch(() => {});
         }, 15000);
@@ -702,7 +731,7 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
   app.get('/bootstrap', async (req) => {
     const user = identity(req);
     return {
-      user,
+      user: withRole(user),
       humanContacts: store.humanContacts,
       contacts: store.contacts(user.id),
       conversations: store.conversations(user.id),
@@ -771,15 +800,54 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
     ...(config.deviceLoginOnly && { deviceLoginOnly: true }),
     ...(loginArtworkBase && { loginArtworkBase }),
   }));
-  app.get('/me', (req) => {
+  app.get('/me', (req, reply) => {
     const current = token(req);
     const user = current ? identity(req) : null;
-    if (user?.kind === 'human') store.touchSession(current, deviceInfo(req));
-    return { user };
+    if (user?.kind === 'human') {
+      store.touchSession(current, deviceInfo(req));
+      refreshSessionCookie(req, reply, current);
+    }
+    return { user: user ? withRole(user) : null };
   });
   app.patch('/me', { bodyLimit: 4096 }, async (req) => {
     const user = identity(req);
-    return { user: store.profile(user.id, z.object({ displayName }).parse(req.body).displayName) };
+    return { user: withRole(store.profile(user.id, z.object({ displayName }).parse(req.body).displayName)) };
+  });
+  app.get('/admin/overview', (req) => {
+    requireAdmin(req);
+    return store.adminOverview();
+  });
+  app.get('/admin/users', (req) => {
+    requireAdmin(req);
+    const { q = '', limit = 50 } = z
+      .object({
+        q: z.string().trim().max(100).optional(),
+        limit: z.coerce.number().int().min(1).max(200).optional(),
+      })
+      .parse(req.query);
+    return { users: store.adminUsers(q, limit) };
+  });
+  app.post('/admin/users/:id/revoke-sessions', { bodyLimit: 512 }, (req) => {
+    const admin = requireAdmin(req);
+    const targetId = uid(req);
+    const keepHash = targetId === admin.id ? digest(token(req)) : undefined;
+    return store.adminRevokeUserSessions(targetId, keepHash);
+  });
+  app.post('/admin/cleanup', { bodyLimit: 512 }, async (req) => {
+    requireAdmin(req);
+    store.expireStreams();
+    store.expireInteractions();
+    calls.expire();
+    const pruned = store.pruneExpiredCloudData();
+    let deletedObjects = 0;
+    if (config.storage && objects.collectGarbage) {
+      for (let round = 0; round < 10; round++) {
+        const count = await objects.collectGarbage().catch(() => 0);
+        deletedObjects += count;
+        if (count < 100) break;
+      }
+    }
+    return { ...pruned, deletedObjects, overview: store.adminOverview() };
   });
   app.post('/logout', async (req, reply) => {
     store.logout(token(req));

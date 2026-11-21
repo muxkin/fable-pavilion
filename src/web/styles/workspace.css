@@ -398,14 +398,44 @@ button {
   gap: 3px;
   padding-inline: 7px;
 }
+.composer-model-group {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 260px;
+  min-height: 44px;
+  border-radius: 14px;
+  background: var(--soft);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.composer-model-group:hover {
+  background: color-mix(in srgb, var(--soft) 72%, var(--accent) 10%);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
+}
+.composer-model-group.is-selected {
+  background: color-mix(in srgb, var(--accent) 13%, var(--soft));
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  color: var(--accent);
+}
 .composer-model {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
-  min-height: 44px;
-  padding: 6px 5px;
+  min-height: 42px;
+  padding: 6px 11px;
   font-size: 13px;
+  font-weight: 500;
+  border-radius: 13px;
+  background: transparent;
+  color: inherit;
+}
+.composer-model.is-readonly {
+  max-width: 240px;
+  background: var(--soft);
+  border: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  color: var(--muted);
 }
 .composer-model span {
   overflow: hidden;
@@ -414,6 +444,32 @@ button {
 }
 .composer-model svg {
   flex-shrink: 0;
+}
+.composer-model > svg:first-child {
+  opacity: 0.72;
+}
+.composer-model > svg:last-child {
+  opacity: 0.7;
+  margin-left: -1px;
+}
+.composer-model-group.is-selected .composer-model {
+  padding-right: 6px;
+}
+.composer-model-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 6px;
+  padding: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.composer-model-clear:hover {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 .composer-send {
   margin-left: auto;
@@ -879,9 +935,16 @@ button {
   .composer-tool-trigger {
     padding-inline: 6px;
   }
+  .composer-model-group {
+    max-width: 100%;
+  }
   .composer-model {
     font-size: 12px;
-    gap: 2px;
+    gap: 4px;
+    padding-inline: 8px;
+  }
+  .composer-model > svg:first-child {
+    display: none;
   }
   .plan-chip {
     padding-inline: 6px;
@@ -1390,6 +1453,7 @@ button {
     flex-basis: 32px;
     width: 32px;
   }
+  .composer-model-group,
   .composer-model {
     flex: 1;
   }
@@ -1408,7 +1472,8 @@ button {
   .composer-actions :is(.permission-trigger, .composer-tool-trigger) > span,
   .composer-actions .permission-trigger > svg:last-child { display: none; }
   .composer-actions :is(.permission-trigger, .composer-tool-trigger) > svg:first-child { width: 20px; height: 20px; }
-  .composer-actions .composer-model { flex: 1; min-width: 0; }
+  .composer-actions .composer-model-group,
+  .composer-actions .composer-model { flex: 1; min-width: 0; max-width: none; }
 }
 
 .outgoing-content {

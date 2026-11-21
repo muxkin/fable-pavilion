@@ -57,6 +57,11 @@ function formatDateOnly(ms: number): string {
   return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
 }
 
+function formatExpiry(ms: number): string {
+  if (ms >= 4_000_000_000_000) return '长期有效';
+  return `有效期至 ${formatDateOnly(ms)}`;
+}
+
 function recentlyActive(device: Device): boolean {
   return !!device.lastActiveAt && Date.now() - device.lastActiveAt <= 10 * 60_000;
 }
@@ -210,7 +215,7 @@ export const LoginDevices = tsxComponent(function LoginDevices() {
                           ? `最近活跃 ${formatDateTime(device.lastActiveAt)}`
                           : '较早登录'}
                         {device.createdAt ? ` · 登录于 ${formatDateTime(device.createdAt)}` : ''}
-                        {device.expiresAt ? ` · 有效期至 ${formatDateOnly(device.expiresAt)}` : ''}
+                        {device.expiresAt ? ` · ${formatExpiry(device.expiresAt)}` : ''}
                       </span>
                     </div>
                   </div>

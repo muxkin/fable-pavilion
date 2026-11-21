@@ -1853,34 +1853,56 @@ export default tsxComponent(function AgentWorkspace(_props: {
                               <Icon name="close" size={14} />
                             </button>
                           )}
-                          {canChangeModel || messageModelPicker ? (
-                            <button
-                              type="button"
-                              class="composer-model"
-                              aria-label={messageModelPicker ? '选择下一条消息的模型' : '模型设置'}
-                              onClick={() => setConfigOpen(true)}
+                          {canChangeModel || messageModelPicker ? (() => {
+                            const rawLabel = modelLabel(
+                              (messageModelPicker && messageModel?.name) || currentModel || null,
+                            );
+                            const displayLabel =
+                              messageModelPicker && !messageModel && rawLabel === 'Antigravity 模型'
+                                ? '默认模型'
+                                : rawLabel;
+                            const tooltip = messageModel
+                              ? `下一条消息将使用：${messageModel.name}（点击切换）`
+                              : messageModelPicker
+                                ? `当前模型：${displayLabel}（点击为下一条消息切换模型）`
+                                : `当前模型：${displayLabel}（点击修改）`;
+                            return (
+                              <span class={`composer-model-group${messageModel ? ' is-selected' : ''}`}>
+                                <button
+                                  type="button"
+                                  class="composer-model"
+                                  title={tooltip}
+                                  aria-label={messageModelPicker ? '选择下一条消息的模型' : '模型设置'}
+                                  onClick={() => setConfigOpen(true)}
+                                >
+                                  <Icon name="sliders" size={14} />
+                                  <span>{displayLabel}</span>
+                                  <Icon name="down" size={14} />
+                                </button>
+                                {messageModel && (
+                                  <button
+                                    type="button"
+                                    class="composer-model-clear"
+                                    aria-label={'移除下一条消息的模型 ' + messageModel.name}
+                                    title="恢复默认模型"
+                                    onClick={() => {
+                                      drafts.update(view.id, { model: undefined });
+                                      setError('');
+                                    }}
+                                  >
+                                    <Icon name="close" size={13} />
+                                  </button>
+                                )}
+                              </span>
+                            );
+                          })() : (messageModel || currentModel) && (
+                            <span
+                              class="composer-model is-readonly"
+                              title={messageModel ? '下一条消息的模型' : '当前模型'}
                             >
-                              <span>{modelLabel((messageModelPicker && messageModel?.name) || currentModel || null)}</span>
-                              <Icon name="down" size={16} />
-                            </button>
-                          ) : (messageModel || currentModel) && (
-                            <span class="composer-model" title={messageModel ? '下一条消息的模型' : '当前模型'}>
+                              <Icon name="sliders" size={14} />
                               <span>{messageModel?.name ?? view.modelName ?? modelLabel(currentModel ?? null)}</span>
                             </span>
-                          )}
-                          {messageModel && (
-                            <button
-                              type="button"
-                              class="composer-tool-trigger"
-                              aria-label={'移除下一条消息的模型 ' + messageModel.name}
-                              title="移除所选模型"
-                              onClick={() => {
-                                drafts.update(view.id, { model: undefined });
-                                setError('');
-                              }}
-                            >
-                              <Icon name="close" size={14} />
-                            </button>
                           )}
                         </>
                       )}

@@ -18,6 +18,7 @@ export type AppPage =
   | 'account-recovery'
   | 'account-credentials'
   | 'resources'
+  | 'admin'
   | 'donation'
   | 'downloads'
   | 'about'
@@ -53,6 +54,7 @@ const pages: AppPage[] = [
   'account-recovery',
   'account-credentials',
   'resources',
+  'admin',
   'donation',
   'downloads',
   'about',

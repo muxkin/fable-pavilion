@@ -11,6 +11,8 @@ import { nextUserId, USER_ID_PATTERN, USERNAME_PATTERN } from '../../shared/acco
 import type { ResourceService } from '../resources/service.js';
 import type { ResourceFile, ResourceKind } from '../../shared/resources.js';
 import type {
+  AdminOverview,
+  AdminUserSummary,
   ChatInteraction,
   InteractionResponse,
   ChatSticker,
@@ -39,6 +41,10 @@ const userColumns = 'id, kind, username, display_name AS displayName, created_at
 const messageColumns =
   'id, sequence, conversation_id AS conversationId, sender_id AS senderId, client_id AS clientId, text, created_at AS createdAt, updated_at AS updatedAt, revision, state, mentions, reply_to AS replyTo';
 const DAY = 86_400_000;
+export const MESSAGE_RETENTION_DAYS = 7;
+export const MESSAGE_RETENTION_MS = MESSAGE_RETENTION_DAYS * DAY;
+/** Persistent login sessions remain valid until explicitly revoked, signed out, or password-rotated. */
+export const SESSION_PERSISTENT_EXPIRES_AT = 4_102_444_800_000; // 2100-01-01T00:00:00.000Z
 function logical(value: any): any {
   if (typeof value === 'string' && value.startsWith(SEALED_PREFIX)) {
     const envelope = parseEnvelope(value);
@@ -66,6 +72,7 @@ export class MessagingStore {
   push?: PushNotifications;
   humanContacts = false;
   resources?: ResourceService;
+  private lastPrunedAt = 0;
   readonly db: MessagingDatabase;
   readonly changes = new EventEmitter();
   constructor(
@@ -128,6 +135,7 @@ export class MessagingStore {
       );
       CREATE INDEX IF NOT EXISTS im_messages_conversation ON im_messages(conversation_id,sequence);
       CREATE INDEX IF NOT EXISTS im_messages_streaming ON im_messages(state,updated_at);
+      CREATE INDEX IF NOT EXISTS im_messages_created ON im_messages(created_at);
       CREATE TABLE IF NOT EXISTS im_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES im_users(id),
         type TEXT NOT NULL, conversation_id TEXT, message_id TEXT
@@ -138,6 +146,7 @@ export class MessagingStore {
         message_id TEXT REFERENCES im_messages(id), name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS im_files_message ON im_files(message_id);
+      CREATE INDEX IF NOT EXISTS im_files_created ON im_files(created_at);
       CREATE TABLE IF NOT EXISTS im_message_features (
         message_id TEXT PRIMARY KEY REFERENCES im_messages(id), interaction TEXT,
         expires_at INTEGER, status TEXT, sticker INTEGER NOT NULL DEFAULT 0
@@ -261,7 +270,8 @@ export class MessagingStore {
   issueSession(userId: string, device?: LoginDeviceMeta & { verified: boolean }) {
     const token = secret();
     const now = Date.now();
-    const expiresAt = now + (this.user(userId).kind === 'agent' ? 365 : 30) * DAY;
+    this.user(userId);
+    const expiresAt = SESSION_PERSISTENT_EXPIRES_AT;
     const issue = () => {
       const hash = digest(token);
       this.db.prepare('DELETE FROM im_sessions WHERE expires_at<=?').run(now);
@@ -300,6 +310,10 @@ export class MessagingStore {
   }
   touchSession(token: string, device: string | LoginDeviceMeta, force = false) {
     const now = Date.now();
+    const hash = digest(token);
+    this.db
+      .prepare('UPDATE im_sessions SET expires_at=? WHERE hash=? AND expires_at>? AND expires_at<?')
+      .run(SESSION_PERSISTENT_EXPIRES_AT, hash, now, SESSION_PERSISTENT_EXPIRES_AT);
     const meta: LoginDeviceMeta = typeof device === 'string' ? { name: device } : device;
     this.db
       .prepare(
@@ -329,7 +343,7 @@ export class MessagingStore {
         meta.ip ?? null,
         meta.location ?? null,
         meta.origin ?? null,
-        digest(token),
+        hash,
         now,
         force ? 1 : 0,
         now - 5 * 60_000,
@@ -780,6 +794,7 @@ export class MessagingStore {
     this.notify([...members, ...added]);
   }
   history(id: string, cid: string, before = Number.MAX_SAFE_INTEGER): ChatHistory {
+    this.maybePruneExpired();
     this.member(id, cid);
     const rows = this.db
       .prepare(
@@ -1071,6 +1086,7 @@ export class MessagingStore {
     });
   }
   file(id: string, cid: string, fileId: string) {
+    this.maybePruneExpired();
     this.member(id, cid);
     const row = this.db
       .prepare(
@@ -1431,11 +1447,183 @@ export class MessagingStore {
         lastMessageEvent.get(row.messageId) === row.sequence &&
         this.db
           .prepare('SELECT 1 FROM im_members WHERE conversation_id=? AND user_id=?')
-          .get(row.conversationId!, id)
+          .get(row.conversationId!, id) &&
+        this.db.prepare('SELECT 1 FROM im_messages WHERE id=?').get(row.messageId)
       )
         return { ...event, message: this.message(id, String(row.conversationId), String(row.messageId)) };
       return event;
     });
     return { events, cursor: events.at(-1)?.sequence ?? cursor };
+  }
+  /** Delete cloud messages and attached files older than 7 days. Stickers, avatars, and local caches are untouched. */
+  pruneExpiredCloudData(now = Date.now()) {
+    const cutoff = now - MESSAGE_RETENTION_MS;
+    const orphanCutoff = now - DAY;
+    this.lastPrunedAt = now;
+    const run = () => {
+      const orphanFiles = Number(
+        this.db
+          .prepare('DELETE FROM im_files WHERE message_id IS NULL AND created_at<=?')
+          .run(orphanCutoff).changes ?? 0,
+      );
+      const expiredFiles = Number(
+        this.db
+          .prepare(
+            'DELETE FROM im_files WHERE created_at<=? OR message_id IN (SELECT id FROM im_messages WHERE created_at<=?)',
+          )
+          .run(cutoff, cutoff).changes ?? 0,
+      );
+      this.db
+        .prepare(
+          'DELETE FROM im_message_features WHERE message_id IN (SELECT id FROM im_messages WHERE created_at<=?)',
+        )
+        .run(cutoff);
+      this.db
+        .prepare(
+          'DELETE FROM im_events WHERE message_id IN (SELECT id FROM im_messages WHERE created_at<=?)',
+        )
+        .run(cutoff);
+      const deletedMessages = Number(
+        this.db.prepare('DELETE FROM im_messages WHERE created_at<=?').run(cutoff).changes ?? 0,
+      );
+      return { deletedMessages, deletedFiles: orphanFiles + expiredFiles };
+    };
+    return this.db.isTransaction ? run() : this.transaction(run);
+  }
+  maybePruneExpired(now = Date.now()) {
+    if (now - this.lastPrunedAt < 60_000) return { deletedMessages: 0, deletedFiles: 0 };
+    return this.pruneExpiredCloudData(now);
+  }
+  adminOverview(now = Date.now()): AdminOverview {
+    const cutoff = now - MESSAGE_RETENTION_MS;
+    const users = this.db
+      .prepare(
+        "SELECT COUNT(*) AS total, SUM(CASE WHEN kind='human' THEN 1 ELSE 0 END) AS humans, SUM(CASE WHEN kind='agent' THEN 1 ELSE 0 END) AS agents FROM im_users",
+      )
+      .get()!;
+    const sessions = this.db
+      .prepare('SELECT COUNT(*) AS active FROM im_sessions WHERE expires_at>?')
+      .get(now)!;
+    const convos = this.db
+      .prepare(
+        "SELECT COUNT(*) AS total, SUM(CASE WHEN kind='direct' THEN 1 ELSE 0 END) AS direct, SUM(CASE WHEN kind='group' THEN 1 ELSE 0 END) AS grp FROM im_conversations",
+      )
+      .get()!;
+    const messages = this.db
+      .prepare(
+        'SELECT COUNT(*) AS total, SUM(CASE WHEN created_at<=? THEN 1 ELSE 0 END) AS expiredPending, MIN(created_at) AS oldestAt FROM im_messages',
+      )
+      .get(cutoff)!;
+    const files = this.db
+      .prepare(
+        'SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN removed=0 THEN size ELSE 0 END),0) AS bytes, SUM(CASE WHEN created_at<=? THEN 1 ELSE 0 END) AS expiredPending, MIN(created_at) AS oldestAt FROM im_files WHERE removed=0',
+      )
+      .get(cutoff)!;
+    const stickers = this.db
+      .prepare('SELECT COUNT(*) AS total, COALESCE(SUM(size),0) AS bytes FROM im_stickers')
+      .get()!;
+    const avatars = this.db
+      .prepare('SELECT COUNT(*) AS total, COALESCE(SUM(size),0) AS bytes FROM im_avatars')
+      .get()!;
+    const gcQueue = this.db.prepare('SELECT COUNT(*) AS pending FROM im_object_gc').get()!;
+    return {
+      retentionDays: MESSAGE_RETENTION_DAYS,
+      generatedAt: now,
+      users: {
+        total: Number(users.total ?? 0),
+        humans: Number(users.humans ?? 0),
+        agents: Number(users.agents ?? 0),
+      },
+      sessions: { active: Number(sessions.active ?? 0) },
+      conversations: {
+        total: Number(convos.total ?? 0),
+        direct: Number(convos.direct ?? 0),
+        group: Number(convos.grp ?? 0),
+      },
+      messages: {
+        total: Number(messages.total ?? 0),
+        expiredPending: Number(messages.expiredPending ?? 0),
+        oldestAt: messages.oldestAt == null ? null : Number(messages.oldestAt),
+      },
+      files: {
+        total: Number(files.total ?? 0),
+        bytes: Number(files.bytes ?? 0),
+        expiredPending: Number(files.expiredPending ?? 0),
+        oldestAt: files.oldestAt == null ? null : Number(files.oldestAt),
+      },
+      stickers: {
+        total: Number(stickers.total ?? 0),
+        bytes: Number(stickers.bytes ?? 0),
+      },
+      avatars: {
+        total: Number(avatars.total ?? 0),
+        bytes: Number(avatars.bytes ?? 0),
+      },
+      gcQueue: { pending: Number(gcQueue.pending ?? 0) },
+    };
+  }
+  adminUsers(query = '', limit = 50): AdminUserSummary[] {
+    const now = Date.now();
+    const cleaned = query.trim().toLowerCase();
+    const capped = Math.max(1, Math.min(200, Math.floor(limit)));
+    const rows = cleaned
+      ? this.db
+          .prepare(
+            `SELECT u.id, u.kind, u.username, u.display_name AS displayName, u.created_at AS createdAt,
+                    EXISTS(SELECT 1 FROM im_account_crypto c WHERE c.user_id=u.id) AS encrypted,
+                    (SELECT COUNT(*) FROM im_sessions s WHERE s.user_id=u.id AND s.expires_at>?) AS activeSessions,
+                    (SELECT MAX(d.last_active_at) FROM im_sessions s JOIN im_login_devices d ON d.session_hash=s.hash WHERE s.user_id=u.id AND s.expires_at>?) AS lastActiveAt,
+                    (SELECT COUNT(*) FROM im_messages m WHERE m.sender_id=u.id) AS messageCount,
+                    (SELECT COUNT(*) FROM im_files f WHERE f.user_id=u.id AND f.removed=0) AS fileCount,
+                    (SELECT COALESCE(SUM(f.size),0) FROM im_files f WHERE f.user_id=u.id AND f.removed=0) AS fileBytes,
+                    (SELECT COUNT(*) FROM im_stickers st WHERE st.user_id=u.id) AS stickerCount,
+                    EXISTS(SELECT 1 FROM im_avatars a WHERE a.user_id=u.id) AS hasAvatar
+             FROM im_users u
+             WHERE instr(lower(u.id),?)>0 OR instr(lower(u.username),?)>0 OR instr(lower(u.display_name),?)>0
+             ORDER BY u.created_at ASC LIMIT ?`,
+          )
+          .all(now, now, cleaned, cleaned, cleaned, capped)
+      : this.db
+          .prepare(
+            `SELECT u.id, u.kind, u.username, u.display_name AS displayName, u.created_at AS createdAt,
+                    EXISTS(SELECT 1 FROM im_account_crypto c WHERE c.user_id=u.id) AS encrypted,
+                    (SELECT COUNT(*) FROM im_sessions s WHERE s.user_id=u.id AND s.expires_at>?) AS activeSessions,
+                    (SELECT MAX(d.last_active_at) FROM im_sessions s JOIN im_login_devices d ON d.session_hash=s.hash WHERE s.user_id=u.id AND s.expires_at>?) AS lastActiveAt,
+                    (SELECT COUNT(*) FROM im_messages m WHERE m.sender_id=u.id) AS messageCount,
+                    (SELECT COUNT(*) FROM im_files f WHERE f.user_id=u.id AND f.removed=0) AS fileCount,
+                    (SELECT COALESCE(SUM(f.size),0) FROM im_files f WHERE f.user_id=u.id AND f.removed=0) AS fileBytes,
+                    (SELECT COUNT(*) FROM im_stickers st WHERE st.user_id=u.id) AS stickerCount,
+                    EXISTS(SELECT 1 FROM im_avatars a WHERE a.user_id=u.id) AS hasAvatar
+             FROM im_users u
+             ORDER BY u.created_at ASC LIMIT ?`,
+          )
+          .all(now, now, capped);
+    return rows.map((row) => ({
+      id: String(row.id),
+      address: `${row.id}@${this.authority}`,
+      kind: String(row.kind) as 'human' | 'agent',
+      username: String(row.username),
+      displayName: String(row.displayName),
+      createdAt: Number(row.createdAt),
+      encrypted: Boolean(row.encrypted),
+      activeSessions: Number(row.activeSessions ?? 0),
+      lastActiveAt: row.lastActiveAt == null ? null : Number(row.lastActiveAt),
+      messageCount: Number(row.messageCount ?? 0),
+      fileCount: Number(row.fileCount ?? 0),
+      fileBytes: Number(row.fileBytes ?? 0),
+      stickerCount: Number(row.stickerCount ?? 0),
+      hasAvatar: Boolean(row.hasAvatar),
+    }));
+  }
+  adminRevokeUserSessions(targetUserId: string, keepSessionHash?: string) {
+    this.user(targetUserId);
+    this.calls?.endFor(targetUserId);
+    const changes = keepSessionHash
+      ? this.db
+          .prepare('DELETE FROM im_sessions WHERE user_id=? AND hash<>?')
+          .run(targetUserId, keepSessionHash).changes
+      : this.db.prepare('DELETE FROM im_sessions WHERE user_id=?').run(targetUserId).changes;
+    this.changes.emit(targetUserId);
+    return { revoked: Number(changes ?? 0) };
   }
 }

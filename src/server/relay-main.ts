@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { callIceConfig } from './messaging/calls.js';
 import { translationProvider } from './messaging/translation.js';
 import { pushConfig } from './messaging/notifications.js';
+import { parseAdminUserIds } from './messaging/service-core.js';
 import { resolve, join } from 'node:path';
 import { buildRelay } from './relay.js';
 import { loadStorage } from './object-storage.js';
@@ -32,6 +33,7 @@ const app = await buildRelay({
     callIce: callIceConfig(process.env),
     translate: translationProvider(process.env),
     push: pushConfig(process.env),
+    adminUserIds: parseAdminUserIds(process.env.POCKET_ADMIN_UIDS),
     storage: process.env.POCKET_IM_MEDIA_ADAPTER
       ? await loadStorage(
           { adapterPath: resolve(process.env.POCKET_IM_MEDIA_ADAPTER) },

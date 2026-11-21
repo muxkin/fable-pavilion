@@ -3,8 +3,8 @@ import { callIceConfig } from '../server/messaging/calls.js';
 import { translationProvider } from '../server/messaging/translation.js';
 import { pushConfig } from '../server/messaging/notifications.js';
 import { WorkerMessagingHttp } from './http.js';
-import { ChatError, MessagingStore } from '../server/messaging/store-core.js';
-import { registerMessaging } from '../server/messaging/service-core.js';
+import { ChatError, MESSAGE_RETENTION_MS, MessagingStore } from '../server/messaging/store-core.js';
+import { parseAdminUserIds, registerMessaging } from '../server/messaging/service-core.js';
 import { DurableDatabase } from './database.js';
 import { R2MessagingObjects, avatar } from './media.js';
 import { identityAuthorityFor, originFor, originsFor } from './security.js';
@@ -47,6 +47,7 @@ export class MessagingHub extends DurableObject<Env> {
         revoke: (...args) => relay().revokeDesktop(...args),
       },
       humanContacts: env.POCKET_IM_HUMAN_CONTACTS === 'true',
+      adminUserIds: parseAdminUserIds(env.POCKET_ADMIN_UIDS),
       translate: translationProvider(env),
       push: pushConfig(env),
       callIce: callIceConfig({
@@ -79,6 +80,7 @@ export class MessagingHub extends DurableObject<Env> {
   private maintain() {
     this.store.expireStreams();
     this.store.expireInteractions();
+    this.store.maybePruneExpired();
     this.store.calls?.expire();
   }
   private async schedule() {
@@ -86,6 +88,9 @@ export class MessagingHub extends DurableObject<Env> {
       .prepare(
         `SELECT min(deadline) AS deadline FROM (
       SELECT min(updated_at)+120001 AS deadline FROM im_messages WHERE state='streaming'
+      UNION ALL SELECT min(created_at)+? FROM im_messages
+      UNION ALL SELECT min(created_at)+? FROM im_files
+      UNION ALL SELECT min(created_at)+86400001 FROM im_files WHERE message_id IS NULL
       UNION ALL SELECT min(not_before) FROM im_object_gc
       UNION ALL SELECT ? WHERE EXISTS(SELECT 1 FROM im_media_objects m WHERE
         (kind='file' AND NOT EXISTS(SELECT 1 FROM im_files f WHERE f.id=m.id AND f.removed=0)) OR
@@ -93,7 +98,7 @@ export class MessagingHub extends DurableObject<Env> {
         (kind='avatar' AND NOT EXISTS(SELECT 1 FROM im_avatars a WHERE a.id=m.id)))
       UNION ALL SELECT min(expires_at) FROM im_message_features WHERE status='pending')`,
       )
-      .get(Date.now() + 60000);
+      .get(MESSAGE_RETENTION_MS + 1, MESSAGE_RETENTION_MS + 1, Date.now() + 60000);
     const deadlines = [row?.deadline, this.store.calls?.nextDeadline(), this.store.push?.nextDeadline()]
       .filter((v) => v !== null && v !== undefined)
       .map(Number);
@@ -114,6 +119,7 @@ export class MessagingHub extends DurableObject<Env> {
   }
   async alarm() {
     await this.ready;
+    this.store.pruneExpiredCloudData();
     this.maintain();
     await this.store.push?.run().catch(() => {});
     await this.objects.collectGarbage().catch(() => {

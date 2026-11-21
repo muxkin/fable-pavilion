@@ -6,7 +6,7 @@ import {
   type AccountSecrets,
   type Ciphertext,
 } from '../../shared/account-crypto';
-import type { ChatHistory } from '../../shared/messaging';
+import type { ChatHistory, ChatMessage } from '../../shared/messaging';
 import { contentVersion } from '../../shared/sync';
 
 interface HistoryEntry {
@@ -22,7 +22,8 @@ export interface HistoryOwner {
   id: string;
   secrets: AccountSecrets;
 }
-const pageLimit = 16;
+const pageLimit = 64;
+const defaultBudgetBytes = 4 * 1024 * 1024;
 const memory = new WeakMap<AccountSecrets, Map<string, ChatHistory>>();
 let database: ReturnType<typeof openDB<HistoryDB>> | undefined;
 const historyDB = () =>
@@ -32,6 +33,48 @@ const historyDB = () =>
     },
   }));
 const pageKey = (owner: HistoryOwner, id: string) => `im-history:${owner.id}:${id}`;
+
+/**
+ * Merge newly fetched/received messages into the locally cached history without
+ * discarding older locally cached messages after 7-day cloud retention pruning.
+ */
+export function mergeHistoryPages(
+  existing: ChatHistory | undefined,
+  incoming: ChatHistory,
+  budgetBytes = defaultBudgetBytes,
+): ChatHistory {
+  const byId = new Map<string, ChatMessage>();
+  for (const message of existing?.messages ?? []) byId.set(message.id, message);
+  for (const message of incoming.messages) {
+    const prev = byId.get(message.id);
+    if (!prev || message.revision >= prev.revision) byId.set(message.id, message);
+  }
+  const merged = [...byId.values()].sort(
+    (a, b) => a.sequence - b.sequence || a.createdAt - b.createdAt,
+  );
+  let budget = budgetBytes;
+  let first = merged.length;
+  while (first > 0) {
+    budget -= JSON.stringify(merged[first - 1]).length;
+    if (budget < 0) break;
+    first--;
+  }
+  if (first && first === merged.length) {
+    return existing ?? incoming;
+  }
+  const messages = first ? merged.slice(first) : merged;
+  const oldest = messages[0]?.sequence;
+  let before: number | undefined;
+  if (first) {
+    before = oldest;
+  } else {
+    const candidates = [existing?.before, incoming.before].filter(
+      (v): v is number => typeof v === 'number' && (oldest === undefined || v <= oldest),
+    );
+    before = candidates.length ? Math.min(...candidates) : undefined;
+  }
+  return { messages, ...(before !== undefined ? { before } : {}) };
+}
 
 function remember(owner: HistoryOwner, key: string, page: ChatHistory) {
   const pages = memory.get(owner.secrets) ?? new Map<string, ChatHistory>();
@@ -65,18 +108,8 @@ export async function cachedHistory(owner: HistoryOwner, id: string): Promise<Ch
 export async function saveHistory(owner: HistoryOwner, id: string, page: ChatHistory) {
   const key = pageKey(owner, id);
   const saved = Date.now();
-  // Keep a bounded suffix of the latest page with a correct cursor for older messages.
-  let budget = 120_000;
-  let first = page.messages.length;
-  while (first > 0) {
-    budget -= JSON.stringify(page.messages[first - 1]).length;
-    if (budget < 0) break;
-    first--;
-  }
-  if (first && first === page.messages.length) return;
-  const snapshot = first
-    ? { messages: page.messages.slice(first), before: page.messages[first].sequence }
-    : page;
+  const existing = peekHistory(owner, id) ?? (await cachedHistory(owner, id));
+  const snapshot = mergeHistoryPages(existing, page);
   remember(owner, key, snapshot);
   try {
     const db = await historyDB();

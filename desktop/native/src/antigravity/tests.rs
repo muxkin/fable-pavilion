@@ -42,6 +42,20 @@ fn current_model_uses_latest_native_generator_metadata_without_prompt_content() 
         ),
         Some("public-id")
     );
+    assert_eq!(
+        current_model(
+            &Value::Null,
+            &[json!({"metadata":{"generatorModel":"MODEL_STEP_META"}})]
+        ),
+        Some("MODEL_STEP_META")
+    );
+    assert_eq!(
+        current_model(
+            &Value::Null,
+            &[json!({"metadata":{"requestedModel":{"model":"MODEL_STEP_REQ"}}})]
+        ),
+        Some("MODEL_STEP_REQ")
+    );
     assert_eq!(current_model(&Value::Null, &[]), None);
 }
 

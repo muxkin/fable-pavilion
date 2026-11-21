@@ -42,6 +42,7 @@ export interface RelayConfig {
     callIce?: CallIceConfig;
     translate?: SelectionTranslator;
     push?: PushConfig;
+    adminUserIds?: ReadonlySet<string>;
     storage?: StorageAdapter;
     resourcePolicy?: ResourcePolicyProvider;
   };
@@ -79,6 +80,7 @@ export async function buildRelay(config: RelayConfig) {
     callIce: config.messaging?.callIce,
     translate: config.messaging?.translate,
     push: config.messaging?.push,
+    adminUserIds: config.messaging?.adminUserIds,
     clientAddress,
     storage: config.messaging?.storage,
     resourcePolicy: config.messaging?.resourcePolicy,

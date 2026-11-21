@@ -182,47 +182,45 @@ export async function loadMessagingMedia(
   const cid = conversationId(url.pathname);
   const canPreviewLocally = !fullSize && !!cid && folders.has(cid);
   const localKey = previewKey(accountId, url.pathname);
+  const tryDecryptLocal = async (): Promise<MediaResource | undefined> => {
+    if (!cid || !folders.has(cid) || !encryptedDownload || ticketEpoch !== epoch) return undefined;
+    const local = await readBlobEntry(localKey);
+    if (!local?.encrypted || !local.cacheKey || ticketEpoch !== epoch || !folders.has(cid)) return undefined;
+    const blobKey = `${accountId}:encrypted:${local.cacheKey}`;
+    try {
+      const file = await encryptedDownload(
+        path,
+        controller.signal,
+        {
+          get: async () => new Uint8Array(await local.blob.arrayBuffer()),
+          put: async () => {},
+          remove: async () => {
+            await (await database)?.delete('blobs', localKey);
+          },
+        },
+        { name: '', mime: '', encrypted: local.encrypted, cacheKey: local.cacheKey },
+      );
+      if (ticketEpoch !== epoch || signal?.aborted || !folders.has(cid))
+        throw new DOMException('Aborted', 'AbortError');
+      keepDecrypted(blobKey, file);
+      return authorizedPreview(localKey, blobKey, {
+        name: file.name,
+        mime: file.mime,
+        size: file.size,
+        url: '',
+        downloadUrl: '',
+        cacheKey: local.cacheKey,
+        expiresAt: 0,
+      });
+    } catch {
+      return undefined;
+    }
+  };
   if (canPreviewLocally) {
     const quick = peekMessagingMedia(accountId, path);
     if (quick) return quick;
-    const local = await readBlobEntry(localKey);
-    if (
-      local?.encrypted &&
-      local.cacheKey &&
-      encryptedDownload &&
-      ticketEpoch === epoch &&
-      folders.has(cid)
-    ) {
-      const blobKey = `${accountId}:encrypted:${local.cacheKey}`;
-      try {
-        const file = await encryptedDownload(
-          path,
-          controller.signal,
-          {
-            get: async () => new Uint8Array(await local.blob.arrayBuffer()),
-            put: async () => {},
-            remove: async () => {
-              await (await database)?.delete('blobs', localKey);
-            },
-          },
-          { name: '', mime: '', encrypted: local.encrypted, cacheKey: local.cacheKey },
-        );
-        if (ticketEpoch !== epoch || signal?.aborted || !folders.has(cid))
-          throw new DOMException('Aborted', 'AbortError');
-        keepDecrypted(blobKey, file);
-        return authorizedPreview(localKey, blobKey, {
-          name: file.name,
-          mime: file.mime,
-          size: file.size,
-          url: '',
-          downloadUrl: '',
-          cacheKey: local.cacheKey,
-          expiresAt: 0,
-        });
-      } catch {
-        // Reauthorize on the network if the local material cannot be decrypted.
-      }
-    }
+    const localResult = await tryDecryptLocal();
+    if (localResult) return localResult;
     if (ticketEpoch !== epoch || signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   }
   const key = `${accountId}:${url.pathname}:${fullSize ? 'full' : 'preview'}`;
@@ -233,7 +231,7 @@ export async function loadMessagingMedia(
       cache: 'no-store',
       signal: controller.signal,
     }).then(async (response) => {
-      if (!response.ok) throw Error('附件不可用或你已离开此会话');
+      if (!response.ok) throw Error('附件已过期清理或你已离开此会话');
       return (await response.json()) as MediaResource;
     });
     entry = { until: Date.now() + 20000, promise: request };
@@ -242,7 +240,16 @@ export async function loadMessagingMedia(
       if (metadata.get(key)?.promise === request) metadata.delete(key);
     });
   }
-  const resource = await entry.promise;
+  let resource: MediaResource;
+  try {
+    resource = await entry.promise;
+  } catch (err) {
+    if (ticketEpoch !== epoch || signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    // Cloud attachments expire after 7 days; preserve access from local IndexedDB cache when present.
+    const fallback = await tryDecryptLocal();
+    if (fallback) return fallback;
+    throw err;
+  }
   if (ticketEpoch !== epoch || signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   if (resource.encrypted) {
     const blobKey = `${accountId}:encrypted:${resource.cacheKey}`;
@@ -269,18 +276,18 @@ export async function loadMessagingMedia(
                 const blob = preview ?? (await readBlob(prefix + key));
                 if (ticketEpoch !== epoch) return;
                 readPreviewBlob = !!preview;
-                if (blob && canPreviewLocally && !preview) previousBlob = blob;
+                if (blob && cid && !preview) previousBlob = blob;
                 return blob ? new Uint8Array(await blob.arrayBuffer()) : undefined;
               },
               put: async (key, bytes) => {
                 const blob = new Blob([bytes]);
-                if (canPreviewLocally) await saveBlob(localKey, accountId, blob, ticketEpoch, descriptor);
+                if (cid) await saveBlob(localKey, accountId, blob, ticketEpoch, descriptor);
                 else await saveBlob(prefix + key, accountId, blob, ticketEpoch);
               },
               remove: async (key) => {
                 previousBlob = undefined;
                 await (await database)?.delete('blobs', prefix + key);
-                if (canPreviewLocally || readPreviewBlob) await (await database)?.delete('blobs', localKey);
+                if (cid || readPreviewBlob) await (await database)?.delete('blobs', localKey);
               },
             },
             resource,

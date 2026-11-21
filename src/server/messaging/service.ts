@@ -28,6 +28,7 @@ export interface MessagingConfig {
   desktops?: DesktopAuthorizations;
   translate?: SelectionTranslator;
   push?: PushConfig;
+  adminUserIds?: ReadonlySet<string>;
   clientAddress: (request: FastifyRequest['raw']) => string;
 }
 export async function registerMessaging(parent: FastifyInstance, config: MessagingConfig) {

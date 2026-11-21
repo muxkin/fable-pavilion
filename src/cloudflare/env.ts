@@ -20,6 +20,7 @@ export interface Env extends ResourceEnvironment, TranslationEnvironment, Notifi
   POCKET_IM_TOTP_KEY?: string;
   POCKET_DEVICE_LOGIN_ONLY?: string;
   POCKET_IM_HUMAN_CONTACTS?: string;
+  POCKET_ADMIN_UIDS?: string;
   POCKET_IM_CALL_STUN_URLS?: string;
   POCKET_IM_CALL_TURN_URLS?: string;
   POCKET_IM_CALL_TURN_SECRET?: string;

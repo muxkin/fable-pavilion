@@ -44,6 +44,7 @@ pub(super) struct Page {
     running: bool,
     oversized_step: bool,
     executor_metadatas: Vec<Value>,
+    generator_metadatas: Vec<Value>,
     queue: Option<super::queue::Snapshot>,
 }
 
@@ -70,6 +71,10 @@ impl Page {
 
     pub(super) fn executor_metadatas(&self) -> &[Value] {
         &self.executor_metadatas
+    }
+
+    pub(super) fn generator_metadatas(&self) -> &[Value] {
+        &self.generator_metadatas
     }
 
     pub(super) fn queue(&self) -> Option<&super::queue::Snapshot> {
@@ -130,6 +135,15 @@ impl Page {
             .as_array()
             .cloned()
             .unwrap_or_default();
+        let generator_metadatas = update["mainTrajectoryUpdate"]["generatorMetadataUpdate"]
+            ["generatorMetadatas"]
+            .as_array()
+            .or_else(|| {
+                update["mainTrajectoryUpdate"]["generatorMetadataUpdate"]["generatorMetadata"]
+                    .as_array()
+            })
+            .cloned()
+            .unwrap_or_default();
         let ranged = &mut update["mainTrajectoryUpdate"]["stepsUpdate"];
         ensure!(
             ranged["pageBounds"].is_object(),
@@ -165,6 +179,7 @@ impl Page {
             running,
             oversized_step: false,
             executor_metadatas,
+            generator_metadatas,
             queue,
         })
     }

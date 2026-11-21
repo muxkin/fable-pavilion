@@ -690,7 +690,13 @@ impl Backend {
             let mut requests =
                 interactions::views_slice(Some(id), Some(trajectory), page.start(), steps, self.read_only);
             self.apply_question_capabilities(&mut requests);
-            let model = current_model(&Value::Null, steps);
+            let bounded_trajectory = json!({"generatorMetadata": page.generator_metadatas()});
+            let model = current_model(&bounded_trajectory, steps).or_else(|| {
+                [&summary["lastModel"], &summary["latestModel"], &summary["model"]]
+                    .into_iter()
+                    .filter_map(Value::as_str)
+                    .find(|id| !id.is_empty() && *id != "MODEL_UNSPECIFIED")
+            });
             let catalog = if model.is_some() {
                 self.model_catalog().await
             } else {

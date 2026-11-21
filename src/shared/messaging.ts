@@ -8,6 +8,7 @@ export interface ChatUser {
   address: string;
   kind: 'human' | 'agent';
   encrypted?: boolean;
+  isAdmin?: boolean;
   avatarUrl?: string;
   username: string;
   displayName: string;
@@ -149,4 +150,38 @@ export interface MessagingClient {
   ): Promise<{ message: ChatMessage }>;
   read(id: string, sequence: number): Promise<{ ok: boolean }>;
   sync(cursor: number, wait?: number, signal?: AbortSignal): Promise<ChatSync>;
+}
+export interface AdminOverview {
+  retentionDays: number;
+  generatedAt: number;
+  users: { total: number; humans: number; agents: number };
+  sessions: { active: number };
+  conversations: { total: number; direct: number; group: number };
+  messages: { total: number; expiredPending: number; oldestAt: number | null };
+  files: { total: number; bytes: number; expiredPending: number; oldestAt: number | null };
+  stickers: { total: number; bytes: number };
+  avatars: { total: number; bytes: number };
+  gcQueue: { pending: number };
+}
+export interface AdminUserSummary {
+  id: string;
+  address: string;
+  kind: 'human' | 'agent';
+  username: string;
+  displayName: string;
+  createdAt: number;
+  encrypted: boolean;
+  activeSessions: number;
+  lastActiveAt: number | null;
+  messageCount: number;
+  fileCount: number;
+  fileBytes: number;
+  stickerCount: number;
+  hasAvatar: boolean;
+}
+export interface AdminCleanupResult {
+  deletedMessages: number;
+  deletedFiles: number;
+  deletedObjects: number;
+  overview: AdminOverview;
 }

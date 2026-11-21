@@ -89,6 +89,10 @@ pub(super) fn current_model<'a>(trajectory: &'a Value, steps: &'a [Value]) -> Op
             &config["chatModel"]["model"],
             &planner["requestedModel"]["model"],
             &planner["modelName"],
+            &config["generatorModel"],
+            &config["requestedModel"]["model"],
+            &config["modelOrAlias"]["model"],
+            &config["model"],
         ]
         .into_iter()
         .filter_map(Value::as_str)
@@ -104,10 +108,11 @@ pub(super) fn current_model<'a>(trajectory: &'a Value, steps: &'a [Value]) -> Op
         .rev()
         .find_map(selected)
         .or_else(|| {
-            steps
-                .iter()
-                .rev()
-                .find_map(|step| selected(&step["userInput"]["userConfig"]))
+            steps.iter().rev().find_map(|step| {
+                selected(&step["userInput"]["userConfig"])
+                    .or_else(|| selected(&step["metadata"]))
+                    .or_else(|| selected(&step["plannerResponse"]))
+            })
         })
 }
 

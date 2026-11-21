@@ -470,6 +470,7 @@ pub fn remember_origin(directory: &Path, origin: &str) -> Result<()> {
     write
 }
 
+#[cfg(feature = "official-plugins")]
 pub(crate) fn rfc3339_ms(s: &str) -> i64 {
     fn number(s: &str, range: std::ops::Range<usize>) -> Option<i64> {
         s.get(range)?.parse().ok()
