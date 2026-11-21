@@ -8,6 +8,9 @@ import {
 import SvgIcon from '../SvgIcon.vue';
 import { loadNativeInstaller, nativeSourceArchive, type NativeInstaller } from './native-installers.js';
 import { refreshWebsite, type AndroidRelease, type AndroidUpdateState } from './software-updates';
+import { usePwaInstall } from '../pwa-install';
+
+const pwaInstall = usePwaInstall();
 
 defineProps<{
   websiteUpdate: boolean;
@@ -114,6 +117,14 @@ onUnmounted(() => installerRequests.abort());
             <SvgIcon name="download" :size="17" />
             {{ androidUpdate ? '下载新版' : '下载' }}
           </a>
+        </li>
+        <li v-if="pwaInstall.available.value" class="installer-row">
+          <span class="platform-icon"><SvgIcon name="phone" :size="22" /></span>
+          <div class="installer-info">
+            <strong>网页应用（PWA）</strong>
+            <small>添加到主屏幕，以独立窗口运行</small>
+          </div>
+          <button type="button" class="installer-download" @click="pwaInstall.install()">安装应用</button>
         </li>
       </ul>
     </section>

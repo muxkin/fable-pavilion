@@ -8,6 +8,7 @@ import { Avatar } from '../messaging/ui';
 import { AccountForm } from '../messaging/AccountPages';
 import { deviceSession } from '../device-session';
 import { downloadDiagnostics } from '../diagnostics';
+import { usePwaInstall } from '../pwa-install';
 import BrandIcon from '../theme/BrandIcon.vue';
 import { Icon } from '../Icon';
 import { PageHeader } from './PageHeader';
@@ -64,6 +65,7 @@ export default tsxComponent(function MePages(_props: {
   const workingState = shallowRef(false);
   const noticeState = shallowRef('');
   const watchUsage = watchRender();
+  const pwaInstall = usePwaInstall();
   return ({ route, navigate, back, software, updateBlocked }) => {
     const { user, setUser } = useMessaging();
     const name = user?.displayName ?? '登录或创建账户';
@@ -158,6 +160,14 @@ export default tsxComponent(function MePages(_props: {
               <h2 class="settings-section-title" id="me-preferences-group">
                 偏好
               </h2>
+              {pwaInstall.available.value && (
+                <Row
+                  icon="phone"
+                  title="安装到主屏幕"
+                  detail="以独立应用方式打开子虚亭"
+                  onClick={() => void pwaInstall.install()}
+                />
+              )}
               <Row
                 icon="download"
                 title="软件下载"

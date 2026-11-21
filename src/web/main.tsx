@@ -1,4 +1,5 @@
 import './theme/boot.js';
+import './pwa-install';
 import { installBrowserCompatibility } from './browser-compat';
 import { setStartupLoginMode, setStartupSession } from './startup-session';
 import type { AccountClient } from '../client/account';
