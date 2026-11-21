@@ -98,12 +98,14 @@ function verificationFailed() {
   );
 }
 
+const androidInstaller = /^\/downloads\/android\/fable-pavilion-android-[0-9]+\.[0-9]+\.[0-9]+\.apk$/;
+const updateMetadataPaths = new Set(['/version.json', '/downloads/android/latest.json']);
+
 self.pocketVerifiedFrontend = async (event, url) => {
   const request = event.request;
-  const data =
-    url.pathname.startsWith('/api/') ||
-    url.pathname === '/health' ||
-    url.pathname.startsWith('/downloads/desktop/');
+  const installerDownload =
+    url.pathname.startsWith('/downloads/desktop/') || androidInstaller.test(url.pathname);
+  const data = url.pathname.startsWith('/api/') || url.pathname === '/health' || installerDownload;
   // Data routes may be used by the app but cannot load as same-origin executable resources.
   if (
     data &&
@@ -118,14 +120,24 @@ self.pocketVerifiedFrontend = async (event, url) => {
       'object',
       'embed',
     ].includes(request.destination) &&
-    (request.mode !== 'navigate' || url.pathname.startsWith('/downloads/desktop/'))
+    (request.mode !== 'navigate' || installerDownload)
   )
     return fetch(request);
   try {
     const navigation = request.mode === 'navigate';
-    const release =
-      (!navigation && event.clientId && clientReleases.get(event.clientId)) ||
-      (await installedRelease(navigation));
+    const updateMetadata = !navigation && updateMetadataPaths.has(url.pathname);
+    let release;
+    if (updateMetadata) {
+      try {
+        release = await installedRelease(true);
+      } catch {
+        release = (event.clientId && clientReleases.get(event.clientId)) || (await installedRelease(false));
+      }
+    } else {
+      release =
+        (!navigation && event.clientId && clientReleases.get(event.clientId)) ||
+        (await installedRelease(navigation));
+    }
     if (release.expires <= Date.now()) throw Error('Frontend release has expired');
     const path = navigation && !data ? '/index.html' : url.pathname;
     const response = await readFile(release, path);
@@ -137,6 +149,8 @@ self.pocketVerifiedFrontend = async (event, url) => {
       response.headers.set('Content-Security-Policy', self.POCKET_FRONTEND_CSP);
       response.headers.set('Cache-Control', 'no-store');
       response.headers.set('Referrer-Policy', 'no-referrer');
+    } else if (updateMetadata) {
+      response.headers.set('Cache-Control', 'no-store');
     }
     return response;
   } catch {

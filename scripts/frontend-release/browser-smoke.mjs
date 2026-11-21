@@ -71,12 +71,14 @@ try {
     'const { label } = await import("./dependency.js"); document.body.dataset.verified = label;',
   );
   await writeFile(join(source, 'assets/dependency.js'), 'export const label = "old";');
+  await writeFile(join(source, 'version.json'), '{"buildId":"0000000000000001"}');
   const old = signed(20, 'valid');
   assert.equal(JSON.parse(await readFile(join(old, 'manifest.webmanifest'), 'utf8')).start_url, '/');
   assert.ok((await readFile(join(old, 'app-icons/wuyou-192.png'))).length > 1000);
   assert.match(await readFile(join(old, 'index.html'), 'utf8'), /rel="manifest" href="\/manifest\.webmanifest"/);
   assert.match(await readFile(join(old, '_headers'), 'utf8'), /\/manifest\.webmanifest\n\s+Content-Type: application\/manifest\+json/);
   await writeFile(join(source, 'assets/dependency.js'), 'export const label = "new";');
+  await writeFile(join(source, 'version.json'), '{"buildId":"0000000000000002"}');
   const newer = signed(21, 'new');
   const tampered = signed(22, 'tampered');
   const manifestPath = join(tampered, '_release/manifest.json');
@@ -109,6 +111,9 @@ try {
   await page.waitForFunction(() => document.body.dataset.verified === 'old');
   assert.equal(new URL(page.url()).searchParams.get('page'), 'login-security');
   deployed = newer;
+  // Open tabs must observe new version.json before reloading so the hot-update notice triggers.
+  const latestVersion = await page.evaluate(() => fetch('/version.json', { cache: 'no-store' }).then((r) => r.json()));
+  assert.equal(latestVersion.buildId, '0000000000000002');
   await page.reload();
   await page.waitForFunction(() => document.body.dataset.verified === 'new');
   deployed = old;
