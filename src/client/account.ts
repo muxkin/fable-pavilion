@@ -67,6 +67,7 @@ export class AccountClient {
   recoveryLogin = '';
   private pins = new Map<string, PublicAccountKeys>();
   private items = new Map<string, VaultItem>();
+  private legacyUserIds: string[] = [];
   private listeners = new Set<() => void>();
   private stateVersion = 0;
   constructor(
@@ -333,17 +334,47 @@ export class AccountClient {
     this.recoveryLogin = '';
     this.pins.clear();
     this.items.clear();
+    this.legacyUserIds = [];
     this.changed();
   }
   async refreshItems() {
     if (!this.secrets) return [];
     const user = this.user!,
       secrets = this.secrets;
-    const { items } = await this.request<{ items: VaultItem[] }>(`/crypto/items?accountId=${user.id}`);
+    const { items, legacyUserIds } = await this.request<{ items: VaultItem[]; legacyUserIds?: string[] }>(
+      `/crypto/items?accountId=${user.id}`,
+    );
     if (this.user !== user || this.secrets !== secrets) throw Error('账号已切换');
     this.items = new Map(items.map((item) => [item.id, item]));
+    this.legacyUserIds = Array.isArray(legacyUserIds) ? legacyUserIds.filter((id) => id && id !== user.id) : [];
     this.changed();
     return items;
+  }
+  async openVaultItem<T>(item: VaultItem): Promise<T | undefined> {
+    if (!item.ciphertext) return undefined;
+    if (!this.secrets || !this.user) throw Error('请先解锁账号');
+    const user = this.user,
+      secrets = this.secrets;
+    try {
+      return await openPrivate<T>(secrets, `vault:${user.id}:${item.id}`, item.ciphertext);
+    } catch (primaryError) {
+      for (const legacyId of this.legacyUserIds) {
+        try {
+          const value = await openPrivate<T>(secrets, `vault:${legacyId}:${item.id}`, item.ciphertext);
+          // Re-seal transparently under the migrated UID so future opens succeed directly.
+          if (this.user === user && this.secrets === secrets) {
+            try {
+              const migrated = await sealPrivate(secrets, `vault:${user.id}:${item.id}`, value);
+              if (this.user === user && this.secrets === secrets) {
+                await this.writeCiphertext(item.id, migrated, item.revision);
+              }
+            } catch {}
+          }
+          return value;
+        } catch {}
+      }
+      throw primaryError;
+    }
   }
   async readItem<T>(name: string): Promise<T | undefined> {
     if (!this.secrets) throw Error('请先解锁账号');
@@ -352,7 +383,7 @@ export class AccountClient {
     const id = await privateId(secrets, name),
       item = this.items.get(id);
     if (this.user !== user || this.secrets !== secrets) throw Error('账号已切换');
-    return item?.ciphertext ? openPrivate<T>(secrets, `vault:${user.id}:${id}`, item.ciphertext) : undefined;
+    return item?.ciphertext ? this.openVaultItem<T>(item) : undefined;
   }
   async writeItem(name: string, value: unknown | null) {
     if (!this.secrets) throw Error('请先解锁账号');

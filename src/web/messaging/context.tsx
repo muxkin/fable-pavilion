@@ -167,7 +167,8 @@ export const MessagingProvider = defineComponent({
             const requestSignal = AbortSignal.any([signal, request.signal]);
             try {
               if (recovering) {
-                if (messaging.account.secrets) await accountSession?.syncAccountHosts(messaging.account);
+                if (messaging.account.secrets)
+                  await accountSession?.syncAccountHosts(messaging.account).catch(() => {});
                 const state = await messaging.request<{
                   humanContacts?: boolean;
                   contacts: ChatContact[];

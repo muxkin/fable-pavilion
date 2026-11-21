@@ -1,7 +1,6 @@
 import { openDB, type IDBPDatabase } from 'idb';
 import type { AccountClient } from '../client/account';
 import {
-  openPrivate,
   sealPrivate,
   privateId,
   type Ciphertext,
@@ -284,7 +283,12 @@ export async function syncAccountHosts(
     const hosts: PairedHost[] = [];
     for (const item of items) {
       if (!item.ciphertext) continue;
-      const value = await openPrivate<any>(secrets, `vault:${user}:${item.id}`, item.ciphertext);
+      let value: any;
+      try {
+        value = await account.openVaultItem<any>(item);
+      } catch {
+        continue;
+      }
       if (value?.kind === 'host' && value.host?.hostId && value.host.identity?.privateKey) {
         hosts.push({
           ...value.host,

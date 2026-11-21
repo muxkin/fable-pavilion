@@ -306,9 +306,10 @@ describe('7-day cloud retention, persistent sessions, admin console, cache & exp
     // Cannot delete self/admin
     await expect(admin.client.request('/admin/users/10000000', 'DELETE')).rejects.toThrow();
 
-    // Register a second user (gets 10000002), delete old test slot if vacant, migrate to 10000001
+    // Register a second user (gets 10000002), save a vault item under old UID, migrate to 10000001
     const third = await register('thirduser', 'Third');
     const thirdId = (await third.client.me()).user!.id;
+    await third.client.account.writeItem('host:demo', { kind: 'host', label: 'DESKTOP-DEMO' });
     const migrated = await admin.client.request<{ fromId: string; toId: string; lastUid?: string }>(
       `/admin/users/${thirdId}/migrate-uid`,
       'POST',
@@ -317,7 +318,21 @@ describe('7-day cloud retention, persistent sessions, admin console, cache & exp
     expect(migrated.fromId).toBe(thirdId);
     expect(migrated.toId).toBe('10000001');
     expect(migrated.lastUid).toBe('10000001');
-    expect((await third.client.me()).user?.id).toBe('10000001');
+    const migratedUser = (await third.client.me()).user!;
+    expect(migratedUser.id).toBe('10000001');
+    third.client.account.user = migratedUser;
+    const rawItems = await third.client.request<{ items: { id: string; revision: number }[]; legacyUserIds?: string[] }>(
+      `/crypto/items?accountId=10000001`,
+    );
+    expect(rawItems.legacyUserIds).toContain(thirdId);
+    await third.client.account.refreshItems();
+    const restored = await third.client.account.readItem<{ kind: string; label: string }>('host:demo');
+    expect(restored).toEqual({ kind: 'host', label: 'DESKTOP-DEMO' });
+    // Reading transparently re-sealed the item under the new UID (revision bumped from 1 -> 2)
+    const afterReseal = await third.client.request<{ items: { id: string; revision: number }[] }>(
+      `/crypto/items?accountId=10000001`,
+    );
+    expect(afterReseal.items[0].revision).toBe(2);
   });
 
   it('preserves older locally cached messages when merging newer cloud pages', () => {

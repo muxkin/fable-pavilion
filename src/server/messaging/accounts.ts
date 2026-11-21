@@ -403,6 +403,34 @@ export async function registerAccounts(app: MessagingHttp, d: Dependencies) {
     const user = identity(req);
     const { accountId } = z.object({ accountId: z.string().regex(USER_ID_PATTERN) }).parse(req.query);
     if (accountId !== user.id) throw new ChatError(409, '账号已切换，请重新登录');
+    const legacyUserIds: string[] = [];
+    try {
+      const seen = new Set<string>([user.id]);
+      const queue = [user.id];
+      while (queue.length) {
+        const current = queue.shift()!;
+        const rows = store.db
+          .prepare("SELECT detail FROM im_admin_audit WHERE action='migrate_uid' AND target=?")
+          .all(current);
+        for (const row of rows) {
+          const detail = String(row.detail ?? '');
+          let fromId: string | undefined;
+          const match = detail.match(/\b(\d{4,20})\s*->\s*(\d{4,20})\b/);
+          if (match && match[2] === current) fromId = match[1];
+          else {
+            try {
+              const parsed = JSON.parse(detail) as { fromId?: unknown };
+              if (typeof parsed.fromId === 'string') fromId = parsed.fromId;
+            } catch {}
+          }
+          if (fromId && USER_ID_PATTERN.test(fromId) && !seen.has(fromId)) {
+            seen.add(fromId);
+            legacyUserIds.push(fromId);
+            queue.push(fromId);
+          }
+        }
+      }
+    } catch {}
     return {
       items: store.db
         .prepare('SELECT id,revision,ciphertext FROM im_vault_items WHERE user_id=?')
@@ -412,6 +440,7 @@ export async function registerAccounts(app: MessagingHttp, d: Dependencies) {
           revision: r.revision,
           ciphertext: r.ciphertext ? JSON.parse(String(r.ciphertext)) : null,
         })),
+      ...(legacyUserIds.length ? { legacyUserIds } : {}),
     };
   });
   app.put('/crypto/items/:id', { bodyLimit: 2 * 1024 * 1024 }, async (req) => {
