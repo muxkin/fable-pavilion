@@ -5,8 +5,7 @@
   box-shadow: 0 16px 44px #15181024;
 }
 
-:root[data-color-mode='dark'] .im-approval-panel,
-:root[data-theme='pavilion-dark'] .im-approval-panel {
+:root[data-color-mode='dark'] .im-approval-panel {
   --approval-pending: #ecc477;
 }
 

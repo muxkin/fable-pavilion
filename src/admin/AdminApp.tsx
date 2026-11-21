@@ -12,6 +12,7 @@ import type {
 import { Icon } from '../web/Icon';
 import type { IconName } from '../web/icon-paths';
 import { tsxComponent } from '../web/tsx-component';
+import { resolvedLocale, t, toggleLocale } from '../shared/i18n';
 import { AdminLogin } from './AdminLogin';
 import { adminApi, type SiteStatus } from './api';
 import { ConversationsAuditView } from './ConversationsAuditView';
@@ -398,9 +399,19 @@ export const AdminApp = tsxComponent(function AdminApp() {
               </button>
               <button
                 type="button"
+                class="adm-btn is-sm"
+                aria-label={t('切换语言为 English', 'Switch language to Chinese')}
+                title={t('切换界面语言', 'Switch Language')}
+                onClick={toggleLocale}
+              >
+                <Icon name="globe" size={14} />
+                <span>{resolvedLocale.value === 'en' ? '中文' : 'EN'}</span>
+              </button>
+              <button
+                type="button"
                 class="adm-icon-btn"
-                aria-label="切换明暗主题"
-                title={theme.value === 'dark' ? '切换浅色主题' : '切换深色主题'}
+                aria-label={t('切换明暗主题', 'Toggle light/dark theme')}
+                title={theme.value === 'dark' ? t('切换浅色主题', 'Switch to light theme') : t('切换深色主题', 'Switch to dark theme')}
                 onClick={() => applyTheme(theme.value === 'dark' ? 'light' : 'dark')}
               >
                 <Icon name={theme.value === 'dark' ? 'sun' : 'moon'} size={17} />

@@ -1,4 +1,5 @@
 import { tsxComponent } from '../tsx-component';
+import { bcp47Locale, t } from '../../shared/i18n';
 import type { Operation } from '../../shared/types';
 import type { ChatDraft } from '../chat-drafts';
 import { MessageContent } from '../MessageContent';
@@ -30,7 +31,7 @@ export const OutgoingMessageCard = tsxComponent(function OutgoingMessageCard(_pr
     onDismiss,
   }) => (
     <article class="message user outgoing-message" data-outgoing-id={operation.id}>
-      <div class="message-role">你</div>
+      <div class="message-role">{t('你', 'You')}</div>
       <OutgoingContent text="" files={draft.uploads}>
         {() => (
           <>
@@ -61,16 +62,16 @@ export const OutgoingMessageCard = tsxComponent(function OutgoingMessageCard(_pr
               <time
                 class="message-time"
                 datetime={new Date(operation.createdAt).toISOString()}
-                title={new Date(operation.createdAt).toLocaleString('zh-CN')}
+                title={new Date(operation.createdAt).toLocaleString(bcp47Locale())}
               >
-                {new Date(operation.createdAt).toLocaleTimeString('zh-CN', {
+                {new Date(operation.createdAt).toLocaleTimeString(bcp47Locale(), {
                   hour: '2-digit',
                   minute: '2-digit',
                   hour12: false,
                 })}
               </time>
             )}
-            {operation.state === 'accepted' && <span>已发送</span>}
+            {operation.state === 'accepted' && <span>{t('已发送', 'Sent')}</span>}
             <OperationFeedback operation={operation} onCheck={onCheck} onRetry={onRetry} />
             {hasFailure && (
               <div class="outgoing-actions">

@@ -433,7 +433,7 @@
   min-height: 0;
   max-height: none;
 }
-:is([data-theme='pavilion-light'], [data-theme='pavilion-dark']) .login-invitation-dialog {
+[data-backdrop='pavilion'] .login-invitation-dialog {
   background:
     linear-gradient(to bottom, var(--canvas) 0 65%, color-mix(in srgb, var(--canvas) 85%, transparent) 100%),
     var(--pavilion-scene) right bottom / auto 390px no-repeat var(--canvas);

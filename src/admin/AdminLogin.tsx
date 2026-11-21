@@ -4,6 +4,7 @@ import type { ChatUser } from '../shared/messaging';
 import { Icon } from '../web/Icon';
 import { tsxComponent } from '../web/tsx-component';
 import { adminApi, type AdminAuthChallenge, type SiteStatus } from './api';
+import { resolvedLocale, t, toggleLocale } from '../shared/i18n';
 
 type LoginTab = 'handoff' | 'recovery';
 
@@ -127,10 +128,19 @@ export const AdminLogin = tsxComponent(function AdminLogin(initialProps: {
             <span class="adm-brand-mark" aria-hidden="true">
               亭
             </span>
-            <div>
-              <h1>子虚亭 · 管理台</h1>
+            <div style="flex: 1; min-width: 0">
+              <h1>{t('子虚亭 · 管理台', 'Fable Pavilion · Console')}</h1>
               <p>Fable Pavilion Operations Console</p>
             </div>
+            <button
+              type="button"
+              class="adm-btn is-sm"
+              aria-label={t('切换语言为 English', 'Switch language to Chinese')}
+              onClick={toggleLocale}
+            >
+              <Icon name="globe" size={14} />
+              <span>{resolvedLocale.value === 'en' ? '中文' : 'EN'}</span>
+            </button>
           </div>
 
           <div class="adm-auth-tabs" role="tablist">

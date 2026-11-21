@@ -2,7 +2,6 @@
 import { computed, onScopeDispose, ref, shallowRef } from 'vue';
 import SvgIcon from '../SvgIcon.vue';
 import ThemeEditor from './ThemeEditor.vue';
-import { pavilionPalette } from './pavilion-palette';
 import { appIconIds, appIconPath, appIcons, type AppIconId } from './app-icons';
 import {
   exportThemes,
@@ -15,6 +14,7 @@ import {
   type Theme,
 } from './palette';
 import { appearanceSnapshot, subscribeAppearance, updateAppearance } from './store';
+import { localeMode, resolvedLocale, setLocaleMode, t, type LocaleMode } from '../../shared/i18n';
 
 const snapshot = shallowRef(appearanceSnapshot());
 onScopeDispose(
@@ -27,11 +27,38 @@ const settings = computed(() => snapshot.value.settings);
 const resolved = computed(() => snapshot.value.resolved);
 const themes = computed(() => [...presets, ...settings.value.customThemes]);
 const customThemeIds = computed(() => new Set(settings.value.customThemes.map((theme) => theme.id)));
-const displayModes = [
-  ['system', '跟随系统', 'monitor'],
-  ['light', '浅色', 'sun'],
-  ['dark', '深色', 'moon'],
-] as const;
+const displayModes = computed(
+  () =>
+    [
+      ['system', t('跟随系统', 'System'), 'monitor'],
+      ['light', t('浅色', 'Light'), 'sun'],
+      ['dark', t('深色', 'Dark'), 'moon'],
+    ] as const,
+);
+const languageModes = computed(
+  () =>
+    [
+      ['system', t('跟随系统', 'System'), 'globe'],
+      ['zh', '简体中文', 'translate'],
+      ['en', 'English', 'translate'],
+    ] as const,
+);
+const presetName = (theme: Theme) => {
+  if (resolvedLocale.value !== 'en') return theme.name;
+  const map: Record<string, string> = {
+    'pavilion-light': 'Moon White',
+    'pavilion-dark': 'Night Pavilion',
+    'jade-light': 'Jade Bamboo',
+    'blue-light': 'Clear Sky',
+    'jade-dark': 'Deep Jade',
+    'blue-dark': 'Deep Sea',
+  };
+  return map[theme.id] ?? theme.name;
+};
+const appIconLabel = (id: AppIconId) => {
+  if (resolvedLocale.value !== 'en') return appIcons[id];
+  return id === 'wuyou' ? 'Wuyou' : id === 'zixu' ? 'Zixu' : 'Pavilion';
+};
 const themeModes = ['light', 'dark'] as const;
 const editor = shallowRef<Theme>();
 const deleting = ref<string>();
@@ -53,6 +80,13 @@ function selectMode(event: MouseEvent, mode: Appearance['mode']) {
 }
 function selectAppIcon(event: MouseEvent, appIcon: AppIconId) {
   if (appIcon !== settings.value.appIcon && !save({ ...settings.value, appIcon })) event.preventDefault();
+}
+function selectLocale(mode: LocaleMode) {
+  setLocaleMode(mode);
+}
+function selectBackdrop(event: Event) {
+  const input = event.currentTarget as HTMLInputElement;
+  if (!save({ ...settings.value, backdrop: input.checked })) input.checked = settings.value.backdrop;
 }
 function selectLineNumbers(event: Event) {
   const input = event.currentTarget as HTMLInputElement;
@@ -118,11 +152,11 @@ async function importFile(event: Event) {
 <template>
   <div class="appearance-settings">
     <section class="appearance-intro">
-      <h2>让界面合你心意</h2>
-      <p>浅色与深色，各有自己的配色。</p>
+      <h2>{{ t('让界面合你心意', 'Make It Yours') }}</h2>
+      <p>{{ t('浅色与深色，各有自己的配色。', 'Light and dark modes each keep their own color palette.') }}</p>
     </section>
     <fieldset class="theme-mode-picker">
-      <legend>显示模式</legend>
+      <legend>{{ t('显示模式', 'Display Mode') }}</legend>
       <div class="appearance-segmented">
         <label v-for="[mode, label, icon] in displayModes" :key="mode">
           <input
@@ -138,13 +172,47 @@ async function importFile(event: Event) {
       <p class="hint">
         {{
           settings.mode === 'system'
-            ? `随设备自动切换，当前为${resolved === 'light' ? '浅色' : '深色'}。`
-            : `始终使用${resolved === 'light' ? '浅色' : '深色'}模式。`
+            ? t(
+                `随设备自动切换，当前为${resolved === 'light' ? '浅色' : '深色'}。`,
+                `Follows device appearance (currently ${resolved === 'light' ? 'Light' : 'Dark'}).`,
+              )
+            : t(
+                `始终使用${resolved === 'light' ? '浅色' : '深色'}模式。`,
+                `Always uses ${resolved === 'light' ? 'Light' : 'Dark'} mode.`,
+              )
+        }}
+      </p>
+    </fieldset>
+    <fieldset class="theme-mode-picker" style="margin-top: 22px">
+      <legend>{{ t('界面语言', 'Interface Language') }}</legend>
+      <div class="appearance-segmented">
+        <label v-for="[mode, label, icon] in languageModes" :key="mode">
+          <input
+            type="radio"
+            name="appearance-locale"
+            :value="mode"
+            :checked="localeMode === mode"
+            @change="selectLocale(mode)"
+          />
+          <span><SvgIcon :name="icon" :size="18" />{{ label }}</span>
+        </label>
+      </div>
+      <p class="hint">
+        {{
+          localeMode === 'system'
+            ? t(
+                `随系统语言切换，当前为${resolvedLocale === 'en' ? 'English' : '简体中文'}。`,
+                `Follows browser language (currently ${resolvedLocale === 'en' ? 'English' : 'Chinese'}).`,
+              )
+            : t(
+                `当前使用${resolvedLocale === 'en' ? 'English' : '简体中文'}界面。`,
+                `Currently using ${resolvedLocale === 'en' ? 'English' : 'Chinese'} interface.`,
+              )
         }}
       </p>
     </fieldset>
     <fieldset class="app-icon-picker" aria-describedby="app-icon-hint">
-      <legend>应用图标</legend>
+      <legend>{{ t('应用图标', 'App Icon') }}</legend>
       <div class="app-icon-options">
         <label v-for="id in appIconIds" :key="id">
           <input
@@ -156,34 +224,47 @@ async function importFile(event: Event) {
           />
           <span class="app-icon-option">
             <img :src="appIconPath(id)" alt="" width="52" height="52" />
-            {{ appIcons[id] }}
+            {{ appIconLabel(id) }}
             <span class="app-icon-check"><SvgIcon name="check" :size="13" /></span>
           </span>
         </label>
       </div>
       <p id="app-icon-hint" class="hint">
-        选择会保存在当前浏览器。已安装的桌面或主屏幕图标由浏览器和系统更新，有时需要重新添加。
+        {{
+          t(
+            '选择会保存在当前浏览器。已安装的桌面或主屏幕图标由浏览器和系统更新，有时需要重新添加。',
+            'Saved in this browser. Installed desktop or home-screen icons are refreshed by the OS.',
+          )
+        }}
       </p>
     </fieldset>
     <fieldset class="source-display-settings">
-      <legend>代码和文本</legend>
+      <legend>{{ t('界面与文本', 'Display & Text') }}</legend>
       <label>
-        <span>显示行号</span>
+        <span>{{ t('亭台背景画', 'Pavilion backdrop artwork') }}</span>
+        <input type="checkbox" role="switch" :checked="settings.backdrop" @change="selectBackdrop" />
+      </label>
+      <label>
+        <span>{{ t('显示行号', 'Show code line numbers') }}</span>
         <input type="checkbox" role="switch" :checked="settings.lineNumbers" @change="selectLineNumbers" />
       </label>
     </fieldset>
     <section v-for="mode in themeModes" :key="mode" class="theme-section" :aria-labelledby="`${mode}-themes`">
       <header>
         <div>
-          <h2 :id="`${mode}-themes`">{{ mode === 'light' ? '浅色主题' : '深色主题' }}</h2>
-          <p class="hint">{{ resolved === mode ? '当前模式' : '切换到此模式时使用' }}</p>
+          <h2 :id="`${mode}-themes`">
+            {{ mode === 'light' ? t('浅色主题', 'Light Themes') : t('深色主题', 'Dark Themes') }}
+          </h2>
+          <p class="hint">
+            {{ resolved === mode ? t('当前模式', 'Active mode') : t('切换到此模式时使用', 'Used when switching to this mode') }}
+          </p>
         </div>
         <button
           class="theme-add"
-          :aria-label="`添加${mode === 'light' ? '浅色' : '深色'}主题`"
+          :aria-label="mode === 'light' ? t('添加浅色主题', 'Add Light Theme') : t('添加深色主题', 'Add Dark Theme')"
           @click="add(mode)"
         >
-          <SvgIcon name="plus" :size="18" />添加主题
+          <SvgIcon name="plus" :size="18" />{{ t('添加主题', 'Add Theme') }}
         </button>
       </header>
       <div class="theme-grid">
@@ -196,13 +277,14 @@ async function importFile(event: Event) {
           <button
             type="button"
             class="theme-select"
-            :aria-label="`选择${theme.name}`"
+            :aria-label="t(`选择${theme.name}`, `Select ${presetName(theme)}`)"
             :aria-pressed="settings[mode] === theme.id"
             @click="save({ ...settings, [mode]: theme.id })"
           >
             <div
               class="theme-preview"
               :data-preview-theme="theme.id"
+              :data-preview-mode="theme.mode"
               :style="themeTokens(theme)"
               aria-hidden="true"
             >
@@ -215,43 +297,62 @@ async function importFile(event: Event) {
               </div>
             </div>
             <span class="theme-card-label">
-              <strong>{{ theme.name }}</strong>
-              <span v-if="settings[mode] === theme.id"><SvgIcon name="check" :size="16" />已选择</span>
-              <small v-else>{{ customThemeIds.has(theme.id) ? '自定义' : '预设' }}</small>
+              <strong>{{ presetName(theme) }}</strong>
+              <span v-if="settings[mode] === theme.id">
+                <SvgIcon name="check" :size="16" />{{ t('已选择', 'Selected') }}
+              </span>
+              <small v-else>{{ customThemeIds.has(theme.id) ? t('自定义', 'Custom') : t('预设', 'Preset') }}</small>
             </span>
           </button>
-          <div v-if="!pavilionPalette(theme.id, theme.mode)" class="theme-card-tools">
-            <button type="button" title="导出主题" :aria-label="`导出${theme.name}`" @click="download(theme)">
+          <div class="theme-card-tools">
+            <button
+              type="button"
+              :title="t('导出主题', 'Export Theme')"
+              :aria-label="t(`导出${theme.name}`, `Export ${presetName(theme)}`)"
+              @click="download(theme)"
+            >
               <SvgIcon name="download" :size="16" />
             </button>
             <template v-if="customThemeIds.has(theme.id)">
-              <button type="button" title="编辑主题" :aria-label="`编辑${theme.name}`" @click="editor = theme">
+              <button
+                type="button"
+                :title="t('编辑主题', 'Edit Theme')"
+                :aria-label="t(`编辑${theme.name}`, `Edit ${presetName(theme)}`)"
+                @click="editor = theme"
+              >
                 <SvgIcon name="sliders" :size="16" />
               </button>
-              <button type="button" title="删除主题" :aria-label="`删除${theme.name}`" @click="deleting = theme.id">
+              <button
+                type="button"
+                :title="t('删除主题', 'Delete Theme')"
+                :aria-label="t(`删除${theme.name}`, `Delete ${presetName(theme)}`)"
+                @click="deleting = theme.id"
+              >
                 <SvgIcon name="trash" :size="16" />
               </button>
             </template>
           </div>
           <div v-if="deleting === theme.id" class="theme-delete-confirm">
-            <p>删除“{{ theme.name }}”？</p>
-            <button class="secondary" @click="deleting = undefined">取消</button>
-            <button class="danger" @click="deleteTheme(theme)">确认删除</button>
+            <p>{{ t(`删除“${theme.name}”？`, `Delete "${presetName(theme)}"?`) }}</p>
+            <button class="secondary" @click="deleting = undefined">{{ t('取消', 'Cancel') }}</button>
+            <button class="danger" @click="deleteTheme(theme)">{{ t('确认删除', 'Confirm Delete') }}</button>
           </div>
         </article>
       </div>
     </section>
     <div class="theme-import">
       <button class="secondary" @click="fileInput?.click()">
-        <SvgIcon name="upload" :size="18" />导入主题
+        <SvgIcon name="upload" :size="18" />{{ t('导入主题', 'Import Theme') }}
       </button>
-      <p class="hint">主题保存在此浏览器。导出后可在其他设备导入。</p>
+      <p class="hint">
+        {{ t('主题保存在此浏览器。导出后可在其他设备导入。', 'Themes are stored locally. Export to import on other devices.') }}
+      </p>
       <input
         ref="fileInput"
         hidden
         type="file"
         accept=".json,application/json"
-        aria-label="导入主题文件"
+        :aria-label="t('导入主题文件', 'Import theme JSON file')"
         @change="importFile"
       />
     </div>

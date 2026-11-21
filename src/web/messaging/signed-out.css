@@ -8,8 +8,30 @@
   background: var(--login-background);
 }
 
-:root[data-theme='pavilion-light'] #root > .signed-out-entry.pavilion-flow {
+:root[data-color-mode='light'][data-backdrop='pavilion'] #root > .signed-out-entry.pavilion-flow {
   --login-background: #fff;
+}
+
+.signed-out-lang-toggle {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  right: max(16px, env(safe-area-inset-right));
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.signed-out-lang-toggle:hover {
+  border-color: var(--accent);
 }
 
 .signed-out-entry .pavilion-flow-content {
@@ -162,7 +184,7 @@
   display: none;
 }
 
-[data-theme='pavilion-light'] .signed-out-entry .signed-out-artwork {
+[data-color-mode='light'][data-backdrop='pavilion'] .signed-out-entry .signed-out-artwork {
   display: block;
   position: absolute;
   z-index: -1;
@@ -217,7 +239,7 @@
     width: 90%;
   }
 
-  [data-theme='pavilion-light'] .signed-out-entry .signed-out-artwork {
+  [data-color-mode='light'][data-backdrop='pavilion'] .signed-out-entry .signed-out-artwork {
     position: static;
     width: min(calc(100% + 44px), 450px);
     justify-self: end;

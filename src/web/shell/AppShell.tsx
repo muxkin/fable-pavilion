@@ -10,6 +10,8 @@ import { useAppViewport } from './viewport';
 import { lazyPage } from './lazy-page';
 import { PageBoundary, PageLoading } from './PageBoundary';
 import { takeLoginInvitation } from './login-invitation';
+import { Icon } from '../Icon';
+import { resolvedLocale, t, toggleLocale } from '../../shared/i18n';
 
 const AuthenticatedShell = lazyPage(() => import('./AuthenticatedShell'));
 
@@ -38,16 +40,26 @@ export const AppShell = tsxComponent(function AppShell() {
       window.addEventListener('popstate', pop);
       return () => window.removeEventListener('popstate', pop);
     }, []);
-    if (session.loading && !session.user) return <PageLoading label="正在读取账户…" page={route.page} />;
+    if (session.loading && !session.user)
+      return <PageLoading label={t('正在读取账户…', 'Loading account…')} page={route.page} />;
     if (!session.user) {
       // Leave authenticated invitation links to the routed shell. Keep an anonymous
       // invitation in memory after removing its secret from the address bar.
       if (route.page === 'login-invite' && location.hash) invitation.value = takeLoginInvitation(route);
       return (
         <main class="workbench-onboarding pavilion-flow signed-out-entry">
+          <button
+            type="button"
+            class="signed-out-lang-toggle"
+            onClick={toggleLocale}
+            aria-label={t('切换语言为 English', 'Switch language to Chinese')}
+          >
+            <Icon name="globe" size={15} />
+            <span>{resolvedLocale.value === 'en' ? '中文' : 'EN'}</span>
+          </button>
           {route.page === 'login-invite' ? (
             <section class="pavilion-flow-content login-invite-content">
-              <h1 class="pavilion-flow-title">登录邀请</h1>
+              <h1 class="pavilion-flow-title">{t('登录邀请', 'Sign-in Invitation')}</h1>
               <TrustedInvitationReceiver
                 key={invitation.value?.id ?? 'scan'}
                 invitation={invitation.value}
@@ -65,7 +77,7 @@ export const AppShell = tsxComponent(function AppShell() {
             <Notice text={session.connectionError} />
             {session.connectionError && (
               <button class="secondary" onClick={() => void session.refresh()}>
-                重新连接
+                {t('重新连接', 'Reconnect')}
               </button>
             )}
           </div>
@@ -75,7 +87,7 @@ export const AppShell = tsxComponent(function AppShell() {
     return (
       <PageBoundary
         page={route.page}
-        backLabel="返回消息"
+        backLabel={t('返回消息', 'Back to Messages')}
         onBack={() => location.replace(routeURL({ page: 'messages' }))}
       >
         {() => (

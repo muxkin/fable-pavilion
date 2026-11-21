@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue';
 import SvgIcon from '../SvgIcon.vue';
+import { t } from '../../shared/i18n';
 import './donation.css';
 
 interface SupportPlatform {
@@ -146,13 +147,14 @@ function retryImage() {
       <span class="support-heart">
         <SvgIcon name="heart" :size="25" />
       </span>
-      <h2>支持子虚亭</h2>
-      <p>如果它让你与 AI 的交流更轻松，<br />欢迎随心支持，让项目继续成长。</p>
+      <h2>{{ t('支持子虚亭', 'Support Fable Pavilion') }}</h2>
+      <p v-if="t('zh', 'en') === 'zh'">如果它让你与 AI 的交流更轻松，<br />欢迎随心支持，让项目继续成长。</p>
+      <p v-else>If Fable Pavilion makes working with your AI agents easier,<br />voluntary support helps the project keep growing.</p>
     </section>
-    <p v-if="state === 'loading'" class="support-notice" role="status">正在加载支持方式…</p>
+    <p v-if="state === 'loading'" class="support-notice" role="status">{{ t('正在加载支持方式…', 'Loading support options…') }}</p>
     <div v-else-if="state === 'error'" class="support-notice" role="status">
-      <p>支持方式暂时无法加载。</p>
-      <button class="secondary" @click="revision++">重试</button>
+      <p>{{ t('支持方式暂时无法加载。', 'Support options are temporarily unavailable.') }}</p>
+      <button class="secondary" @click="revision++">{{ t('重试', 'Retry') }}</button>
     </div>
     <template v-else>
       <section v-if="wechat" class="reward-card" aria-labelledby="wechat-reward-title">
@@ -210,17 +212,17 @@ function retryImage() {
           <SvgIcon name="github" :size="22" />
         </span>
         <div class="support-platform-text">
-          <strong id="support-github-title">开源共建 · GitHub</strong>
-          <small>{{ githubSlug || '访问开源仓库，一起打磨子虚亭' }}</small>
+          <strong id="support-github-title">{{ t('开源共建 · GitHub', 'Open Source · GitHub') }}</strong>
+          <small>{{ githubSlug || t('访问开源仓库，一起打磨子虚亭', 'Explore the source repository & build with us') }}</small>
         </div>
         <a
           class="support-github-repo-link"
           :href="githubRepo"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="打开 GitHub 仓库（新窗口）"
+          :aria-label="t('打开 GitHub 仓库（新窗口）', 'Open GitHub repository (new tab)')"
         >
-          <span>仓库主页</span>
+          <span>{{ t('仓库主页', 'Repository') }}</span>
           <SvgIcon name="external" :size="14" />
         </a>
       </div>
@@ -230,53 +232,54 @@ function retryImage() {
           :href="githubRepo"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="前往 GitHub 为项目点 Star（新窗口）"
+          :aria-label="t('前往 GitHub 为项目点 Star（新窗口）', 'Star Fable Pavilion on GitHub (new tab)')"
         >
           <span class="support-github-action-icon">
             <SvgIcon name="star" :size="18" />
           </span>
-          <strong>点个 Star</strong>
-          <small>收藏项目，关注更新</small>
+          <strong>{{ t('点个 Star', 'Star Project') }}</strong>
+          <small>{{ t('收藏项目，关注更新', 'Bookmark & follow updates') }}</small>
         </a>
         <a
           class="support-github-action"
           :href="`${githubRepo}/issues/new/choose`"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="前往 GitHub 提交 Issue（新窗口）"
+          :aria-label="t('前往 GitHub 提交 Issue（新窗口）', 'Open an issue on GitHub (new tab)')"
         >
           <span class="support-github-action-icon">
             <SvgIcon name="info" :size="18" />
           </span>
-          <strong>提交 Issue</strong>
-          <small>反馈问题或提出建议</small>
+          <strong>{{ t('提交 Issue', 'Open Issue') }}</strong>
+          <small>{{ t('反馈问题或提出建议', 'Report bugs or request features') }}</small>
         </a>
         <a
           class="support-github-action"
           :href="`${githubRepo}/pulls`"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="前往 GitHub 参与贡献加入项目（新窗口）"
+          :aria-label="t('前往 GitHub 参与贡献加入项目（新窗口）', 'Contribute to Fable Pavilion on GitHub (new tab)')"
         >
           <span class="support-github-action-icon">
             <SvgIcon name="branch" :size="18" />
           </span>
-          <strong>加入项目</strong>
-          <small>贡献代码、插件或文档</small>
+          <strong>{{ t('加入项目', 'Contribute') }}</strong>
+          <small>{{ t('贡献代码、插件或文档', 'Code, adapters, or docs') }}</small>
         </a>
       </div>
     </section>
     <section class="support-purpose">
-      <h3>每一份支持，都用在持续改进上</h3>
-      <p>改进跨端体验与适配器，支持开发、测试和服务维护。</p>
+      <h3>{{ t('每一份支持，都用在持续改进上', 'Every contribution goes into ongoing improvements') }}</h3>
+      <p>{{ t('改进跨端体验与适配器，支持开发、测试和服务维护。', 'Improving cross-device experience, adapters, testing, and operations.') }}</p>
       <div>
-        <span><SvgIcon name="monitor" :size="17" /> 跨端体验</span>
-        <span><SvgIcon name="code" :size="17" /> 持续开发</span>
-        <span><SvgIcon name="shield" :size="17" /> 服务维护</span>
+        <span><SvgIcon name="monitor" :size="17" /> {{ t('跨端体验', 'Cross-Device UX') }}</span>
+        <span><SvgIcon name="code" :size="17" /> {{ t('持续开发', 'Development') }}</span>
+        <span><SvgIcon name="shield" :size="17" /> {{ t('服务维护', 'Operations') }}</span>
       </div>
     </section>
     <p class="support-footnote">
-      支持完全自愿，不改变现有功能或账户额度。<br />反馈和分享，同样是对项目的支持。
+      <template v-if="t('zh', 'en') === 'zh'">支持完全自愿，不改变现有功能或账户额度。<br />反馈和分享，同样是对项目的支持。</template>
+      <template v-else>Support is completely voluntary and does not change features or quotas.<br />Feedback, stars, and sharing help just as much.</template>
     </p>
   </div>
 </template>

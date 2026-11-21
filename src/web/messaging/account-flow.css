@@ -20,8 +20,7 @@
   padding: 0;
 }
 
-:is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
-  :is(#root > .pavilion-flow, .app-shell .pavilion-flow) {
+[data-backdrop='pavilion'] :is(#root > .pavilion-flow, .app-shell .pavilion-flow) {
   background:
     linear-gradient(
       90deg,
@@ -233,8 +232,7 @@
     gap: 17px;
   }
 
-  :is([data-theme='pavilion-light'], [data-theme='pavilion-dark'])
-    :is(#root > .pavilion-flow, .app-shell .pavilion-flow) {
+  [data-backdrop='pavilion'] :is(#root > .pavilion-flow, .app-shell .pavilion-flow) {
     background:
       linear-gradient(
         to bottom,

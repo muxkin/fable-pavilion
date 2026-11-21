@@ -15,6 +15,7 @@ export interface Appearance {
   mode: AppearanceMode;
   light: string;
   dark: string;
+  backdrop: boolean;
   lineNumbers: boolean;
   appIcon: AppIconId;
   customThemes: Theme[];
@@ -34,6 +35,7 @@ export const defaults: Appearance = {
   mode: 'system',
   light: 'pavilion-light',
   dark: 'pavilion-dark',
+  backdrop: true,
   lineNumbers: true,
   appIcon: defaultAppIcon,
   customThemes: [],
@@ -76,6 +78,7 @@ export function parseAppearance(value: unknown): Appearance {
     mode: ['system', 'light', 'dark'].includes(data.mode) ? data.mode : 'system',
     light: themes.some((t) => t.id === data.light && t.mode === 'light') ? data.light : defaults.light,
     dark: themes.some((t) => t.id === data.dark && t.mode === 'dark') ? data.dark : defaults.dark,
+    backdrop: data.backdrop !== false,
     lineNumbers: data.lineNumbers !== false,
     appIcon: parseAppIcon(data.appIcon),
     customThemes,

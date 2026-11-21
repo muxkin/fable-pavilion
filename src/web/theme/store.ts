@@ -35,6 +35,7 @@ function apply() {
     document.documentElement.style.setProperty(key, value);
   document.documentElement.dataset.colorMode = mode;
   document.documentElement.dataset.theme = theme.id;
+  document.documentElement.dataset.backdrop = settings.backdrop ? 'pavilion' : 'plain';
   document.documentElement.style.colorScheme = mode;
   document
     .querySelector('meta[name="theme-color"]')

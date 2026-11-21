@@ -21,6 +21,7 @@
   const root = document.documentElement;
   root.dataset.theme = theme;
   root.dataset.colorMode = mode;
+  root.dataset.backdrop = data.backdrop === false ? 'plain' : 'pavilion';
   root.style.colorScheme = mode;
   const colors =
     data.paint?.[mode] ??
