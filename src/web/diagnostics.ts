@@ -56,7 +56,7 @@ const maxStoredLength = 24 * 1024;
 const repeatInterval = 2 * 60 * 1000;
 const build = typeof __POCKET_WEB_BUILD_ID__ === 'string' ? __POCKET_WEB_BUILD_ID__ : 'dev';
 const allowedPages =
-  /^(messages|contacts|workbench|me|settings|appearance|devices|integrations|profile|login-security|trusted-devices|login-devices|authenticators|account-recovery|account-credentials|resources|admin|donation|downloads|about|add-computer|account-login|pair|login-invite|desktop-authorization)$/;
+  /^(messages|contacts|workbench|me|settings|appearance|devices|integrations|profile|login-security|trusted-devices|login-devices|authenticators|account-recovery|account-credentials|resources|donation|downloads|about|add-computer|account-login|pair|login-invite|desktop-authorization)$/;
 
 type Entry = Diagnostic & { at: number; build: string; online?: boolean; client: (typeof clients)[number] };
 let memory: Entry[] = [];

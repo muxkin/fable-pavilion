@@ -24,6 +24,7 @@ export interface RelayConfig {
   origin: string;
   upstreamOrigin?: string;
   webRoot: string;
+  adminRoot?: string;
   releaseRoot?: string;
   releaseDownloadBase?: string;
   database?: string;
@@ -94,6 +95,12 @@ export async function buildRelay(config: RelayConfig) {
         core.revokeDesktop(id);
         return true;
       },
+      listAll: () => desktops.listAll(),
+      revokeAny: (id) => {
+        if (!desktops.revokeAny(id)) return false;
+        core.revokeDesktop(id);
+        return true;
+      },
     },
   });
   const releases = fileReleaseStore(config.releaseRoot ?? join(config.webRoot, '..'));
@@ -126,6 +133,23 @@ export async function buildRelay(config: RelayConfig) {
       .header('Set-Cookie', 'pocket_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict')
       .send({ error: '请使用新的设备配对' }),
   );
+  const adminRoot = config.adminRoot ?? join(config.webRoot, '..', 'admin');
+  if (existsSync(adminRoot)) {
+    app.get('/admin', (_req, reply) => reply.redirect('/admin/'));
+    await app.register(staticFiles, {
+      root: adminRoot,
+      prefix: '/admin/',
+      index: 'index.html',
+      decorateReply: false,
+      cacheControl: false,
+      setHeaders(response, file) {
+        response.setHeader(
+          'Cache-Control',
+          file.includes(`${sep}assets${sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache',
+        );
+      },
+    });
+  }
   if (existsSync(config.webRoot))
     await app.register(staticFiles, {
       root: config.webRoot,

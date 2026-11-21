@@ -4,6 +4,7 @@ import {
   desktopAuthorizationLifetime,
   desktopAuthorizationProof,
   type AccountDesktop,
+  type AdminDesktopEnrollment,
   type DesktopAuthorization,
 } from '../shared/desktop-authorization.js';
 import type { MessagingDatabase } from './messaging/database.js';
@@ -14,6 +15,8 @@ export interface DesktopAuthorizations {
   list(account: string): AccountDesktop[] | Promise<AccountDesktop[]>;
   ready(account: string, hostId: string, ticket: string): boolean | Promise<boolean>;
   revoke(account: string, hostId: string): boolean | Promise<boolean>;
+  listAll?: () => AdminDesktopEnrollment[] | Promise<AdminDesktopEnrollment[]>;
+  revokeAny?: (hostId: string) => boolean | Promise<boolean>;
 }
 
 export class DesktopEnrollmentStore {
@@ -103,5 +106,34 @@ export class DesktopEnrollmentStore {
     `,
       )
       .run(Date.now(), account, hostId).changes;
+  }
+
+  listAll(): AdminDesktopEnrollment[] {
+    return this.db
+      .prepare(
+        `
+      SELECT host, account, name, issued, revoked FROM desktop_enrollments
+      ORDER BY (revoked IS NOT NULL) ASC, issued DESC LIMIT 500
+    `,
+      )
+      .all()
+      .map((row) => ({
+        hostId: String(row.host),
+        accountId: String(row.account),
+        name: String(row.name),
+        issuedAt: Number(row.issued),
+        revokedAt: row.revoked == null ? null : Number(row.revoked),
+      }));
+  }
+
+  revokeAny(hostId: string): boolean {
+    return !!this.db
+      .prepare(
+        `
+      UPDATE desktop_enrollments SET revoked=MAX(COALESCE(revoked, 0), issued, ?)
+      WHERE host=? AND revoked IS NULL
+    `,
+      )
+      .run(Date.now(), hostId).changes;
   }
 }

@@ -10,8 +10,25 @@ import { SEALED_PREFIX, parseEnvelope, canonical, type AccountVault } from '../.
 import { nextUserId, USER_ID_PATTERN, USERNAME_PATTERN } from '../../shared/account-identity.js';
 import type { ResourceService } from '../resources/service.js';
 import type { ResourceFile, ResourceKind } from '../../shared/resources.js';
+import {
+  ensureAdminAuditSchema,
+  insertAdminAudit,
+  queryAdminAudit,
+  queryAdminConversations,
+  queryAdminOverview,
+  queryAdminOwnedAgents,
+  queryAdminSessions,
+  queryAdminStorageDetail,
+  queryAdminUserById,
+  queryAdminUsers,
+  revokeAdminSessionByDeviceId,
+} from './admin-queries.js';
 import type {
+  AdminAuditEntry,
+  AdminConversationSummary,
   AdminOverview,
+  AdminSessionEntry,
+  AdminStorageDetail,
   AdminUserSummary,
   ChatInteraction,
   InteractionResponse,
@@ -203,6 +220,7 @@ export class MessagingStore {
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS im_object_gc(key TEXT PRIMARY KEY, not_before INTEGER NOT NULL)',
     );
+    ensureAdminAuditSchema(this.db);
   }
   close() {
     this.db.close();
@@ -1495,125 +1513,43 @@ export class MessagingStore {
     return this.pruneExpiredCloudData(now);
   }
   adminOverview(now = Date.now()): AdminOverview {
-    const cutoff = now - MESSAGE_RETENTION_MS;
-    const users = this.db
-      .prepare(
-        "SELECT COUNT(*) AS total, SUM(CASE WHEN kind='human' THEN 1 ELSE 0 END) AS humans, SUM(CASE WHEN kind='agent' THEN 1 ELSE 0 END) AS agents FROM im_users",
-      )
-      .get()!;
-    const sessions = this.db
-      .prepare('SELECT COUNT(*) AS active FROM im_sessions WHERE expires_at>?')
-      .get(now)!;
-    const convos = this.db
-      .prepare(
-        "SELECT COUNT(*) AS total, SUM(CASE WHEN kind='direct' THEN 1 ELSE 0 END) AS direct, SUM(CASE WHEN kind='group' THEN 1 ELSE 0 END) AS grp FROM im_conversations",
-      )
-      .get()!;
-    const messages = this.db
-      .prepare(
-        'SELECT COUNT(*) AS total, SUM(CASE WHEN created_at<=? THEN 1 ELSE 0 END) AS expiredPending, MIN(created_at) AS oldestAt FROM im_messages',
-      )
-      .get(cutoff)!;
-    const files = this.db
-      .prepare(
-        'SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN removed=0 THEN size ELSE 0 END),0) AS bytes, SUM(CASE WHEN created_at<=? THEN 1 ELSE 0 END) AS expiredPending, MIN(created_at) AS oldestAt FROM im_files WHERE removed=0',
-      )
-      .get(cutoff)!;
-    const stickers = this.db
-      .prepare('SELECT COUNT(*) AS total, COALESCE(SUM(size),0) AS bytes FROM im_stickers')
-      .get()!;
-    const avatars = this.db
-      .prepare('SELECT COUNT(*) AS total, COALESCE(SUM(size),0) AS bytes FROM im_avatars')
-      .get()!;
-    const gcQueue = this.db.prepare('SELECT COUNT(*) AS pending FROM im_object_gc').get()!;
-    return {
-      retentionDays: MESSAGE_RETENTION_DAYS,
-      generatedAt: now,
-      users: {
-        total: Number(users.total ?? 0),
-        humans: Number(users.humans ?? 0),
-        agents: Number(users.agents ?? 0),
-      },
-      sessions: { active: Number(sessions.active ?? 0) },
-      conversations: {
-        total: Number(convos.total ?? 0),
-        direct: Number(convos.direct ?? 0),
-        group: Number(convos.grp ?? 0),
-      },
-      messages: {
-        total: Number(messages.total ?? 0),
-        expiredPending: Number(messages.expiredPending ?? 0),
-        oldestAt: messages.oldestAt == null ? null : Number(messages.oldestAt),
-      },
-      files: {
-        total: Number(files.total ?? 0),
-        bytes: Number(files.bytes ?? 0),
-        expiredPending: Number(files.expiredPending ?? 0),
-        oldestAt: files.oldestAt == null ? null : Number(files.oldestAt),
-      },
-      stickers: {
-        total: Number(stickers.total ?? 0),
-        bytes: Number(stickers.bytes ?? 0),
-      },
-      avatars: {
-        total: Number(avatars.total ?? 0),
-        bytes: Number(avatars.bytes ?? 0),
-      },
-      gcQueue: { pending: Number(gcQueue.pending ?? 0) },
-    };
+    return queryAdminOverview(this.db, this.authority, now);
   }
-  adminUsers(query = '', limit = 50): AdminUserSummary[] {
-    const now = Date.now();
-    const cleaned = query.trim().toLowerCase();
-    const capped = Math.max(1, Math.min(200, Math.floor(limit)));
-    const rows = cleaned
-      ? this.db
-          .prepare(
-            `SELECT u.id, u.kind, u.username, u.display_name AS displayName, u.created_at AS createdAt,
-                    EXISTS(SELECT 1 FROM im_account_crypto c WHERE c.user_id=u.id) AS encrypted,
-                    (SELECT COUNT(*) FROM im_sessions s WHERE s.user_id=u.id AND s.expires_at>?) AS activeSessions,
-                    (SELECT MAX(d.last_active_at) FROM im_sessions s JOIN im_login_devices d ON d.session_hash=s.hash WHERE s.user_id=u.id AND s.expires_at>?) AS lastActiveAt,
-                    (SELECT COUNT(*) FROM im_messages m WHERE m.sender_id=u.id) AS messageCount,
-                    (SELECT COUNT(*) FROM im_files f WHERE f.user_id=u.id AND f.removed=0) AS fileCount,
-                    (SELECT COALESCE(SUM(f.size),0) FROM im_files f WHERE f.user_id=u.id AND f.removed=0) AS fileBytes,
-                    (SELECT COUNT(*) FROM im_stickers st WHERE st.user_id=u.id) AS stickerCount,
-                    EXISTS(SELECT 1 FROM im_avatars a WHERE a.user_id=u.id) AS hasAvatar
-             FROM im_users u
-             WHERE instr(lower(u.id),?)>0 OR instr(lower(u.username),?)>0 OR instr(lower(u.display_name),?)>0
-             ORDER BY u.created_at ASC LIMIT ?`,
-          )
-          .all(now, now, cleaned, cleaned, cleaned, capped)
-      : this.db
-          .prepare(
-            `SELECT u.id, u.kind, u.username, u.display_name AS displayName, u.created_at AS createdAt,
-                    EXISTS(SELECT 1 FROM im_account_crypto c WHERE c.user_id=u.id) AS encrypted,
-                    (SELECT COUNT(*) FROM im_sessions s WHERE s.user_id=u.id AND s.expires_at>?) AS activeSessions,
-                    (SELECT MAX(d.last_active_at) FROM im_sessions s JOIN im_login_devices d ON d.session_hash=s.hash WHERE s.user_id=u.id AND s.expires_at>?) AS lastActiveAt,
-                    (SELECT COUNT(*) FROM im_messages m WHERE m.sender_id=u.id) AS messageCount,
-                    (SELECT COUNT(*) FROM im_files f WHERE f.user_id=u.id AND f.removed=0) AS fileCount,
-                    (SELECT COALESCE(SUM(f.size),0) FROM im_files f WHERE f.user_id=u.id AND f.removed=0) AS fileBytes,
-                    (SELECT COUNT(*) FROM im_stickers st WHERE st.user_id=u.id) AS stickerCount,
-                    EXISTS(SELECT 1 FROM im_avatars a WHERE a.user_id=u.id) AS hasAvatar
-             FROM im_users u
-             ORDER BY u.created_at ASC LIMIT ?`,
-          )
-          .all(now, now, capped);
-    return rows.map((row) => ({
-      id: String(row.id),
-      address: `${row.id}@${this.authority}`,
-      kind: String(row.kind) as 'human' | 'agent',
-      username: String(row.username),
-      displayName: String(row.displayName),
-      createdAt: Number(row.createdAt),
-      encrypted: Boolean(row.encrypted),
-      activeSessions: Number(row.activeSessions ?? 0),
-      lastActiveAt: row.lastActiveAt == null ? null : Number(row.lastActiveAt),
-      messageCount: Number(row.messageCount ?? 0),
-      fileCount: Number(row.fileCount ?? 0),
-      fileBytes: Number(row.fileBytes ?? 0),
-      stickerCount: Number(row.stickerCount ?? 0),
-      hasAvatar: Boolean(row.hasAvatar),
-    }));
+  adminUsers(
+    options: string | { query?: string; kind?: 'all' | 'human' | 'agent'; sort?: string; limit?: number } = {},
+    limit = 50,
+  ): AdminUserSummary[] {
+    if (typeof options === 'string') return queryAdminUsers(this.db, this.authority, { query: options, limit });
+    return queryAdminUsers(this.db, this.authority, options);
+  }
+  adminUserById(userId: string): AdminUserSummary | null {
+    return queryAdminUserById(this.db, this.authority, userId);
+  }
+  adminOwnedAgents(ownerId: string): AdminUserSummary[] {
+    return queryAdminOwnedAgents(this.db, this.authority, ownerId);
+  }
+  adminSessions(
+    currentSessionHash: string,
+    options: { userId?: string; query?: string; limit?: number } = {},
+  ): AdminSessionEntry[] {
+    return queryAdminSessions(this.db, currentSessionHash, options);
+  }
+  adminRevokeSessionByDeviceId(deviceId: string, currentSessionHash: string) {
+    const result = revokeAdminSessionByDeviceId(this.db, deviceId, currentSessionHash);
+    this.changes.emit(result.userId);
+    return result;
+  }
+  adminConversations(limit = 100): AdminConversationSummary[] {
+    return queryAdminConversations(this.db, limit);
+  }
+  adminStorageDetail(now = Date.now()): AdminStorageDetail {
+    return queryAdminStorageDetail(this.db, now);
+  }
+  recordAdminAudit(actorId: string, action: string, target: string | null, detail: string) {
+    insertAdminAudit(this.db, actorId, action, target, detail);
+  }
+  adminAuditLogs(limit = 100): AdminAuditEntry[] {
+    return queryAdminAudit(this.db, limit);
   }
   adminRevokeUserSessions(targetUserId: string, keepSessionHash?: string) {
     this.user(targetUserId);

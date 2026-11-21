@@ -29,6 +29,7 @@ import { hasMessagingDrafts, subscribeDrafts } from '../messaging/drafts';
 import { PageBoundary, PageLoading } from './PageBoundary';
 import { AccountSecurity } from '../messaging/AccountSecurity';
 import { TrustedInvitationReceiver } from '../messaging/TrustedLogin';
+import { AdminAuthApproval } from '../messaging/AdminAuthApproval';
 import { onAccountSessionChange, syncAccountHosts, accountSyncError } from '../account-session';
 import { messaging } from '../messaging/context';
 import { DesktopAuthorizationPage, readDesktopAuthorization } from './DesktopAuthorizationPage';
@@ -599,6 +600,7 @@ export default tsxComponent(function AuthenticatedShell() {
                   hidden={route.page === 'downloads'}
                 />
                 {user && <TrustedLoginNotice openSecurity={() => navigate({ page: 'login-security' })} />}
+                {user?.isAdmin && <AdminAuthApproval key={user.id} />}
                 {user && <IncomingAgentCalls key={user.id} />}
               </div>
               {ready && (showWorkspace || (route.page === 'messages' && route.conversation)) && (

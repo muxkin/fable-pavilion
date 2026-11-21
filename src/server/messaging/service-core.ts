@@ -4,6 +4,12 @@ import { scrypt } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { z } from 'zod';
 import { USER_ID_PATTERN, USERNAME_PATTERN } from '../../shared/account-identity.js';
+import {
+  approveAdminAuthRequest,
+  consumeAdminAuthRequest,
+  createAdminAuthRequest,
+  inspectAdminAuthRequest,
+} from './admin-queries.js';
 import { ChatError, digest, type LoginDeviceMeta, type MessagingStore } from './store-core.js';
 import type { MessagingObjects, MediaKind } from './objects.js';
 import { registerAccounts, vaultSchema } from './accounts.js';
@@ -85,6 +91,7 @@ export interface MessagingConfig {
   translate?: SelectionTranslator;
   push?: PushConfig;
   adminUserIds?: ReadonlySet<string>;
+  runtime?: 'cloudflare' | 'node';
 }
 
 /** Shared account/message routes; each provider supplies its HTTP and persistence adapters. */
@@ -813,28 +820,193 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
     const user = identity(req);
     return { user: withRole(store.profile(user.id, z.object({ displayName }).parse(req.body).displayName)) };
   });
-  app.get('/admin/overview', (req) => {
+  const enrichDesktops = async () => {
+    const raw = (await config.desktops?.listAll?.()) ?? [];
+    const lookup = new Map<string, { username: string; displayName: string }>();
+    for (const row of store.db.prepare('SELECT id, username, display_name AS displayName FROM im_users').all()) {
+      lookup.set(String(row.id), { username: String(row.username), displayName: String(row.displayName) });
+    }
+    return raw.map((item) => {
+      const owner = lookup.get(item.accountId);
+      return {
+        ...item,
+        accountUsername: owner?.username ?? null,
+        accountDisplayName: owner?.displayName ?? null,
+      };
+    });
+  };
+  const buildAdminOverview = async () => {
+    const base = store.adminOverview();
+    const allDesktops = config.desktops?.listAll ? await config.desktops.listAll() : null;
+    const activeDesktops = allDesktops ? allDesktops.filter((d) => d.revokedAt === null).length : 0;
+    return {
+      ...base,
+      ...(config.runtime ? { runtime: config.runtime } : {}),
+      policy: {
+        registrationEnabled: config.registrationEnabled !== false,
+        registrationRequiresCode: !!config.registrationCode,
+        deviceLoginOnly: config.deviceLoginOnly === true,
+        humanContacts: config.humanContacts === true,
+      },
+      ...(allDesktops
+        ? {
+            desktops: {
+              total: allDesktops.length,
+              active: activeDesktops,
+              revoked: allDesktops.length - activeDesktops,
+            },
+          }
+        : {}),
+    };
+  };
+  app.post('/admin/auth/start', { bodyLimit: 1024 }, (req) => {
+    if (!adminUserIds.size) throw new ChatError(403, '当前实例未配置管理员账号');
+    take(`admin-auth:${req.clientAddress()}`, 20);
+    const meta = deviceInfo(req);
+    const created = createAdminAuthRequest(store.db, requestOrigin(req), meta.name);
+    return {
+      ...created,
+      primaryOrigin: config.origin,
+      approveUrl: `${config.origin}/?admin-auth=${encodeURIComponent(created.id)}&code=${encodeURIComponent(created.code)}`,
+    };
+  });
+  app.get('/admin/auth/:id', (req) => {
     requireAdmin(req);
-    return store.adminOverview();
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return inspectAdminAuthRequest(store.db, id);
+  });
+  app.post('/admin/auth/approve', { bodyLimit: 1024 }, (req) => {
+    const admin = requireAdmin(req);
+    const { id, code } = z
+      .object({ id: z.string().uuid(), code: z.string().regex(/^\d{6}$/) })
+      .strict()
+      .parse(req.body);
+    const { origin: targetOrigin } = approveAdminAuthRequest(store.db, id, code, admin.id);
+    store.recordAdminAudit(admin.id, 'admin_auth_approve', targetOrigin, `批准管理后台登录请求（来源 ${targetOrigin}）`);
+    return { ok: true, origin: targetOrigin };
+  });
+  app.post('/admin/auth/poll', { bodyLimit: 1024 }, (req, reply) => {
+    take(`admin-auth-poll:${req.clientAddress()}`, 120);
+    const { id, secret: secretToken } = z
+      .object({ id: z.string().uuid(), secret: z.string().min(16).max(128) })
+      .strict()
+      .parse(req.body);
+    const result = consumeAdminAuthRequest(store.db, id, secretToken, requestOrigin(req));
+    if (result.pending) return { pending: true };
+    if (!adminUserIds.has(result.userId)) throw new ChatError(403, '该账号不具备管理员权限');
+    const signedIn = session(req, reply, store.user(result.userId), undefined, true);
+    store.recordAdminAudit(
+      result.userId,
+      'admin_login',
+      requestOrigin(req),
+      `管理后台授权登录成功（${deviceInfo(req).name}）`,
+    );
+    return { pending: false, ...signedIn };
+  });
+  app.get('/admin/overview', async (req) => {
+    requireAdmin(req);
+    return buildAdminOverview();
   });
   app.get('/admin/users', (req) => {
     requireAdmin(req);
-    const { q = '', limit = 50 } = z
+    const { q = '', kind = 'all', sort = 'created', limit = 100 } = z
       .object({
         q: z.string().trim().max(100).optional(),
+        kind: z.enum(['all', 'human', 'agent']).optional(),
+        sort: z.enum(['created', 'active', 'messages', 'storage']).optional(),
         limit: z.coerce.number().int().min(1).max(200).optional(),
       })
       .parse(req.query);
-    return { users: store.adminUsers(q, limit) };
+    return { users: store.adminUsers({ query: q, kind, sort, limit }) };
+  });
+  app.get('/admin/users/:id', async (req) => {
+    requireAdmin(req);
+    const targetId = uid(req);
+    const user = store.adminUserById(targetId);
+    if (!user) throw new ChatError(404, '用户不存在');
+    const owner = user.ownerId
+      ? (() => {
+          const row = store.db
+            .prepare('SELECT id, username, display_name AS displayName FROM im_users WHERE id=?')
+            .get(user.ownerId);
+          return row
+            ? { id: String(row.id), username: String(row.username), displayName: String(row.displayName) }
+            : null;
+        })()
+      : null;
+    const ownedAgents = user.kind === 'human' ? store.adminOwnedAgents(targetId) : [];
+    const sessions = store.adminSessions(digest(token(req)), { userId: targetId, limit: 100 });
+    const allDesktops = await enrichDesktops();
+    const desktops = allDesktops.filter((d) => d.accountId === targetId);
+    return { user, owner, ownedAgents, sessions, desktops };
   });
   app.post('/admin/users/:id/revoke-sessions', { bodyLimit: 512 }, (req) => {
     const admin = requireAdmin(req);
     const targetId = uid(req);
     const keepHash = targetId === admin.id ? digest(token(req)) : undefined;
-    return store.adminRevokeUserSessions(targetId, keepHash);
+    const result = store.adminRevokeUserSessions(targetId, keepHash);
+    store.recordAdminAudit(
+      admin.id,
+      'revoke_user_sessions',
+      targetId,
+      `吊销用户 ${targetId} 的 ${result.revoked} 个登录会话`,
+    );
+    return result;
+  });
+  app.get('/admin/sessions', (req) => {
+    requireAdmin(req);
+    const { q = '', limit = 100 } = z
+      .object({
+        q: z.string().trim().max(100).optional(),
+        limit: z.coerce.number().int().min(1).max(200).optional(),
+      })
+      .parse(req.query);
+    return { sessions: store.adminSessions(digest(token(req)), { query: q, limit }) };
+  });
+  app.delete('/admin/sessions/:deviceId', (req) => {
+    const admin = requireAdmin(req);
+    const { deviceId } = z.object({ deviceId: z.string().uuid() }).parse(req.params);
+    const result = store.adminRevokeSessionByDeviceId(deviceId, digest(token(req)));
+    store.recordAdminAudit(
+      admin.id,
+      'revoke_session',
+      result.userId,
+      `吊销单条设备会话 #${deviceId.slice(0, 8)}（用户 ${result.userId}）`,
+    );
+    return { ok: true, userId: result.userId };
+  });
+  app.get('/admin/desktops', async (req) => {
+    requireAdmin(req);
+    return { desktops: await enrichDesktops() };
+  });
+  app.delete('/admin/desktops/:id', async (req) => {
+    const admin = requireAdmin(req);
+    const { id } = z.object({ id: hostIdSchema }).parse(req.params);
+    if (!config.desktops?.revokeAny) throw new ChatError(503, '当前实例未启用桌面节点管理');
+    if (!(await config.desktops.revokeAny(id))) throw new ChatError(404, '找不到活跃的桌面节点');
+    store.recordAdminAudit(admin.id, 'revoke_desktop', id, `吊销桌面节点 ${id.slice(0, 16)}…`);
+    return { ok: true };
+  });
+  app.get('/admin/conversations', (req) => {
+    requireAdmin(req);
+    const { limit = 100 } = z
+      .object({ limit: z.coerce.number().int().min(1).max(200).optional() })
+      .parse(req.query);
+    return { conversations: store.adminConversations(limit) };
+  });
+  app.get('/admin/storage', (req) => {
+    requireAdmin(req);
+    return store.adminStorageDetail();
+  });
+  app.get('/admin/audit', (req) => {
+    requireAdmin(req);
+    const { limit = 100 } = z
+      .object({ limit: z.coerce.number().int().min(1).max(200).optional() })
+      .parse(req.query);
+    return { logs: store.adminAuditLogs(limit) };
   });
   app.post('/admin/cleanup', { bodyLimit: 512 }, async (req) => {
-    requireAdmin(req);
+    const admin = requireAdmin(req);
     store.expireStreams();
     store.expireInteractions();
     calls.expire();
@@ -847,7 +1019,13 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
         if (count < 100) break;
       }
     }
-    return { ...pruned, deletedObjects, overview: store.adminOverview() };
+    store.recordAdminAudit(
+      admin.id,
+      'cleanup',
+      null,
+      `手动清理：删除 ${pruned.deletedMessages} 条消息、${pruned.deletedFiles} 个附件、回收 ${deletedObjects} 个对象`,
+    );
+    return { ...pruned, deletedObjects, overview: await buildAdminOverview() };
   });
   app.post('/logout', async (req, reply) => {
     store.logout(token(req));

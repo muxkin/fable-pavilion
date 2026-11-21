@@ -43,6 +43,7 @@
     "package:adapters": "node scripts/package-adapters.mjs",
     "build:server": "node scripts/build-server.mjs",
     "build:web": "vite build",
+    "build:admin": "vite build --config vite.admin.config.ts",
     "test:packages": "vitest run --config vitest.packages.config.ts",
     "im": "node --import tsx scripts/im-agent.ts",
     "test:messaging": "node --import tsx scripts/smoke/im-smoke.mjs",

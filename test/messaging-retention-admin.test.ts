@@ -234,9 +234,69 @@ describe('7-day cloud retention, persistent sessions, admin console, cache & exp
       deletedMessages: number;
       deletedFiles: number;
       deletedObjects: number;
+      overview: { dailyActivity: unknown[]; runtime?: string };
     }>('/admin/cleanup', 'POST', {});
     expect(cleaned.deletedMessages).toBe(0);
     expect(cleaned.deletedFiles).toBe(0);
+    expect(cleaned.overview.dailyActivity).toHaveLength(7);
+
+    // Rich endpoints: user detail, sessions, desktops, conversations, storage, audit
+    const detail = await admin.client.request<{ user: { id: string }; sessions: unknown[]; desktops: unknown[] }>(
+      `/admin/users/${listed.users[0].id}`,
+    );
+    expect(detail.user.id).toBe(listed.users[0].id);
+
+    const sessions = await admin.client.request<{ sessions: { deviceId: string; current: boolean }[] }>(
+      '/admin/sessions',
+    );
+    expect(sessions.sessions.some((s) => s.current)).toBe(true);
+
+    const storage = await admin.client.request<{ retentionDays: number; topConsumers: unknown[] }>(
+      '/admin/storage',
+    );
+    expect(storage.retentionDays).toBe(7);
+
+    const conversations = await admin.client.request<{ conversations: unknown[] }>('/admin/conversations');
+    expect(Array.isArray(conversations.conversations)).toBe(true);
+
+    const desktops = await admin.client.request<{ desktops: unknown[] }>('/admin/desktops');
+    expect(Array.isArray(desktops.desktops)).toBe(true);
+
+    const audit = await admin.client.request<{ logs: { action: string }[] }>('/admin/audit');
+    expect(audit.logs.some((l) => l.action === 'cleanup')).toBe(true);
+    expect(audit.logs.some((l) => l.action === 'revoke_user_sessions')).toBe(true);
+
+    // Zero-knowledge admin handoff auth flow (start -> inspect -> approve -> poll)
+    const handoff = await admin.client.request<{ id: string; secret: string; code: string }>(
+      '/admin/auth/start',
+      'POST',
+      {},
+    );
+    expect(handoff.code).toMatch(/^\d{6}$/);
+    const inspected = await admin.client.request<{ approved: boolean; code: string }>(
+      `/admin/auth/${handoff.id}`,
+    );
+    expect(inspected.approved).toBe(false);
+    expect(inspected.code).toBe(handoff.code);
+
+    const beforeApprove = await admin.client.request<{ pending: boolean }>('/admin/auth/poll', 'POST', {
+      id: handoff.id,
+      secret: handoff.secret,
+    });
+    expect(beforeApprove.pending).toBe(true);
+
+    await admin.client.request('/admin/auth/approve', 'POST', { id: handoff.id, code: handoff.code });
+    const afterApprove = await admin.client.request<{ pending: boolean; user?: { isAdmin?: boolean } }>(
+      '/admin/auth/poll',
+      'POST',
+      { id: handoff.id, secret: handoff.secret },
+    );
+    expect(afterApprove.pending).toBe(false);
+    expect(afterApprove.user?.isAdmin).toBe(true);
+    // Single-use: polling again fails
+    await expect(
+      admin.client.request('/admin/auth/poll', 'POST', { id: handoff.id, secret: handoff.secret }),
+    ).rejects.toThrow();
   });
 
   it('preserves older locally cached messages when merging newer cloud pages', () => {

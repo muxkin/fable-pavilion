@@ -293,7 +293,7 @@ export async function testAntigravityBrowserSwitching(options: AntigravityBrowse
       await expect(picker).toHaveText('Fixture next model');
     }
 
-    await expect(page.getByLabel('添加附件', { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('添加附件', { exact: true })).toBeEnabled({ timeout: 20000 });
     const photoInput = page.getByLabel('添加照片', { exact: true });
     await expect(photoInput).toBeEnabled({ timeout: 20000 });
     await page.getByRole('button', { name: '工具', exact: true }).click();

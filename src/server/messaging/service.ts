@@ -89,6 +89,7 @@ export async function registerMessaging(parent: FastifyInstance, config: Messagi
       };
       await registerCore(http, {
         ...config,
+        runtime: 'node',
         store,
         storage: !!config.storage,
         objects: new MessagingObjects(store, config.storage, config.origin),

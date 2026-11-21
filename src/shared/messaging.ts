@@ -151,24 +151,56 @@ export interface MessagingClient {
   read(id: string, sequence: number): Promise<{ ok: boolean }>;
   sync(cursor: number, wait?: number, signal?: AbortSignal): Promise<ChatSync>;
 }
+export interface AdminDailyActivity {
+  day: string;
+  messages: number;
+  files: number;
+  fileBytes: number;
+  newUsers: number;
+}
 export interface AdminOverview {
+  runtime?: 'cloudflare' | 'node';
+  authority: string;
   retentionDays: number;
   generatedAt: number;
-  users: { total: number; humans: number; agents: number };
-  sessions: { active: number };
-  conversations: { total: number; direct: number; group: number };
-  messages: { total: number; expiredPending: number; oldestAt: number | null };
-  files: { total: number; bytes: number; expiredPending: number; oldestAt: number | null };
+  policy?: {
+    registrationEnabled: boolean;
+    registrationRequiresCode: boolean;
+    deviceLoginOnly: boolean;
+    humanContacts: boolean;
+  };
+  users: { total: number; humans: number; agents: number; new24h: number; new7d: number };
+  sessions: { active: number; active24h: number };
+  desktops?: { total: number; active: number; revoked: number };
+  conversations: { total: number; direct: number; group: number; closedGroups: number };
+  messages: {
+    total: number;
+    last24h: number;
+    expiredPending: number;
+    streaming: number;
+    pendingInteractions: number;
+    oldestAt: number | null;
+  };
+  files: {
+    total: number;
+    bytes: number;
+    expiredPending: number;
+    orphanPending: number;
+    oldestAt: number | null;
+  };
   stickers: { total: number; bytes: number };
   avatars: { total: number; bytes: number };
-  gcQueue: { pending: number };
+  gcQueue: { pending: number; orphanMedia: number };
+  dailyActivity: AdminDailyActivity[];
 }
 export interface AdminUserSummary {
   id: string;
   address: string;
   kind: 'human' | 'agent';
+  ownerId: string | null;
   username: string;
   displayName: string;
+  avatarUrl?: string;
   createdAt: number;
   encrypted: boolean;
   activeSessions: number;
@@ -177,7 +209,87 @@ export interface AdminUserSummary {
   fileCount: number;
   fileBytes: number;
   stickerCount: number;
+  stickerBytes: number;
   hasAvatar: boolean;
+}
+export interface AdminSessionEntry {
+  deviceId: string;
+  userId: string;
+  username: string;
+  displayName: string;
+  userKind: 'human' | 'agent';
+  name: string;
+  customName: string | null;
+  platform: string | null;
+  os: string | null;
+  browser: string | null;
+  ip: string | null;
+  location: string | null;
+  origin: string | null;
+  createdAt: number | null;
+  lastActiveAt: number | null;
+  verifiedAt: number | null;
+  expiresAt: number;
+  current: boolean;
+}
+export interface AdminDesktopEntry {
+  hostId: string;
+  accountId: string;
+  accountUsername: string | null;
+  accountDisplayName: string | null;
+  name: string;
+  issuedAt: number;
+  revokedAt: number | null;
+}
+export interface AdminUserDetail {
+  user: AdminUserSummary;
+  owner: { id: string; username: string; displayName: string } | null;
+  ownedAgents: AdminUserSummary[];
+  sessions: AdminSessionEntry[];
+  desktops: AdminDesktopEntry[];
+}
+export interface AdminConversationSummary {
+  id: string;
+  kind: 'direct' | 'group';
+  name: string;
+  ownerId: string | null;
+  closed: boolean;
+  memberCount: number;
+  messageCount: number;
+  fileCount: number;
+  fileBytes: number;
+  lastMessageAt: number | null;
+}
+export interface AdminStorageConsumer {
+  userId: string;
+  username: string;
+  displayName: string;
+  kind: 'human' | 'agent';
+  fileBytes: number;
+  stickerBytes: number;
+  avatarBytes: number;
+  totalBytes: number;
+  fileCount: number;
+  stickerCount: number;
+}
+export interface AdminStorageDetail {
+  retentionDays: number;
+  files: { total: number; bytes: number; expiredPending: number; orphanPending: number };
+  stickers: { total: number; bytes: number };
+  avatars: { total: number; bytes: number };
+  gcQueue: { key: string; notBefore: number }[];
+  orphanMediaCount: number;
+  topConsumers: AdminStorageConsumer[];
+}
+export interface AdminAuditEntry {
+  id: number;
+  createdAt: number;
+  actorId: string;
+  actorUsername: string | null;
+  actorDisplayName: string | null;
+  action: string;
+  target: string | null;
+  detail: string;
 }
 export interface AdminCleanupResult {
   deletedMessages: number;

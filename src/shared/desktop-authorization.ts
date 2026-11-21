@@ -30,3 +30,10 @@ export interface AccountDesktop {
   hostId: string;
   name: string;
 }
+export interface AdminDesktopEnrollment {
+  hostId: string;
+  accountId: string;
+  name: string;
+  issuedAt: number;
+  revokedAt: number | null;
+}
