@@ -5,34 +5,29 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
-import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Log;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Locale;
-import java.util.UUID;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -45,7 +40,7 @@ public final class AndroidUpdates {
     private static AndroidUpdates instance;
 
     enum State { CHECKING, CURRENT, DOWNLOADING, READY, FAILED }
-    interface Listener { void report(State state, Release release); }
+    interface Listener { void report(State state, Release release, int progress); }
 
     static final class Release {
         final String version;
@@ -65,28 +60,30 @@ public final class AndroidUpdates {
         }
 
         String path() { return "/downloads/android/" + filename; }
-    }
 
-    private static final class Transfer {
-        final Release release;
-        final long id;
-
-        Transfer(Release release, long id) {
-            this.release = release;
-            this.id = id;
+        JSONObject toJson() throws JSONException {
+            return new JSONObject()
+                    .put("version", version)
+                    .put("versionCode", code)
+                    .put("bytes", bytes)
+                    .put("sha256", checksum);
         }
     }
 
     private final Context context;
     private final SharedPreferences preferences;
-    private final DownloadManager downloads;
     private final NotificationManager notifications;
     private final ExecutorService work = Executors.newSingleThreadExecutor();
+    private final ExecutorService downloadWork = Executors.newSingleThreadExecutor();
+    private final Object downloadLock = new Object();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final int installedCode;
     private Listener listener;
     private State state = State.CHECKING;
     private Release displayed;
+    private int progress = -1;
+    private Release inFlight;
+    private Future<?> inFlightTask;
     private long lastFailure;
     private Uri queriedOrigin;
     private long queriedAt;
@@ -99,7 +96,6 @@ public final class AndroidUpdates {
     private AndroidUpdates(Context context) {
         this.context = context;
         preferences = context.getSharedPreferences("android-updates", Context.MODE_PRIVATE);
-        downloads = context.getSystemService(DownloadManager.class);
         notifications = context.getSystemService(NotificationManager.class);
         PackageInfo installed = packageInfo();
         installedCode = installed == null ? Integer.MAX_VALUE : installed.versionCode;
@@ -109,18 +105,20 @@ public final class AndroidUpdates {
 
     void attach(Listener listener) {
         this.listener = listener;
-        listener.report(state, displayed);
+        listener.report(state, displayed, progress);
     }
 
     void detach() { listener = null; }
 
-    void check(Uri source, boolean verify, String encodedKey, VerifiedFrontend frontend, boolean manual) {
+    void check(Uri source, Uri preferredDownloadOrigin, boolean verify, String encodedKey,
+            VerifiedFrontend frontend, boolean manual) {
         work.execute(() -> {
-            Transfer previous = reconcile();
+            Release ready = reconcile();
+            Release active = activeDownload();
             if (verify && frontend == null) return;
             if (manual) {
                 lastFailure = 0;
-                if (previous == null) publish(State.CHECKING, null);
+                if (ready == null && active == null) publish(State.CHECKING, null, -1);
             }
             try {
                 Release next;
@@ -143,126 +141,170 @@ public final class AndroidUpdates {
                     next = new Release(new JSONObject(new String(raw, StandardCharsets.UTF_8)));
                 }
                 if (next == null || next.code <= installedCode) {
-                    if (previous == null && (manual || lastFailure == 0)) publish(State.CURRENT, null);
+                    if (ready == null && active == null && (manual || lastFailure == 0))
+                        publish(State.CURRENT, null, -1);
                     return;
                 }
-                if (previous != null && next.code <= previous.release.code) return;
+                if (ready != null && next.code <= ready.code) return;
+                if (active != null && next.code <= active.code) return;
                 if (!manual && lastFailure != 0 && SystemClock.elapsedRealtime() - lastFailure < 60_000) return;
-                enqueue(source, next, previous);
+                startDownload(downloadUrls(preferredDownloadOrigin, source, next), next);
             } catch (Exception failure) {
                 Log.w("FableUpdate", "Update check failed: " + failure.getClass().getSimpleName());
-                if (previous == null) publish(State.FAILED, null);
+                if (ready == null && active == null) publish(State.FAILED, null, -1);
             }
         });
     }
 
-    private void enqueue(Uri origin, Release release, Transfer previous) throws JSONException, IOException {
-        Uri url = origin.buildUpon().encodedPath(release.path()).build();
-        DownloadManager.Request request = new DownloadManager.Request(url)
-                .setTitle("子虚亭 " + release.version)
-                .setMimeType(MIME)
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN)
-                .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS,
-                        "update-" + UUID.randomUUID() + ".apk");
-        long id = downloads.enqueue(request);
-        JSONObject metadata = new JSONObject()
-                .put("version", release.version).put("versionCode", release.code)
-                .put("bytes", release.bytes).put("sha256", release.checksum).put("id", id);
-        if (!preferences.edit().putString("transfer", metadata.toString()).commit()) {
-            downloads.remove(id);
-            throw new IOException("Could not save update download");
+    private static List<String> downloadUrls(Uri preferredOrigin, Uri releaseOrigin, Release release) {
+        LinkedHashSet<String> urls = new LinkedHashSet<>();
+        if (preferredOrigin != null && "https".equalsIgnoreCase(preferredOrigin.getScheme())) {
+            urls.add(preferredOrigin.buildUpon().encodedPath(release.path()).build().toString());
         }
-        if (previous != null) removeFiles(previous);
-        notifications.cancel(NOTIFICATION);
-        lastFailure = 0;
-        publish(State.DOWNLOADING, release);
+        if (releaseOrigin != null && "https".equalsIgnoreCase(releaseOrigin.getScheme())) {
+            urls.add(releaseOrigin.buildUpon().encodedPath(release.path()).build().toString());
+        }
+        return new ArrayList<>(urls);
     }
 
-    private Transfer transfer() {
-        String saved = preferences.getString("transfer", null);
-        if (saved == null) return null;
-        try {
-            JSONObject row = new JSONObject(saved);
-            return new Transfer(new Release(row), row.getLong("id"));
-        } catch (JSONException malformed) {
-            preferences.edit().remove("transfer").apply();
-            return null;
+    private Release activeDownload() {
+        synchronized (downloadLock) {
+            return inFlight;
         }
     }
 
-    private Transfer reconcile() {
-        Transfer entry = transfer();
-        if (entry == null) return null;
-        Release release = entry.release;
-        if (release.code <= installedCode) {
-            clear(entry);
-            publish(State.CURRENT, null);
-            return null;
-        }
-        if (UpdateProvider.file(context, release.filename).isFile()) {
-            publish(State.READY, release);
-            return entry;
-        }
-
-        try {
-            int status;
-            try (Cursor row = downloads.query(new DownloadManager.Query().setFilterById(entry.id))) {
-                status = row != null && row.moveToFirst()
-                        ? row.getInt(row.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                        : DownloadManager.STATUS_FAILED;
-            }
-            if (status == DownloadManager.STATUS_FAILED) throw new IOException("Download failed");
-            if (status != DownloadManager.STATUS_SUCCESSFUL) {
-                publish(State.DOWNLOADING, release);
-                return entry;
-            }
-            verifyDownload(entry);
-            downloads.remove(entry.id);
-            publish(State.READY, release);
-            notifyReady(release);
-            Log.i("FableUpdate", "Verified Android update ready: " + release.version);
-            return entry;
-        } catch (Exception failure) {
-            clear(entry);
-            lastFailure = SystemClock.elapsedRealtime();
-            publish(State.FAILED, release);
-            Log.w("FableUpdate", "Update rejected: " + failure.getClass().getSimpleName());
-            return null;
+    private void startDownload(List<String> urls, Release release) {
+        synchronized (downloadLock) {
+            if (inFlight != null && release.code <= inFlight.code) return;
+            if (inFlightTask != null) inFlightTask.cancel(true);
+            inFlight = release;
+            notifications.cancel(NOTIFICATION);
+            lastFailure = 0;
+            publish(State.DOWNLOADING, release, 0);
+            inFlightTask = downloadWork.submit(() -> runDownload(urls, release));
         }
     }
 
-    private void verifyDownload(Transfer entry) throws Exception {
-        Release release = entry.release;
+    private void runDownload(List<String> urls, Release release) {
         File destination = UpdateProvider.file(context, release.filename);
         File directory = destination.getParentFile();
-        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Update folder");
-        File temporary = File.createTempFile("verify-", ".apk", directory);
+        File temporary = null;
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            long size = 0;
-            try (InputStream from = new ParcelFileDescriptor.AutoCloseInputStream(downloads.openDownloadedFile(entry.id));
-                    FileOutputStream to = new FileOutputStream(temporary)) {
-                byte[] buffer = new byte[64 * 1024];
-                for (int count; (count = from.read(buffer)) != -1;) {
-                    size += count;
-                    if (size > release.bytes) throw new IOException("Unexpected update size");
-                    digest.update(buffer, 0, count);
-                    to.write(buffer, 0, count);
+            if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory())
+                throw new IOException("Update folder");
+            temporary = File.createTempFile("download-", ".apk", directory);
+            long started = SystemClock.elapsedRealtime();
+            UpdateDownloader.download(urls, release.bytes, release.checksum, temporary, percent -> {
+                synchronized (downloadLock) {
+                    if (inFlight == release) publish(State.DOWNLOADING, release, percent);
                 }
-                to.getFD().sync();
-            }
-            StringBuilder hash = new StringBuilder(64);
-            for (byte b : digest.digest()) hash.append(String.format(Locale.ROOT, "%02x", b & 255));
-            if (size != release.bytes || !release.checksum.contentEquals(hash))
-                throw new IOException("Update checksum mismatch");
-            PackageInfo archive = context.getPackageManager().getPackageArchiveInfo(temporary.getPath(), signingFlag());
-            PackageInfo installed = packageInfo();
-            if (archive == null || installed == null || !context.getPackageName().equals(archive.packageName) ||
-                    archive.versionCode != release.code || !release.version.equals(archive.versionName) ||
-                    !sameSigners(installed, archive)) throw new IOException("Unexpected APK identity");
+            });
+            verifyApkArchive(temporary, release);
             if (!temporary.renameTo(destination)) throw new IOException("Could not store verified APK");
+            temporary = null;
+            if (!preferences.edit().putString("ready", release.toJson().toString()).commit()) {
+                destination.delete();
+                throw new IOException("Could not save update metadata");
+            }
+            pruneOtherApks(directory, release.filename);
+            synchronized (downloadLock) {
+                if (inFlight == release) {
+                    inFlight = null;
+                    inFlightTask = null;
+                }
+            }
+            publish(State.READY, release, 100);
+            notifyReady(release);
+            long elapsed = Math.max(1L, SystemClock.elapsedRealtime() - started);
+            Log.i("FableUpdate", "Verified Android update ready: " + release.version +
+                    " (" + (release.bytes / 1024) + " KiB in " + elapsed + " ms)");
+        } catch (Exception failure) {
+            if (temporary != null) temporary.delete();
+            boolean superseded;
+            synchronized (downloadLock) {
+                superseded = inFlight != release;
+                if (!superseded) {
+                    inFlight = null;
+                    inFlightTask = null;
+                }
+            }
+            if (!superseded) {
+                lastFailure = SystemClock.elapsedRealtime();
+                publish(State.FAILED, release, -1);
+                Log.w("FableUpdate", "Update download failed: " + failure.getClass().getSimpleName() +
+                        ": " + failure.getMessage());
+            }
+        }
+    }
+
+    private void verifyApkArchive(File apk, Release release) throws IOException {
+        PackageInfo archive = context.getPackageManager().getPackageArchiveInfo(apk.getPath(), signingFlag());
+        PackageInfo installed = packageInfo();
+        if (archive == null || installed == null || !context.getPackageName().equals(archive.packageName) ||
+                archive.versionCode != release.code || !release.version.equals(archive.versionName) ||
+                !sameSigners(installed, archive)) {
+            throw new IOException("Unexpected APK identity");
+        }
+    }
+
+    private Release savedReady() {
+        String saved = preferences.getString("ready", null);
+        if (saved == null) return null;
+        try {
+            return new Release(new JSONObject(saved));
+        } catch (JSONException malformed) {
+            preferences.edit().remove("ready").apply();
+            return null;
+        }
+    }
+
+    private void cleanupLegacyTransfer() {
+        String legacy = preferences.getString("transfer", null);
+        if (legacy == null) return;
+        try {
+            JSONObject row = new JSONObject(legacy);
+            long id = row.optLong("id", -1);
+            if (id >= 0) {
+                DownloadManager manager = context.getSystemService(DownloadManager.class);
+                if (manager != null) manager.remove(id);
+            }
+            if (preferences.getString("ready", null) == null) {
+                Release release = new Release(row);
+                File existing = UpdateProvider.file(context, release.filename);
+                if (existing.isFile() && existing.length() == release.bytes) {
+                    preferences.edit().putString("ready", release.toJson().toString()).apply();
+                }
+            }
+        } catch (Exception ignored) {
+            // Legacy state is best-effort cleanup.
         } finally {
-            temporary.delete();
+            preferences.edit().remove("transfer").apply();
+        }
+    }
+
+    private Release reconcile() {
+        cleanupLegacyTransfer();
+        Release ready = savedReady();
+        if (ready == null) return null;
+        File file = UpdateProvider.file(context, ready.filename);
+        if (ready.code <= installedCode) {
+            clearReady(ready);
+            publish(State.CURRENT, null, -1);
+            return null;
+        }
+        if (file.isFile() && file.length() == ready.bytes) {
+            publish(State.READY, ready, 100);
+            return ready;
+        }
+        clearReady(ready);
+        return null;
+    }
+
+    private static void pruneOtherApks(File directory, String keepFilename) {
+        File[] children = directory.listFiles();
+        if (children == null) return;
+        for (File child : children) {
+            if (child.isFile() && !child.getName().equals(keepFilename)) child.delete();
         }
     }
 
@@ -292,24 +334,21 @@ public final class AndroidUpdates {
                 new HashSet<>(Arrays.asList(before)).equals(new HashSet<>(Arrays.asList(after)));
     }
 
-    private void removeFiles(Transfer entry) {
-        downloads.remove(entry.id);
-        UpdateProvider.file(context, entry.release.filename).delete();
-    }
-
-    private void clear(Transfer entry) {
-        preferences.edit().remove("transfer").apply();
-        removeFiles(entry);
+    private void clearReady(Release release) {
+        preferences.edit().remove("ready").apply();
+        UpdateProvider.file(context, release.filename).delete();
         notifications.cancel(NOTIFICATION);
     }
 
-    private void publish(State next, Release release) {
+    private void publish(State next, Release release, int nextProgress) {
         main.post(() -> {
-            if (state == next && (displayed == release ||
-                    displayed != null && release != null && displayed.code == release.code)) return;
+            boolean sameRelease = displayed == release ||
+                    (displayed != null && release != null && displayed.code == release.code);
+            if (state == next && sameRelease && progress == nextProgress) return;
             state = next;
             displayed = release;
-            if (listener != null) listener.report(state, displayed);
+            progress = nextProgress;
+            if (listener != null) listener.report(state, displayed, progress);
         });
     }
 
@@ -326,22 +365,5 @@ public final class AndroidUpdates {
                 .setContentIntent(action)
                 .setAutoCancel(true)
                 .build());
-    }
-
-    public static final class Completed extends BroadcastReceiver {
-        @Override public void onReceive(Context context, Intent intent) {
-            if (!DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) return;
-            long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
-            AndroidUpdates updates = get(context);
-            PendingResult pending = goAsync();
-            updates.work.execute(() -> {
-                try {
-                    Transfer current = updates.transfer();
-                    if (current != null && current.id == id) updates.reconcile();
-                } finally {
-                    pending.finish();
-                }
-            });
-        }
     }
 }

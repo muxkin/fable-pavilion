@@ -114,6 +114,7 @@ pub(super) fn messages(steps: &[Value], offset: usize, full: bool) -> Vec<Value>
             } else {
                 text
             };
+            let (text, file_attachments) = crate::files::message_attachment_text(&text);
             let mut message = json!({
                 "id": id,
                 "role": "user",
@@ -121,7 +122,8 @@ pub(super) fn messages(steps: &[Value], offset: usize, full: bool) -> Vec<Value>
                 "turnId": turn,
                 "clientMessageId": user["clientMessageId"],
             });
-            let attachments = media::attachments(user, index);
+            let mut attachments = media::attachments(user, index);
+            attachments.extend(file_attachments);
             if !attachments.is_empty() {
                 message["attachments"] = json!(attachments);
             }

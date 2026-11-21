@@ -1,5 +1,5 @@
 use crate::{
-    files::{BLOCK, VerifiedUpload},
+    files::{Attachment, BLOCK, VerifiedUpload},
     history_media::{MissingAttachment, Source},
     state::{create_private_file, private_file},
 };
@@ -15,13 +15,15 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-const MAX_IMAGES: usize = 10;
+const MAX_ATTACHMENTS: usize = 10;
 const MAX_IMAGE_BATCH: u64 = 32 * BLOCK as u64;
+const MAX_FILE: u64 = 256 * BLOCK as u64;
 const REFERENCE: &str = "antigravity-image:";
 
-pub(super) struct StagedImages {
+pub(super) struct StagedUploads {
     _directory: Option<tempfile::TempDir>,
     pub(super) media: Vec<Value>,
+    pub(super) files: Vec<Attachment>,
 }
 
 fn format(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
@@ -34,52 +36,83 @@ fn format(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
     }
 }
 
-pub(super) async fn stage_uploads(files: &[VerifiedUpload]) -> Result<StagedImages> {
-    ensure!(files.len() <= MAX_IMAGES, "每条消息最多 10 张图片");
-    let directory = (!files.is_empty())
-        .then(|| {
-            tempfile::Builder::new()
-                .prefix("agent-space-antigravity-")
-                .tempdir()
-        })
-        .transpose()?;
-    let mut remaining = MAX_IMAGE_BATCH;
-    let mut media = Vec::with_capacity(files.len());
-    if let Some(directory) = &directory {
-        for upload in files {
-            ensure!(
-                (1..=remaining).contains(&upload.size),
-                "Antigravity 每条消息的图片总大小不能超过 32 MiB"
-            );
-            remaining -= upload.size;
-            let file = tokio::fs::File::from_std(private_file(&upload.path, false)?);
-            ensure!(
-                file.metadata().await?.len() == upload.size,
-                "附件大小已变化"
-            );
+pub(super) async fn stage_uploads(files: &[VerifiedUpload]) -> Result<StagedUploads> {
+    ensure!(files.len() <= MAX_ATTACHMENTS, "每条消息最多 10 个附件");
+    let mut directory: Option<tempfile::TempDir> = None;
+    let mut remaining_inline = MAX_IMAGE_BATCH;
+    let mut media = Vec::new();
+    let mut attachments = Vec::new();
+    for upload in files {
+        ensure!(
+            (1..=MAX_FILE).contains(&upload.size),
+            "Antigravity 单个附件大小不能超过 256 MiB"
+        );
+        let mut file = tokio::fs::File::from_std(private_file(&upload.path, false)?);
+        ensure!(
+            file.metadata().await?.len() == upload.size,
+            "附件大小已变化"
+        );
+        let prefix_len = upload.size.min(16) as usize;
+        let mut prefix = [0_u8; 16];
+        file.read_exact(&mut prefix[..prefix_len]).await?;
+        let inline = format(&prefix[..prefix_len]).filter(|_| upload.size <= remaining_inline);
+        if let Some((mime, extension)) = inline {
             let mut bytes = Vec::with_capacity(upload.size as usize);
-            file.take(upload.size + 1).read_to_end(&mut bytes).await?;
+            bytes.extend_from_slice(&prefix[..prefix_len]);
+            file.take(upload.size - prefix_len as u64 + 1)
+                .read_to_end(&mut bytes)
+                .await?;
             ensure!(
                 bytes.len() as u64 == upload.size
                     && format!("{:x}", Sha256::digest(&bytes)) == upload.sha256,
                 "附件校验失败"
             );
-            let (mime, extension) =
-                format(&bytes).context("Antigravity 目前支持 PNG、JPEG、WebP 和 GIF 图片")?;
+            remaining_inline -= upload.size;
+            let dir = match &directory {
+                Some(dir) => dir,
+                None => directory.insert(
+                    tempfile::Builder::new()
+                        .prefix("agent-space-antigravity-")
+                        .tempdir()?,
+                ),
+            };
             // The native service moves this file into the conversation. Preserve
             // the gateway upload and use unique names for different messages.
-            let path = directory
-                .path()
-                .join(format!("{}.{extension}", Uuid::new_v4()));
+            let path = dir.path().join(format!("{}.{extension}", Uuid::new_v4()));
             let mut copy = tokio::fs::File::from_std(create_private_file(&path)?);
             copy.write_all(&bytes).await?;
             copy.shutdown().await?;
             media.push(json!({"uri":path,"mimeType":mime,"displayName":upload.name}));
+        } else {
+            // Stream-verify arbitrary files and videos without buffering up to 256 MiB in RAM.
+            let mut hasher = Sha256::new();
+            hasher.update(&prefix[..prefix_len]);
+            let mut total = prefix_len as u64;
+            let mut chunk = vec![0_u8; 64 * 1024];
+            let mut reader = file.take(upload.size - prefix_len as u64 + 1);
+            loop {
+                let count = reader.read(&mut chunk).await?;
+                if count == 0 {
+                    break;
+                }
+                total += count as u64;
+                ensure!(total <= upload.size, "附件大小已变化");
+                hasher.update(&chunk[..count]);
+            }
+            ensure!(
+                total == upload.size && format!("{:x}", hasher.finalize()) == upload.sha256,
+                "附件校验失败"
+            );
+            attachments.push(Attachment {
+                name: upload.name.clone(),
+                path: upload.path.clone(),
+            });
         }
     }
-    Ok(StagedImages {
+    Ok(StagedUploads {
         _directory: directory,
         media,
+        files: attachments,
     })
 }
 
@@ -112,7 +145,7 @@ fn image_path(media: &Value) -> Option<PathBuf> {
 }
 
 pub(super) fn attachments(user: &Value, step: usize) -> Vec<Value> {
-    user["media"].as_array().into_iter().flatten().enumerate().take(MAX_IMAGES)
+    user["media"].as_array().into_iter().flatten().enumerate().take(MAX_ATTACHMENTS)
         .filter_map(|(index, media)| {
             image_path(media)?;
             Some(json!({"name":image_name(media)?,"path":format!("{REFERENCE}{step}:{index}"),"media":"image"}))
@@ -126,7 +159,7 @@ pub(super) fn reference(value: &str) -> Result<(usize, usize)> {
         .and_then(|id| id.split_once(':'))
         .context("Antigravity 图片引用无效")?;
     let index = index.parse::<usize>()?;
-    ensure!(index < MAX_IMAGES, "Antigravity 图片引用无效");
+    ensure!(index < MAX_ATTACHMENTS, "Antigravity 图片引用无效");
     Ok((step.parse()?, index))
 }
 
@@ -412,33 +445,41 @@ mod tests {
         let error = stage_uploads(&batch)
             .await
             .err()
-            .context("Eleven photos staged")?;
-        assert_eq!(error.to_string(), "每条消息最多 10 张图片");
+            .context("Eleven attachments staged")?;
+        assert_eq!(error.to_string(), "每条消息最多 10 个附件");
         Ok(())
     }
 
     #[tokio::test]
-    async fn enforces_the_combined_32_mib_image_limit() -> Result<()> {
+    async fn spills_oversized_images_and_supports_files_and_videos() -> Result<()> {
         let root = tempfile::tempdir()?;
         let png = image_bytes(ImageFormat::Png)?;
         let small = verified_image(root.path(), "small.png", &png)?;
-        // The staging limit counts the bytes retained after the format signature.
+        // Images up to the combined 32 MiB budget stay inline; larger images fall back to file attachments.
         let mut padded = png;
         padded.resize(32 * 1024 * 1024 - small.size as usize, 0);
         let large = verified_image(root.path(), "large.png", &padded)?;
         let staged = stage_uploads(&[small.clone(), large]).await?;
         assert_eq!(staged.media.len(), 2);
+        assert!(staged.files.is_empty());
 
         padded.push(0);
-        let too_large = verified_image(root.path(), "too-large.png", &padded)?;
-        let error = stage_uploads(&[small, too_large])
-            .await
-            .err()
-            .context("Oversized image batch staged")?;
-        assert_eq!(
-            error.to_string(),
-            "Antigravity 每条消息的图片总大小不能超过 32 MiB"
-        );
+        let spilled = verified_image(root.path(), "spilled.png", &padded)?;
+        let video = verified_image(root.path(), "clip.mp4", b"\x00\x00\x00\x18ftypmp42demo")?;
+        let doc = verified_image(root.path(), "report.pdf", b"%PDF-1.7\nhello")?;
+        let mixed = stage_uploads(&[small, spilled.clone(), video.clone(), doc.clone()]).await?;
+        assert_eq!(mixed.media.len(), 1);
+        assert_eq!(mixed.files.len(), 3);
+        assert_eq!(mixed.files[0].name, "spilled.png");
+        assert_eq!(mixed.files[0].path, spilled.path);
+        assert_eq!(mixed.files[1].name, "clip.mp4");
+        assert_eq!(mixed.files[1].path, video.path);
+        assert_eq!(mixed.files[2].name, "report.pdf");
+        assert_eq!(mixed.files[2].path, doc.path);
+
+        let mut tampered = video;
+        tampered.sha256 = "0".repeat(64);
+        assert!(stage_uploads(&[tampered]).await.is_err());
         Ok(())
     }
 }

@@ -62,6 +62,10 @@ ${
   Content-Disposition: attachment
   Content-Security-Policy: default-src 'none'; sandbox; frame-ancestors 'none'
   Cache-Control: no-cache
+/_release/assets/*.bin
+  Cache-Control: public, max-age=31536000, immutable
+/downloads/android/*.apk
+  Cache-Control: public, max-age=31536000, immutable
 /manifest.webmanifest
   Content-Type: application/manifest+json; charset=utf-8
   Cache-Control: no-cache

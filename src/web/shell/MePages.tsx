@@ -57,6 +57,7 @@ export default tsxComponent(function MePages(_props: {
     android?: AndroidRelease | null;
     androidAvailable: boolean;
     androidUpdateState?: AndroidUpdateState;
+    androidUpdateProgress?: number | null;
   };
   updateBlocked: boolean;
 }) {
@@ -327,6 +328,7 @@ export default tsxComponent(function MePages(_props: {
                     androidRelease={software.android}
                     androidUpdate={software.androidAvailable}
                     androidUpdateState={software.androidUpdateState}
+                    androidUpdateProgress={software.androidUpdateProgress}
                     updateBlocked={updateBlocked}
                   />
                 </>

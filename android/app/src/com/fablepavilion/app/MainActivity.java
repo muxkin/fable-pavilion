@@ -87,6 +87,7 @@ public final class MainActivity extends Activity {
     private AndroidUpdates updates;
     private AndroidUpdates.State updateState = AndroidUpdates.State.CHECKING;
     private AndroidUpdates.Release updateRelease;
+    private int updateProgress = -1;
     private AndroidUpdates.Release requestedInstall;
     private AlertDialog updateDialog;
     private boolean showUpdateWhenReady;
@@ -431,7 +432,7 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshAndroidUpdates(boolean manual) {
-        updates.check(isolatedFrontend ? defaultOrigin : origin, isolatedFrontend, frontendReleaseKey,
+        updates.check(isolatedFrontend ? defaultOrigin : origin, origin, isolatedFrontend, frontendReleaseKey,
                 availableFrontend, manual);
         checkFrontendUpdate(manual);
     }
@@ -439,13 +440,17 @@ public final class MainActivity extends Activity {
     private void reportUpdateToPage() {
         if (web == null || web.getUrl() == null || !trusted(Uri.parse(web.getUrl()))) return;
         String state = JSONObject.quote(updateState.name().toLowerCase(Locale.ROOT));
+        String progress = (updateState == AndroidUpdates.State.DOWNLOADING && updateProgress >= 0)
+                ? Integer.toString(updateProgress) : "null";
         web.evaluateJavascript("window.fableAndroidUpdate=" + state +
+                ";window.fableAndroidUpdateProgress=" + progress +
                 ";window.dispatchEvent(new Event('fable-android-update'));", null);
     }
 
-    private void updateChanged(AndroidUpdates.State state, AndroidUpdates.Release release) {
+    private void updateChanged(AndroidUpdates.State state, AndroidUpdates.Release release, int progress) {
         updateState = state;
         updateRelease = release;
+        updateProgress = progress;
         reportUpdateToPage();
         if (state == AndroidUpdates.State.DOWNLOADING && Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
@@ -464,7 +469,10 @@ public final class MainActivity extends Activity {
             return;
         }
         if (updateState == AndroidUpdates.State.DOWNLOADING) {
-            Toast.makeText(this, "更新正在后台下载，完成后会提示安装", Toast.LENGTH_SHORT).show();
+            String message = updateProgress > 0
+                    ? "更新正在下载（" + updateProgress + "%），完成后会提示安装"
+                    : "更新正在下载，完成后会提示安装";
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
             return;
         }
         refreshAndroidUpdates(true);
@@ -650,7 +658,7 @@ public final class MainActivity extends Activity {
                     if (web != view || startupId != id || isFinishing() || isDestroyed()) return;
                     verifiedFrontend = release;
                     availableFrontend = release;
-                    updates.check(defaultOrigin, true, frontendReleaseKey, release, false);
+                    updates.check(defaultOrigin, origin, true, frontendReleaseKey, release, false);
                     view.loadUrl(target.toString());
                     watchVerifiedStartup(view, id, started);
                 });
@@ -710,7 +718,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (availableFrontend == current && !isDestroyed()) {
                         availableFrontend = latest;
-                        updates.check(defaultOrigin, true, frontendReleaseKey, latest, false);
+                        updates.check(defaultOrigin, origin, true, frontendReleaseKey, latest, false);
                         if (latest != current) Log.i("FableStartup", "Verified frontend update ready");
                     }
                 });

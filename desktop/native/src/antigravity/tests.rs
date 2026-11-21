@@ -635,3 +635,47 @@ fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_pat
         .is_err()
     );
 }
+
+#[test]
+fn projects_inline_images_together_with_file_and_video_attachments() {
+    let prompt = crate::files::attachment_prompt(
+        "请分析这个视频和文档",
+        &[
+            crate::files::Attachment {
+                name: "demo.mp4".into(),
+                path: PathBuf::from("/tmp/native-uploads/00000000-0000-0000-0000-000000000001/attachment.mp4"),
+            },
+            crate::files::Attachment {
+                name: "spec.pdf".into(),
+                path: PathBuf::from("/tmp/native-uploads/00000000-0000-0000-0000-000000000002/attachment.pdf"),
+            },
+        ],
+        false,
+    )
+    .unwrap();
+    let step = json!({
+        "metadata": {"executionId": "exec-1"},
+        "userInput": {
+            "clientMessageId": "msg-1",
+            "items": [{"text": prompt}],
+            "media": [{
+                "uri": "/tmp/brain/thread-1/.user_uploaded/shot.png",
+                "mimeType": "image/png",
+                "displayName": "shot.png"
+            }]
+        }
+    });
+    let projected = messages(std::slice::from_ref(&step), 4, false);
+    assert_eq!(projected.len(), 1);
+    assert_eq!(projected[0]["text"], "请分析这个视频和文档");
+    let attachments = projected[0]["attachments"].as_array().unwrap();
+    assert_eq!(attachments.len(), 3);
+    assert_eq!(attachments[0]["name"], "shot.png");
+    assert_eq!(attachments[0]["path"], "antigravity-image:4:0");
+    assert_eq!(attachments[1]["name"], "demo.mp4");
+    assert_eq!(
+        attachments[1]["path"],
+        "/tmp/native-uploads/00000000-0000-0000-0000-000000000001/attachment.mp4"
+    );
+    assert_eq!(attachments[2]["name"], "spec.pdf");
+}

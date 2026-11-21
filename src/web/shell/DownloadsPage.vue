@@ -12,11 +12,12 @@ import { usePwaInstall } from '../pwa-install';
 
 const pwaInstall = usePwaInstall();
 
-defineProps<{
+const props = defineProps<{
   websiteUpdate: boolean;
   androidRelease?: AndroidRelease | null;
   androidUpdate: boolean;
   androidUpdateState?: AndroidUpdateState;
+  androidUpdateProgress?: number | null;
   updateBlocked: boolean;
 }>();
 
@@ -57,6 +58,14 @@ const androidStatus: Record<AndroidUpdateState, string> = {
   ready: '已下载，可安装',
   failed: '暂时无法获取更新',
 };
+const androidStatusText = computed(() => {
+  const state = props.androidUpdateState;
+  if (!state) return '';
+  if (state === 'downloading' && typeof props.androidUpdateProgress === 'number') {
+    return `正在下载更新（${props.androidUpdateProgress}%）…`;
+  }
+  return androidStatus[state];
+});
 
 function checkInstaller(target: NativeInstallerTarget) {
   const { signal } = installerRequests;
@@ -96,9 +105,7 @@ onUnmounted(() => installerRequests.abort());
           <span class="platform-icon"><SvgIcon name="phone" :size="22" /></span>
           <div class="installer-info">
             <strong>Android</strong>
-            <small v-if="androidUpdateState" aria-live="polite">{{
-              androidStatus[androidUpdateState]
-            }}</small>
+            <small v-if="androidUpdateState" aria-live="polite">{{ androidStatusText }}</small>
             <small v-else-if="androidRelease">
               v{{ androidRelease.version }} · APK · {{ Math.ceil(androidRelease.bytes / 1024) }} KiB
             </small>

@@ -34,11 +34,22 @@ export function useSoftwareUpdates() {
   const watchVersions = watchRender();
   const watchAndroid = watchRender();
   const nativeState = shallowRef<AndroidUpdateState>('checking');
+  const nativeProgress = shallowRef<number | null>(null);
   return (downloadsOpen: boolean) => {
     watchAndroid(() => {
       if (!backgroundAndroid) return;
-      const source = window as Window & { fableAndroidUpdate?: AndroidUpdateState };
-      const update = () => (nativeState.value = source.fableAndroidUpdate ?? 'checking');
+      const source = window as Window & {
+        fableAndroidUpdate?: AndroidUpdateState;
+        fableAndroidUpdateProgress?: number | null;
+      };
+      const update = () => {
+        nativeState.value = source.fableAndroidUpdate ?? 'checking';
+        const progress = source.fableAndroidUpdateProgress;
+        nativeProgress.value =
+          typeof progress === 'number' && Number.isFinite(progress) && progress >= 0 && progress <= 100
+            ? Math.round(progress)
+            : null;
+      };
       window.addEventListener('fable-android-update', update);
       update();
       return () => window.removeEventListener('fable-android-update', update);
@@ -125,6 +136,7 @@ export function useSoftwareUpdates() {
         ? nativeState.value === 'ready'
         : !!installedAndroid && !!release && release.versionCode > installedAndroid,
       androidUpdateState: backgroundAndroid ? nativeState.value : undefined,
+      androidUpdateProgress: backgroundAndroid ? nativeProgress.value : null,
     };
   };
 }

@@ -216,7 +216,7 @@ impl Adapter for Backend {
                 }
                 let text = text.trim();
                 if !(valid_text(text) || text.is_empty() && !files.is_empty()) {
-                    return Delivery::Rejected("请输入有效消息（最多 16000 字符）或添加图片");
+                    return Delivery::Rejected("请输入有效消息（最多 16000 字符）或添加附件");
                 }
                 let Ok(view) = self.snapshot(thread).await else {
                     return Delivery::Rejected("Antigravity 会话尚未同步");
@@ -234,12 +234,15 @@ impl Adapter for Backend {
                 } else {
                     None
                 };
-                let Ok(images) = media::stage_uploads(&files).await else {
-                    return Delivery::Rejected("Antigravity 图片无效、已变化或超过 32 MiB");
+                let Ok(staged) = media::stage_uploads(&files).await else {
+                    return Delivery::Rejected("Antigravity 附件无效、已变化或超过限制");
+                };
+                let Ok(prompt) = crate::files::attachment_prompt(text, &staged.files, false) else {
+                    return Delivery::Rejected("Antigravity 附件路径无效");
                 };
                 let mut items = Vec::new();
-                if !text.is_empty() {
-                    items.push(json!({"text":text}));
+                if !prompt.is_empty() {
+                    items.push(json!({"text":prompt}));
                 }
                 if !skills.is_empty() {
                     let Ok(catalog) = self.skills(thread).await else {
@@ -263,11 +266,11 @@ impl Adapter for Backend {
                 if let Some(model) = native_model {
                     body["cascadeConfig"] = json!({"plannerConfig":{"planModel":model}});
                 }
-                if !images.media.is_empty() {
-                    body["media"] = json!(images.media);
+                if !staged.media.is_empty() {
+                    body["media"] = json!(staged.media);
                 }
                 let result = self.dispatch("SendUserCascadeMessage", body).await;
-                drop(images);
+                drop(staged);
                 delivery(result, Delivery::Accepted(None))
             }
             Write::Steer {
@@ -352,7 +355,7 @@ impl Adapter for Backend {
                 }
                 let text = prompt.trim();
                 if !(valid_text(text) || text.is_empty() && !files.is_empty()) {
-                    return Delivery::Rejected("请输入第一条消息（最多 16000 字符）或添加图片");
+                    return Delivery::Rejected("请输入第一条消息（最多 16000 字符）或添加附件");
                 }
                 if title.as_deref().is_some_and(|s| !valid_title(s)) {
                     return Delivery::Rejected("会话名称无效");
@@ -385,12 +388,16 @@ impl Adapter for Backend {
                     };
                     config = json!({"plannerConfig":{"planModel":model}});
                 }
-                let Ok(images) = media::stage_uploads(&files).await else {
-                    return Delivery::Rejected("Antigravity 图片无效、已变化或超过 32 MiB");
+                let Ok(staged) = media::stage_uploads(&files).await else {
+                    return Delivery::Rejected("Antigravity 附件无效、已变化或超过限制");
+                };
+                let Ok(prompt_text) = crate::files::attachment_prompt(text, &staged.files, false)
+                else {
+                    return Delivery::Rejected("Antigravity 附件路径无效");
                 };
                 let mut items = Vec::new();
-                if !text.is_empty() {
-                    items.push(json!({"text":text}));
+                if !prompt_text.is_empty() {
+                    items.push(json!({"text":prompt_text}));
                 }
                 if !skills.is_empty() {
                     let Ok(catalog) = self.creation_skills(Some(&project)).await else {
@@ -438,11 +445,11 @@ impl Adapter for Backend {
                     "cascadeConfig": config,
                     "clientMessageId": request,
                 });
-                if !images.media.is_empty() {
-                    body["media"] = json!(images.media);
+                if !staged.media.is_empty() {
+                    body["media"] = json!(staged.media);
                 }
                 let sent = self.dispatch("SendUserCascadeMessage", body).await;
-                drop(images);
+                drop(staged);
                 match sent {
                     Ok(_) => Delivery::Completed(Some(id.to_owned())),
                     Err(_) => Delivery::Uncertain,

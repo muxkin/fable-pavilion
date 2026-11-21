@@ -335,7 +335,7 @@ impl Backend {
             "connected":connected,"version":daemon.map(|d| d.ls_version),"profile":"rust-native",
             "presentation":{"description":"Antigravity App 本地适配器",
                 "creation":{"empty":true,"attachments":!self.read_only,"tools":!self.read_only,"permission":"native","preset":false,"plan":false,"notice":"沿用 Antigravity 项目权限"},
-                "plan":"none","fileReferences":true,"exportLog":true,"nativeCommands":false,"attachmentMode":"image"},
+                "plan":"none","fileReferences":true,"exportLog":true,"nativeCommands":false},
             "capabilities":capabilities})
     }
 
