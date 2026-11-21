@@ -426,8 +426,13 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshAndroidUpdates() {
-        updates.check(isolatedFrontend ? defaultOrigin : origin, isolatedFrontend, availableFrontend);
-        checkFrontendUpdate();
+        refreshAndroidUpdates(false);
+    }
+
+    private void refreshAndroidUpdates(boolean manual) {
+        updates.check(isolatedFrontend ? defaultOrigin : origin, isolatedFrontend, frontendReleaseKey,
+                availableFrontend, manual);
+        checkFrontendUpdate(manual);
     }
 
     private void reportUpdateToPage() {
@@ -457,15 +462,12 @@ public final class MainActivity extends Activity {
             offerUpdate(updateRelease);
             return;
         }
-        refreshAndroidUpdates();
-        String message;
-        switch (updateState) {
-            case DOWNLOADING: message = "更新正在后台下载，完成后会提示安装"; break;
-            case CURRENT: message = "当前已是最新版本"; break;
-            case FAILED: message = "正在重新检查更新"; break;
-            default: message = "正在检查更新";
+        if (updateState == AndroidUpdates.State.DOWNLOADING) {
+            Toast.makeText(this, "更新正在后台下载，完成后会提示安装", Toast.LENGTH_SHORT).show();
+            return;
         }
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+        refreshAndroidUpdates(true);
+        Toast.makeText(this, "正在检查更新", Toast.LENGTH_SHORT).show();
     }
 
     private void offerUpdate(AndroidUpdates.Release release) {
@@ -647,7 +649,7 @@ public final class MainActivity extends Activity {
                     if (web != view || startupId != id || isFinishing() || isDestroyed()) return;
                     verifiedFrontend = release;
                     availableFrontend = release;
-                    updates.check(defaultOrigin, true, release);
+                    updates.check(defaultOrigin, true, frontendReleaseKey, release, false);
                     view.loadUrl(target.toString());
                     watchVerifiedStartup(view, id, started);
                 });
@@ -690,10 +692,14 @@ public final class MainActivity extends Activity {
     }
 
     private void checkFrontendUpdate() {
+        checkFrontendUpdate(false);
+    }
+
+    private void checkFrontendUpdate(boolean force) {
         VerifiedFrontend current = availableFrontend;
         long now = SystemClock.elapsedRealtime();
         if (!isolatedFrontend || current == null || checkingFrontend ||
-                (lastFrontendCheck != 0 && now - lastFrontendCheck < 60000)) return;
+                (!force && lastFrontendCheck != 0 && now - lastFrontendCheck < 60000)) return;
         checkingFrontend = true;
         lastFrontendCheck = now;
         new Thread(() -> {
@@ -703,7 +709,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (availableFrontend == current && !isDestroyed()) {
                         availableFrontend = latest;
-                        updates.check(defaultOrigin, true, latest);
+                        updates.check(defaultOrigin, true, frontendReleaseKey, latest, false);
                         if (latest != current) Log.i("FableStartup", "Verified frontend update ready");
                     }
                 });

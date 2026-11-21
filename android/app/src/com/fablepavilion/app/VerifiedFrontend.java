@@ -27,6 +27,10 @@ import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.regex.Pattern;
 import javax.net.ssl.HttpsURLConnection;
 import org.json.JSONArray;
@@ -154,13 +158,50 @@ final class VerifiedFrontend {
                 (previous != null && !next.sameOrNewerThan(previous)))
             throw new IOException("Expired or rolled back release");
         if (next.id.equals(id) && ready()) return this;
-        // Prepare the complete signed frontend off the WebView's request thread.
+        // Prepare the complete signed frontend off the WebView's request thread using bounded concurrency.
+        Set<String> needed = new HashSet<>();
         for (Map.Entry<String, String> entry : next.files.entrySet()) {
-            if (!isInstallerPath(entry.getKey())) next.file(entry.getValue(), true);
+            if (!isInstallerPath(entry.getKey())) needed.add(entry.getValue());
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(6);
+        try {
+            java.util.List<Future<?>> tasks = new java.util.ArrayList<>(needed.size());
+            for (final String hash : needed) {
+                tasks.add(pool.submit(() -> {
+                    next.file(hash, true);
+                    return null;
+                }));
+            }
+            for (Future<?> task : tasks) {
+                try {
+                    task.get();
+                } catch (ExecutionException failure) {
+                    Throwable cause = failure.getCause();
+                    if (cause instanceof Exception) throw (Exception) cause;
+                    throw new IOException("Asset download failed", cause);
+                }
+            }
+        } finally {
+            pool.shutdownNow();
         }
         if (!prefs.edit().putString(releaseOrigin.toString(), Base64.encodeToString(document, Base64.NO_WRAP)).commit())
             throw new IOException("Could not save accepted release");
         return next;
+    }
+
+    AndroidUpdates.Release fetchLatestAndroidRelease(String encodedKey) throws Exception {
+        PublicKey key = releaseKey(encodedKey);
+        byte[] doc = fetch(releaseOrigin + RELEASE + "manifest.json", 1024 * 1024);
+        VerifiedFrontend next = new VerifiedFrontend(releaseOrigin, cache, doc, key, embedded);
+        if (next.expires <= System.currentTimeMillis() || !next.sameOrNewerThan(this))
+            throw new IOException("Expired or rolled back release");
+        String hash = next.files.get(AndroidUpdates.FEED);
+        if (hash == null) return null;
+        byte[] bytes = next.file(hash, true);
+        AndroidUpdates.Release apk = new AndroidUpdates.Release(
+                new JSONObject(new String(bytes, StandardCharsets.UTF_8)));
+        if (!apk.checksum.equals(next.files.get(apk.path()))) throw new IOException("Unsigned APK checksum");
+        return apk;
     }
 
     static boolean isInstallerPath(String path) {
@@ -278,18 +319,25 @@ final class VerifiedFrontend {
     }
 
     static byte[] fetch(String url, int limit) throws IOException {
-        HttpsURLConnection connection = (HttpsURLConnection) new URL(url).openConnection();
-        connection.setInstanceFollowRedirects(false);
-        connection.setConnectTimeout(10000);
-        connection.setReadTimeout(10000);
-        connection.setUseCaches(false);
-        try {
-            if (connection.getResponseCode() != 200 || connection.getContentLengthLong() > limit)
-                throw new IOException("Release download unavailable");
-            try (InputStream input = connection.getInputStream()) { return read(input, limit); }
-        } finally {
-            connection.disconnect();
+        IOException last = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            HttpsURLConnection connection = (HttpsURLConnection) new URL(url).openConnection();
+            connection.setInstanceFollowRedirects(false);
+            connection.setConnectTimeout(15000);
+            connection.setReadTimeout(20000);
+            connection.setUseCaches(false);
+            try {
+                if (connection.getResponseCode() != 200 || connection.getContentLengthLong() > limit)
+                    throw new IOException("Release download unavailable");
+                try (InputStream input = connection.getInputStream()) { return read(input, limit); }
+            } catch (IOException failure) {
+                last = failure;
+                if (attempt == 2) throw failure;
+            } finally {
+                connection.disconnect();
+            }
         }
+        throw last != null ? last : new IOException("Release download unavailable");
     }
 
     private static byte[] read(InputStream input, int limit) throws IOException {

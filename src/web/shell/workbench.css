@@ -88,7 +88,7 @@
   font-size: 14px;
 }
 .workbench-add:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+  background: color-mix(in srgb, var(--accent) 88%, var(--ink));
 }
 .computer-grid {
   display: grid;
@@ -127,7 +127,7 @@
   border: 1px solid var(--workbench-border);
   border-radius: 18px;
   background: var(--surface);
-  box-shadow: 0 8px 20px color-mix(in srgb, var(--text) 7%, transparent);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--ink) 7%, transparent);
 }
 .computer-header {
   min-width: 0;

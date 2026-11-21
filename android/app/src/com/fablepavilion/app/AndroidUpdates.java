@@ -114,28 +114,40 @@ public final class AndroidUpdates {
 
     void detach() { listener = null; }
 
-    void check(Uri source, boolean verify, VerifiedFrontend frontend) {
+    void check(Uri source, boolean verify, String encodedKey, VerifiedFrontend frontend, boolean manual) {
         work.execute(() -> {
             Transfer previous = reconcile();
             if (verify && frontend == null) return;
+            if (manual) {
+                lastFailure = 0;
+                if (previous == null) publish(State.CHECKING, null);
+            }
             try {
                 Release next;
+                long now = SystemClock.elapsedRealtime();
                 if (verify) {
                     next = frontend.androidRelease();
+                    boolean shouldFetch = manual || next == null || next.code <= installedCode;
+                    if (shouldFetch && encodedKey != null && !encodedKey.isEmpty() &&
+                            (manual || !source.equals(queriedOrigin) || now - queriedAt >= 60_000)) {
+                        queriedAt = now;
+                        queriedOrigin = source;
+                        Release remote = frontend.fetchLatestAndroidRelease(encodedKey);
+                        if (remote != null && (next == null || remote.code >= next.code)) next = remote;
+                    }
                 } else {
-                    long now = SystemClock.elapsedRealtime();
-                    if (source.equals(queriedOrigin) && now - queriedAt < 60_000) return;
+                    if (!manual && source.equals(queriedOrigin) && now - queriedAt < 60_000) return;
                     queriedAt = now;
                     queriedOrigin = source;
                     byte[] raw = VerifiedFrontend.fetch(source + FEED, 16 * 1024);
                     next = new Release(new JSONObject(new String(raw, StandardCharsets.UTF_8)));
                 }
                 if (next == null || next.code <= installedCode) {
-                    if (previous == null && lastFailure == 0) publish(State.CURRENT, null);
+                    if (previous == null && (manual || lastFailure == 0)) publish(State.CURRENT, null);
                     return;
                 }
                 if (previous != null && next.code <= previous.release.code) return;
-                if (lastFailure != 0 && SystemClock.elapsedRealtime() - lastFailure < 60_000) return;
+                if (!manual && lastFailure != 0 && SystemClock.elapsedRealtime() - lastFailure < 60_000) return;
                 enqueue(source, next, previous);
             } catch (Exception failure) {
                 Log.w("FableUpdate", "Update check failed: " + failure.getClass().getSimpleName());

@@ -1377,7 +1377,7 @@
   font-size: 44px;
 }
 .im-expression-empty p {
-  color: var(--text);
+  color: var(--ink);
   font-weight: 600;
 }
 .im-voice {

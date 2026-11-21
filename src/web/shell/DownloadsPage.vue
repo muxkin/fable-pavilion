@@ -200,7 +200,7 @@ onUnmounted(() => installerRequests.abort());
   width: min(100%, 640px);
   margin-inline: auto;
   padding: clamp(24px, 5vw, 44px) 24px 40px;
-  color: var(--text);
+  color: var(--ink);
 }
 
 .installer-heading span,
@@ -316,7 +316,7 @@ onUnmounted(() => installerRequests.abort());
 }
 
 .installer-download:hover {
-  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+  background: color-mix(in srgb, var(--accent) 88%, var(--ink));
   color: var(--on-accent);
 }
 
@@ -369,7 +369,7 @@ onUnmounted(() => installerRequests.abort());
 
 .source-download {
   text-decoration: none;
-  color: var(--text);
+  color: var(--ink);
 }
 
 .source-download small {
