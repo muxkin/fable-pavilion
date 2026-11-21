@@ -14,7 +14,7 @@ export const PageLoading = defineComponent(
     });
     onBeforeUnmount(() => clearTimeout(timer));
     return () => (
-      <div class="module-empty" role="status">
+      <div class="module-empty page-loading" role="status">
         <p>{slow.value ? '页面仍在准备中。' : (props.label ?? '正在打开…')}</p>
         {slow.value && (
           <button class="secondary" onClick={() => location.reload()}>

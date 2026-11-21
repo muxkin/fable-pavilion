@@ -192,6 +192,20 @@ body,
   gap: 14px;
   padding: 80px 24px 40px;
 }
+.module-empty.page-loading {
+  justify-content: center;
+  min-height: 100%;
+  padding: 28px 24px;
+}
+.module-empty.page-loading p {
+  opacity: 0;
+  animation: page-loading-fade 0.25s ease 0.65s forwards;
+}
+@keyframes page-loading-fade {
+  to {
+    opacity: 0.85;
+  }
+}
 .empty-symbol {
   display: grid;
   place-items: center;

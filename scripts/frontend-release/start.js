@@ -1,3 +1,18 @@
+(() => {
+  try {
+    const stored = JSON.parse(localStorage.getItem('pocket-appearance-v1') || 'null');
+    const mode = stored?.version === 1 && (stored.mode === 'dark' || stored.mode === 'light') ? stored.mode : '';
+    if (mode) {
+      document.documentElement.dataset.colorMode = mode;
+      document.documentElement.style.colorScheme = mode;
+      const surface = stored.paint?.[mode]?.['--surface'] || (mode === 'dark' ? '#172329' : '#fffcf5');
+      if (/^#[0-9a-f]{6}$/i.test(surface)) {
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', surface);
+      }
+    }
+  } catch {}
+})();
+
 (async () => {
   const output = document.querySelector('p');
   try {
@@ -9,6 +24,9 @@
     if (!navigator.serviceWorker.controller) await controlled;
     location.reload();
   } catch {
-    output.textContent = '无法启动前端验签。请检查浏览器设置后重新加载。';
+    if (output) {
+      output.dataset.error = 'true';
+      output.textContent = '无法启动前端验签。请检查浏览器设置后重新加载。';
+    }
   }
 })();

@@ -3,7 +3,7 @@ import { nextTick, onScopeDispose, shallowRef, useId } from 'vue';
 import { watchRender, writeRef } from '../render-effects';
 
 import { Icon } from '../Icon';
-import { takeStartupLoginMode } from '../startup-session';
+import { peekStartupStatus, takeStartupLoginMode, type StartupAccountStatus } from '../startup-session';
 import loginArtwork from './assets/login-art.webp';
 import { deviceLoginRequired, messaging, useMessaging } from './context';
 import { Notice as ErrorNotice, errorText } from './ui';
@@ -21,14 +21,30 @@ import '../shell/settings-hierarchy.css';
 
 type AccountMode = 'register' | 'login' | 'recovery' | 'qr';
 
+function resolveArtworkSource(baseUrl?: string): string {
+  if (baseUrl) {
+    try {
+      const base = new URL(baseUrl);
+      if (base.protocol === 'https:') return new URL(`assets/${loginArtwork.split('/').at(-1)}`, base).href;
+    } catch {}
+  }
+  return loginArtwork;
+}
+
 export const AccountForm = tsxComponent(function AccountForm(_props: { description?: string }) {
+  const initialStatus = peekStartupStatus();
+  const initialDeviceOnly = deviceLoginRequired || initialStatus?.deviceLoginOnly === true;
   const modeState = shallowRef<AccountMode>(takeStartupLoginMode() ?? 'qr');
   const setMode = writeRef(modeState);
   const challenge = shallowRef<PasswordChallenge>();
-  const requiresCodeState = shallowRef(false);
-  const registrationEnabled = shallowRef<boolean>();
-  const artworkSource = shallowRef<string>();
-  const deviceOnly = shallowRef(deviceLoginRequired);
+  const requiresCodeState = shallowRef(initialStatus?.registrationRequiresCode === true);
+  const registrationEnabled = shallowRef<boolean | undefined>(
+    initialStatus ? initialStatus.registrationEnabled === true : undefined,
+  );
+  const artworkSource = shallowRef<string | undefined>(
+    initialStatus ? resolveArtworkSource(initialStatus.loginArtworkBase) : undefined,
+  );
+  const deviceOnly = shallowRef(initialDeviceOnly);
   const setRequiresCode = writeRef(requiresCodeState);
   const errorState = shallowRef('');
   const setError = writeRef(errorState);
@@ -54,25 +70,17 @@ export const AccountForm = tsxComponent(function AccountForm(_props: { descripti
     const pending = challenge.value;
     const signingIn = mode === 'login' || mode === 'qr';
     watchRequiresCode(() => {
+      if (initialStatus) return;
       const controller = new AbortController();
       void messaging
-        .request<{
-          registrationEnabled: boolean;
-          registrationRequiresCode: boolean;
-          deviceLoginOnly?: boolean;
-          loginArtworkBase?: string;
-        }>('/status', 'GET', undefined, controller.signal)
+        .request<StartupAccountStatus>('/status', 'GET', undefined, controller.signal)
         .then((v) => {
           if (controller.signal.aborted) return;
           registrationEnabled.value = v.registrationEnabled === true;
           setRequiresCode(v.registrationRequiresCode);
           deviceOnly.value = deviceLoginRequired || v.deviceLoginOnly === true;
           if (deviceOnly.value && modeState.value === 'login') setMode('qr');
-          if (v.loginArtworkBase) {
-            const base = new URL(v.loginArtworkBase);
-            if (base.protocol === 'https:')
-              artworkSource.value = new URL(`assets/${loginArtwork.split('/').at(-1)}`, base).href;
-          }
+          artworkSource.value = resolveArtworkSource(v.loginArtworkBase);
         })
         .catch(() => {})
         .finally(() => {

@@ -13,7 +13,7 @@ import { browserId } from '../browser-id';
 import { MessagingError } from '../../client/messaging';
 import { EncryptedMessagingClient } from '../../client/encrypted-messaging';
 import type { ChatConversation, ChatContact, ChatMessage, ChatUser } from '../../shared/messaging';
-import { takeStartupSession } from '../startup-session';
+import { awaitStartupStatus, takeStartupSession } from '../startup-session';
 import { account, deviceLoginRequired } from './account-transport';
 export { deviceLoginRequired } from './account-transport';
 export const messaging = new EncryptedMessagingClient('', undefined, deviceLoginRequired, account);
@@ -77,11 +77,13 @@ export const MessagingProvider = defineComponent({
       try {
         const readUser = () => messaging.me().then(({ user }) => user);
         const next = await (takeStartupSession()?.catch(readUser) ?? readUser());
+        if (!next) await awaitStartupStatus();
         if (!(await activate(next))) return;
         session.user = next;
         session.connectionError = '';
       } catch (e) {
         if (e instanceof MessagingError && e.status === 401) {
+          await awaitStartupStatus();
           if (await activate(null)) session.user = null;
         } else session.connectionError = '消息服务暂不可用，请检查连接后重试';
       } finally {

@@ -165,7 +165,7 @@ async function signedRelease(directory) {
   await writeFile(
     join(directory, 'index.html'),
     `<!doctype html>
-<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#fffcf5">
 <meta name="mobile-web-app-capable" content="yes">
@@ -174,7 +174,19 @@ async function signedRelease(directory) {
 <link rel="icon" type="image/png" sizes="32x32" href="/app-icons/wuyou-32.png">
 <link rel="apple-touch-icon" sizes="192x192" href="/app-icons/wuyou-192.png">
 <link rel="manifest" href="/manifest.webmanifest">
-<title>子虚亭</title><p role="status">正在验证子虚亭前端…</p>
+<title>子虚亭 · Fable Pavilion</title>
+<style>
+  html,body{margin:0;height:100%;background:#fffcf5;color:#24343a;font:14px/1.6 system-ui,-apple-system,sans-serif}
+  @media (prefers-color-scheme:dark){:root:not([data-color-mode='light']),:root:not([data-color-mode='light']) body{background:#172329;color:#f6f2ea}}
+  :root[data-color-mode='dark'],:root[data-color-mode='dark'] body{background:#172329;color:#f6f2ea}
+  body{display:grid;place-items:center}
+  p{margin:0;opacity:0;color:#627579;animation:fp-fade .25s ease .75s forwards}
+  @media (prefers-color-scheme:dark){:root:not([data-color-mode='light']) p{color:#9ab0b3}}
+  :root[data-color-mode='dark'] p{color:#9ab0b3}
+  p[data-error='true']{opacity:1;animation:none}
+  @keyframes fp-fade{to{opacity:.85}}
+</style>
+<p role="status">正在验证子虚亭前端…</p>
 <script src="/verified-start.js" defer></script></html>\n`,
   );
   // Copy inert PWA metadata and icon files so browser-level installability checks

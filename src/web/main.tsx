@@ -1,7 +1,12 @@
 import './theme/boot.js';
 import './pwa-install';
 import { installBrowserCompatibility } from './browser-compat';
-import { setStartupLoginMode, setStartupSession } from './startup-session';
+import {
+  setStartupLoginMode,
+  setStartupSession,
+  setStartupStatus,
+  type StartupAccountStatus,
+} from './startup-session';
 import type { AccountClient } from '../client/account';
 import type { ChatUser } from '../shared/messaging';
 
@@ -21,12 +26,14 @@ if (entry) {
     if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js').catch(() => {});
     start(entry);
   } else {
-    entry.querySelector('[data-startup-status]')!.textContent =
-      '当前浏览器不支持安全登录，请更新浏览器后重试。';
+    const unsupported = entry.querySelector<HTMLElement>('[data-startup-status]')!;
+    unsupported.dataset.error = 'true';
+    unsupported.textContent = '当前浏览器不支持安全登录，请更新浏览器后重试。';
   }
 }
 
 function start(entry: HTMLElement) {
+  const liteShell = entry.querySelector<HTMLElement>('[data-lite-shell]');
   const status = entry.querySelector<HTMLElement>('[data-startup-status]')!;
   const retry = entry.querySelector<HTMLButtonElement>('[data-startup-retry]')!;
   const scan = entry.querySelector<HTMLButtonElement>('[data-lite-scan]')!;
@@ -40,6 +47,7 @@ function start(entry: HTMLElement) {
 
   function working(message: string) {
     clearTimeout(slowTimer);
+    delete status.dataset.error;
     status.textContent = message;
     retry.hidden = true;
     slowTimer = setTimeout(() => {
@@ -51,6 +59,7 @@ function start(entry: HTMLElement) {
 
   function failed() {
     clearTimeout(slowTimer);
+    status.dataset.error = 'true';
     status.textContent = navigator.onLine ? '连接失败，请重试。' : '当前离线，请在联网后重试。';
     retry.hidden = false;
   }
@@ -69,9 +78,21 @@ function start(entry: HTMLElement) {
     return (await response.json()).user ?? null;
   }
 
+  async function accountStatus(): Promise<StartupAccountStatus | null> {
+    try {
+      const response = await fetch('/api/im/status', { cache: 'no-store', signal: AbortSignal.timeout(12000) });
+      if (!response.ok) return null;
+      return (await response.json()) as StartupAccountStatus;
+    } catch {
+      return null;
+    }
+  }
+
   const initialSession = session();
+  const initialStatus = accountStatus();
   // A failed early probe can be retried by the full app on a fast connection.
   void initialSession.catch(() => {});
+  setStartupStatus(initialStatus);
 
   function openApp(account?: AccountClient, mode?: 'recovery' | 'qr') {
     if (opening) return;
@@ -102,6 +123,7 @@ function start(entry: HTMLElement) {
       lite = installLiteQr(entry, openApp);
       clearTimeout(slowTimer);
       status.textContent = '';
+      if (liteShell) liteShell.hidden = false;
       entry.dataset.startupReady = 'true';
       setControls(true);
       full.hidden = false;
@@ -114,13 +136,10 @@ function start(entry: HTMLElement) {
       });
       showCode.addEventListener('click', () => void lite?.localCode());
       recover.addEventListener('click', () => openApp(undefined, 'recovery'));
-      void fetch('/api/im/status', { cache: 'no-store', signal: AbortSignal.timeout(12000) })
-        .then(async (response) => {
-          if (!response.ok) return;
-          const { registrationEnabled } = await response.json();
-          entry.querySelector<HTMLElement>('[data-lite-closed]')!.hidden = registrationEnabled !== false;
-        })
-        .catch(() => {});
+      void initialStatus.then((info) => {
+        if (!info) return;
+        entry.querySelector<HTMLElement>('[data-lite-closed]')!.hidden = info.registrationEnabled !== false;
+      });
     })
     .catch(failed);
 }

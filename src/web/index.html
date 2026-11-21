@@ -19,16 +19,33 @@
       body {
         margin: 0;
       }
+      html:has(#app-startup),
+      body:has(#app-startup) {
+        height: 100%;
+        background: #fffcf5;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-color-mode='light']):has(#app-startup),
+        :root:not([data-color-mode='light']) body:has(#app-startup) {
+          background: #172329;
+        }
+      }
+      :root[data-color-mode='dark']:has(#app-startup),
+      :root[data-color-mode='dark'] body:has(#app-startup) {
+        background: #172329;
+      }
       #app-startup {
-        --entry-bg: #fff;
+        --entry-bg: #fffcf5;
         --entry-text: #24343a;
+        --entry-muted: #627579;
         --entry-accent: #2b665d;
         --entry-on-accent: #fff;
         --entry-rule: #74948b;
+        display: grid;
+        place-items: center;
         min-height: 100vh;
         min-height: 100dvh;
-        padding: 56px 22px 28px;
-        padding: clamp(40px, 14dvh, 150px) 22px 28px;
+        padding: 28px 22px;
         box-sizing: border-box;
         background: var(--entry-bg);
         color: var(--entry-text);
@@ -37,10 +54,16 @@
           sans-serif;
         text-align: center;
       }
+      #app-startup[data-startup-ready='true'] {
+        display: block;
+        padding: 56px 22px 28px;
+        padding: clamp(40px, 14dvh, 150px) 22px 28px;
+      }
       @media (prefers-color-scheme: dark) {
         :root:not([data-color-mode='light']) #app-startup {
           --entry-bg: #172329;
           --entry-text: #f6f2ea;
+          --entry-muted: #9ab0b3;
           --entry-accent: #8cc9bb;
           --entry-on-accent: #102e29;
           --entry-rule: #8b9f9b;
@@ -50,6 +73,7 @@
       :root[data-color-mode='dark'] #app-startup {
         --entry-bg: #172329;
         --entry-text: #f6f2ea;
+        --entry-muted: #9ab0b3;
         --entry-accent: #8cc9bb;
         --entry-on-accent: #102e29;
         --entry-rule: #8b9f9b;
@@ -155,6 +179,18 @@
       }
       #app-startup [data-startup-status] {
         font-size: 14px;
+        color: var(--entry-muted);
+        opacity: 0;
+        animation: startup-fade 0.25s ease 0.75s forwards;
+      }
+      #app-startup [data-startup-status][data-error='true'] {
+        opacity: 1;
+        animation: none;
+      }
+      @keyframes startup-fade {
+        to {
+          opacity: 0.85;
+        }
       }
       @media (max-width: 600px) {
         .startup-choices {
@@ -167,22 +203,24 @@
     <div id="root">
       <main id="app-startup" aria-labelledby="startup-heading">
         <section>
-          <h1 id="startup-heading">登录子虚亭</h1>
-          <p>使用已登录的设备快速登录。</p>
-          <div class="startup-choices" data-lite-choices>
-            <button type="button" data-lite-scan disabled>扫描登录二维码</button>
-            <label class="startup-file" data-lite-album>
-              从相册导入
-              <input type="file" accept="image/*" aria-label="导入邀请二维码图片" disabled />
-            </label>
-            <button type="button" data-lite-app disabled>出示本机登录码</button>
+          <div data-lite-shell hidden>
+            <h1 id="startup-heading">登录子虚亭</h1>
+            <p>使用已登录的设备快速登录。</p>
+            <div class="startup-choices" data-lite-choices>
+              <button type="button" data-lite-scan disabled>扫描登录二维码</button>
+              <label class="startup-file" data-lite-album>
+                从相册导入
+                <input type="file" accept="image/*" aria-label="导入邀请二维码图片" disabled />
+              </label>
+              <button type="button" data-lite-app disabled>出示本机登录码</button>
+            </div>
+            <p data-lite-help>在已登录设备的「登录与安全」中出示二维码</p>
+            <button type="button" data-lite-recovery disabled>恢复账号</button>
+            <button type="button" data-lite-full disabled hidden>打开完整登录页</button>
+            <div data-lite-action></div>
+            <p data-lite-closed hidden>本站暂不开放注册</p>
           </div>
-          <p data-lite-help>在已登录设备的「登录与安全」中出示二维码</p>
-          <button type="button" data-lite-recovery disabled>恢复账号</button>
-          <button type="button" data-lite-full disabled hidden>打开完整登录页</button>
-          <div data-lite-action></div>
           <p data-startup-status role="status">正在连接…</p>
-          <p data-lite-closed hidden>本站暂不开放注册</p>
           <button type="button" data-startup-retry hidden>重试连接</button>
           <noscript><p>请启用 JavaScript 以使用加密登录。</p></noscript>
         </section>
