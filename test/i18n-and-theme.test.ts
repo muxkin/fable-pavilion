@@ -31,7 +31,10 @@ describe('unified preset themes and zh/en i18n', () => {
     expect(translateZhToEn('消息')).toBe('Messages');
     expect(translateZhToEn('剩余 45 秒')).toBe('45s left');
     expect(translateZhToEn('UID 10000000 · 管理员')).toBe('UID 10000000 · Admin');
-    expect(translateZhToEn('删除“青竹”？')).toBe('Delete "青竹"?');
+    expect(translateZhToEn('删除“青竹”？')).toBe('Delete "Jade Bamboo"?');
+    expect(translateZhToEn('动态码、 扫码与恢复方式')).toBe('Authenticator code, QR login & recovery');
+    expect(translateZhToEn('我的电脑')).toBe('My Computers');
+    expect(translateZhToEn('外观、缓存与关于')).toBe('Appearance, cache & about');
 
     setLocaleMode('system');
   });
