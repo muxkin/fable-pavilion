@@ -3,6 +3,7 @@ import { DEFAULT_TERMINAL_PLUGIN_SETTINGS, TERMINAL_BACKEND_ID } from '../src/sh
 import { apiCall } from '../src/shared/rpc';
 import { parentRoute, readRoute, routeURL } from '../src/web/shell/routes';
 import { escapeShellPath } from '../src/web/terminal/shell-escape';
+import { DEFAULT_NERD_FONT_STACK, TERMINAL_THEMES } from '../src/web/terminal/terminal-prefs';
 
 describe('Plugin management & built-in terminal defaults', () => {
   it('keeps the built-in terminal plugin disabled by default', () => {
@@ -31,7 +32,18 @@ describe('Plugin management & built-in terminal defaults', () => {
     expect(apiCall('/api/terminal/sessions', 'GET').method).toBe('terminal.sessions.list');
     expect(apiCall('/api/terminal/sessions', 'POST', {}).method).toBe('terminal.session.create');
     expect(apiCall('/api/terminal/sessions/abc/upload', 'POST', {}).method).toBe('terminal.session.upload');
+    expect(apiCall('/api/terminal/sessions/abc/fs/list', 'POST', {}).method).toBe('terminal.fs.list');
+    expect(apiCall('/api/terminal/sessions/abc/fs/mkdir', 'POST', {}).method).toBe('terminal.fs.mkdir');
+    expect(apiCall('/api/terminal/sessions/abc/fs/rename', 'POST', {}).method).toBe('terminal.fs.rename');
+    expect(apiCall('/api/terminal/sessions/abc/fs/delete', 'POST', {}).method).toBe('terminal.fs.delete');
     expect(apiCall('/api/terminal/forwards', 'POST', {}).method).toBe('terminal.forward.create');
+  });
+
+  it('provides Nerd Font fallback stack and Pavilion terminal theme presets', () => {
+    expect(DEFAULT_NERD_FONT_STACK).toContain('MesloLGS NF');
+    expect(DEFAULT_NERD_FONT_STACK).toContain('MesloLGS Nerd Font Mono');
+    expect(TERMINAL_THEMES['pavilion-night'].canvasBg).toBe('#0e1d21');
+    expect(TERMINAL_THEMES['pavilion-day'].light).toBe(true);
   });
 
   it('places plugins settings page under settings hierarchy', () => {

@@ -562,6 +562,141 @@ impl TerminalService {
         Ok((name, bytes))
     }
 
+    pub fn fs_list(&self, id: &str, directory: Option<&str>, show_hidden: bool) -> Result<Value> {
+        ensure!(self.is_enabled(), "终端插件尚未启用");
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal sessions mutex")
+            .get(id)
+            .cloned()
+            .context("终端会话不存在或已关闭")?;
+        let target = resolve_session_path(&session.cwd, directory);
+        ensure!(target.is_dir(), "目录不存在或无法访问");
+        let canonical = fs::canonicalize(&target).unwrap_or(target);
+        let parent = canonical
+            .parent()
+            .filter(|p| *p != canonical.as_path())
+            .map(|p| p.to_string_lossy().into_owned());
+        let mut entries = Vec::new();
+        for item in fs::read_dir(&canonical).context("无法读取目录内容")? {
+            let Ok(entry) = item else { continue };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let hidden = name.starts_with('.');
+            if hidden && !show_hidden {
+                continue;
+            }
+            let path = entry.path();
+            let meta = fs::symlink_metadata(&path).ok();
+            let kind = match meta.as_ref() {
+                Some(m) if m.file_type().is_symlink() => "symlink",
+                Some(m) if m.is_dir() => "dir",
+                _ => "file",
+            };
+            let size = meta.as_ref().map(|m| if m.is_dir() { 0 } else { m.len() }).unwrap_or(0);
+            let modified_at = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let path_str = path.to_string_lossy().into_owned();
+            let shell_path = shell_escape_path(&path_str, cfg!(windows));
+            entries.push(json!({
+                "name": name,
+                "path": path_str,
+                "shellPath": shell_path,
+                "kind": kind,
+                "size": size,
+                "modifiedAt": modified_at,
+                "hidden": hidden,
+            }));
+            if entries.len() >= 500 {
+                break;
+            }
+        }
+        entries.sort_by(|a, b| {
+            let a_dir = a["kind"] == "dir";
+            let b_dir = b["kind"] == "dir";
+            b_dir.cmp(&a_dir).then_with(|| {
+                a["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+                    .cmp(&b["name"].as_str().unwrap_or_default().to_ascii_lowercase())
+            })
+        });
+        Ok(json!({
+            "cwd": canonical.to_string_lossy(),
+            "parent": parent,
+            "entries": entries,
+        }))
+    }
+
+    pub fn fs_mkdir(&self, id: &str, directory: Option<&str>, name: &str) -> Result<Value> {
+        ensure!(self.is_enabled(), "终端插件尚未启用");
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal sessions mutex")
+            .get(id)
+            .cloned()
+            .context("终端会话不存在或已关闭")?;
+        let safe = sanitize_filename(name)?;
+        let base = resolve_session_path(&session.cwd, directory);
+        ensure!(base.is_dir(), "父目录不存在");
+        let target = base.join(&safe);
+        ensure!(!target.exists(), "同名文件或目录已存在");
+        fs::create_dir(&target).context("创建目录失败")?;
+        Ok(json!({
+            "ok": true,
+            "path": target.to_string_lossy(),
+            "name": safe,
+        }))
+    }
+
+    pub fn fs_rename(&self, id: &str, raw_path: &str, new_name: &str) -> Result<Value> {
+        ensure!(self.is_enabled(), "终端插件尚未启用");
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal sessions mutex")
+            .get(id)
+            .cloned()
+            .context("终端会话不存在或已关闭")?;
+        let safe = sanitize_filename(new_name)?;
+        let source = resolve_session_path(&session.cwd, Some(raw_path));
+        ensure!(source.exists(), "目标不存在");
+        let parent = source.parent().context("无法确定上级目录")?;
+        let destination = parent.join(&safe);
+        ensure!(!destination.exists(), "目标名称已存在");
+        fs::rename(&source, &destination).context("重命名失败")?;
+        Ok(json!({
+            "ok": true,
+            "path": destination.to_string_lossy(),
+            "name": safe,
+        }))
+    }
+
+    pub fn fs_delete(&self, id: &str, raw_path: &str) -> Result<Value> {
+        ensure!(self.is_enabled(), "终端插件尚未启用");
+        let session = self
+            .sessions
+            .lock()
+            .expect("terminal sessions mutex")
+            .get(id)
+            .cloned()
+            .context("终端会话不存在或已关闭")?;
+        let target = resolve_session_path(&session.cwd, Some(raw_path));
+        let meta = fs::symlink_metadata(&target).context("文件或目录不存在")?;
+        if meta.file_type().is_dir() && !meta.file_type().is_symlink() {
+            fs::remove_dir(&target).context("仅允许删除空目录，请先清理目录内文件或在终端执行")?;
+        } else {
+            fs::remove_file(&target).context("删除文件失败")?;
+        }
+        Ok(json!({ "ok": true }))
+    }
+
     pub fn list_forwards(&self) -> Result<Vec<ForwardSummary>> {
         ensure!(self.is_enabled(), "终端插件尚未启用");
         Ok(self.forwards.list())
@@ -775,6 +910,20 @@ fn resolve_shell(
     #[cfg(unix)]
     {
         Ok(("/bin/sh".into(), vec![], "sh".into()))
+    }
+}
+
+fn resolve_session_path(session_cwd: &Path, requested: Option<&str>) -> PathBuf {
+    match requested.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(raw) => {
+            let p = PathBuf::from(raw);
+            if p.is_absolute() {
+                p
+            } else {
+                session_cwd.join(p)
+            }
+        }
+        None => session_cwd.to_path_buf(),
     }
 }
 
@@ -995,6 +1144,68 @@ mod tests {
             "unexpected Windows ConPTY output: {}",
             String::from_utf8_lossy(&collected)
         );
+        let _ = service.close_session(&session.id);
+    }
+
+    #[tokio::test]
+    async fn fs_operations_list_mkdir_rename_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = TerminalService::new(
+            dir.path(),
+            TerminalSettings {
+                enabled: true,
+                ..Default::default()
+            },
+        );
+        let shell = if cfg!(windows) {
+            env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
+        } else {
+            "/bin/sh".into()
+        };
+        let session = service
+            .create_session(CreateSessionRequest {
+                shell: Some(shell),
+                cwd: Some(dir.path().to_string_lossy().into_owned()),
+                cols: Some(80),
+                rows: Some(24),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        service.fs_mkdir(&session.id, None, "docs").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"hello").unwrap();
+        std::fs::write(dir.path().join(".hidden"), b"secret").unwrap();
+
+        let listed = service.fs_list(&session.id, None, false).unwrap();
+        let entries = listed["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["name"], "docs");
+        assert_eq!(entries[0]["kind"], "dir");
+        assert_eq!(entries[1]["name"], "notes.txt");
+
+        let listed_hidden = service.fs_list(&session.id, None, true).unwrap();
+        assert_eq!(listed_hidden["entries"].as_array().unwrap().len(), 3);
+
+        let old_path = dir.path().join("notes.txt");
+        service
+            .fs_rename(&session.id, &old_path.to_string_lossy(), "renamed.txt")
+            .unwrap();
+        assert!(dir.path().join("renamed.txt").is_file());
+
+        service
+            .fs_delete(
+                &session.id,
+                &dir.path().join("renamed.txt").to_string_lossy(),
+            )
+            .unwrap();
+        assert!(!dir.path().join("renamed.txt").exists());
+
+        service
+            .fs_delete(&session.id, &dir.path().join("docs").to_string_lossy())
+            .unwrap();
+        assert!(!dir.path().join("docs").exists());
+
         let _ = service.close_session(&session.id);
     }
 }

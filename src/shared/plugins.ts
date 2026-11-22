@@ -116,5 +116,21 @@ export interface TerminalSessionSummary {
   waylandDisplay: string | null;
 }
 
+export interface TerminalFsEntry {
+  name: string;
+  path: string;
+  shellPath: string;
+  kind: 'dir' | 'file' | 'symlink';
+  size: number;
+  modifiedAt: number;
+  hidden: boolean;
+}
+
+export interface TerminalFsListing {
+  cwd: string;
+  parent: string | null;
+  entries: TerminalFsEntry[];
+}
+
 export const TERMINAL_BACKEND_ID = 'terminal-local';
 export const TERMINAL_PRODUCT = 'terminal';

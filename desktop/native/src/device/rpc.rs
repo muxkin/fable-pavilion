@@ -221,6 +221,29 @@ impl DeviceSession {
                     let closed = terminal.close_session(id)?;
                     json!({ "ok": true, "closed": closed })
                 }
+                "terminal.fs.list" => {
+                    let id = call["params"]["id"].as_str().context("终端会话 ID 无效")?;
+                    let path = call["body"]["path"].as_str();
+                    let show_hidden = call["body"]["showHidden"] == true;
+                    terminal.fs_list(id, path, show_hidden)?
+                }
+                "terminal.fs.mkdir" => {
+                    let id = call["params"]["id"].as_str().context("终端会话 ID 无效")?;
+                    let path = call["body"]["path"].as_str();
+                    let name = call["body"]["name"].as_str().context("目录名无效")?;
+                    terminal.fs_mkdir(id, path, name)?
+                }
+                "terminal.fs.rename" => {
+                    let id = call["params"]["id"].as_str().context("终端会话 ID 无效")?;
+                    let path = call["body"]["path"].as_str().context("路径无效")?;
+                    let name = call["body"]["name"].as_str().context("新名称无效")?;
+                    terminal.fs_rename(id, path, name)?
+                }
+                "terminal.fs.delete" => {
+                    let id = call["params"]["id"].as_str().context("终端会话 ID 无效")?;
+                    let path = call["body"]["path"].as_str().context("路径无效")?;
+                    terminal.fs_delete(id, path)?
+                }
                 "terminal.forwards.list" => json!({
                     "forwards": terminal.list_forwards()?,
                     "capabilities": terminal.capabilities(),

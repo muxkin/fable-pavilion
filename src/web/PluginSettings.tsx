@@ -37,6 +37,27 @@ const INSTANCE_TEMPLATES: Record<string, { plugin: string; config: string; secre
   },
 };
 
+const PillSwitch = tsxComponent(function PillSwitch(_props: {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return ({ checked, disabled, label, onChange }) => (
+    <label class="plugin-pill-switch">
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label={label}
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange((event.currentTarget as HTMLInputElement).checked)}
+      />
+      <span class="plugin-pill-track" aria-hidden="true" />
+    </label>
+  );
+});
+
 export default tsxComponent(function PluginSettings(_props: {
   navigate: (route: AppRoute, replace?: boolean) => void;
 }) {
@@ -178,8 +199,8 @@ export default tsxComponent(function PluginSettings(_props: {
         {hosts.value.length === 0 ? (
           <section class="plugin-empty-state">
             <p>尚未配对任何电脑。配对电脑并运行纯 Rust 桌面适配器后，即可在此管理内置与自定义插件。</p>
-            <div>
-              <button type="button" onClick={() => navigate({ page: 'add-computer' })}>
+            <div class="plugin-actions-row" style="justify-content: center">
+              <button type="button" class="plugin-btn primary" onClick={() => navigate({ page: 'add-computer' })}>
                 添加电脑
               </button>
             </div>
@@ -187,8 +208,19 @@ export default tsxComponent(function PluginSettings(_props: {
         ) : (
           <>
             <section class="plugin-host-bar" aria-label="目标电脑">
-              <label class="plugin-host-select">
-                <Icon name="monitor" size={18} />
+              <span class="plugin-host-icon" aria-hidden="true">
+                <Icon
+                  name={
+                    data?.platform === 'windows'
+                      ? 'windows'
+                      : data?.platform === 'macos'
+                        ? 'apple'
+                        : 'monitor'
+                  }
+                  size={18}
+                />
+              </span>
+              <div class="plugin-host-select">
                 <select
                   aria-label="选择要管理插件的电脑"
                   value={host?.hostId ?? ''}
@@ -202,32 +234,21 @@ export default tsxComponent(function PluginSettings(_props: {
                     </option>
                   ))}
                 </select>
-              </label>
-              <div class="plugin-host-meta">
-                {data && (
-                  <span>
-                    <Icon
-                      name={
-                        data.platform === 'windows'
-                          ? 'windows'
-                          : data.platform === 'macos'
-                            ? 'apple'
-                            : 'linux'
-                      }
-                      size={15}
-                    />{' '}
-                    {platformLabel}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  class="secondary"
-                  disabled={loading.value || busy.value || !host}
-                  onClick={() => host && void loadSnapshot(host)}
-                >
-                  <Icon name="refresh" size={15} /> 刷新
-                </button>
               </div>
+              <span class="plugin-host-status">
+                <i class={`plugin-host-dot${data ? '' : ' offline'}`} aria-hidden="true" />
+                {data ? `${platformLabel} · 在线` : loading.value ? '连接中…' : '离线'}
+              </span>
+              <button
+                type="button"
+                class="plugin-icon-btn"
+                title="刷新插件状态"
+                aria-label="刷新插件状态"
+                disabled={loading.value || busy.value || !host}
+                onClick={() => host && void loadSnapshot(host)}
+              >
+                <Icon name="refresh" size={16} />
+              </button>
             </section>
 
             {notice.value && (
@@ -241,16 +262,18 @@ export default tsxComponent(function PluginSettings(_props: {
             {data && (
               <>
                 <section class="settings-section" aria-labelledby="plugins-builtin-heading">
-                  <h2 class="settings-section-title" id="plugins-builtin-heading">
-                    内置插件
-                  </h2>
+                  <div class="plugin-section-head">
+                    <h2 class="settings-section-title" id="plugins-builtin-heading">
+                      内置插件
+                    </h2>
+                  </div>
                   <div class="plugin-card-list">
                     {terminal && (
                       <article class="plugin-card">
                         <div class="plugin-card-header">
                           <div class="plugin-card-title">
-                            <span class="surface-icon">
-                              <Icon name="terminal" size={21} />
+                            <span class="plugin-icon-badge" aria-hidden="true">
+                              <Icon name="terminal" size={22} />
                             </span>
                             <div class="plugin-card-copy">
                               <strong>
@@ -259,49 +282,40 @@ export default tsxComponent(function PluginSettings(_props: {
                                   {terminal.enabled ? '已启用' : '默认禁用'}
                                 </span>
                               </strong>
-                              <p>{terminal.description}</p>
+                              <p>
+                                在目标主机开启交互式远程终端，支持分屏、文件管理、lrzsz / trzsz、内联图片与显示/端口转发。
+                              </p>
                             </div>
                           </div>
-                          <label class="plugin-switch">
-                            <input
-                              type="checkbox"
-                              role="switch"
-                              aria-label="启用终端插件"
-                              checked={terminal.enabled}
-                              disabled={busy.value}
-                              onChange={(event) => {
-                                const enabled = (event.currentTarget as HTMLInputElement).checked;
-                                void runAction(async (target) => {
-                                  const next = await deviceSession.requestOnHost<PluginManagementSnapshot>(
-                                    target,
-                                    '/api/plugins/manage/builtin',
-                                    'POST',
-                                    { id: 'terminal', enabled },
-                                  );
-                                  snapshot.value = next;
-                                  syncTerminalDraft(next);
-                                  notice.value = {
-                                    text: enabled
-                                      ? '终端插件已启用，现可在工作台或下方按钮直接打开终端。'
-                                      : '终端插件已禁用，当前电脑上的活动终端会话已关闭。',
-                                  };
-                                });
-                              }}
-                            />
-                            <span>{terminal.enabled ? '开启' : '关闭'}</span>
-                          </label>
+                          <PillSwitch
+                            label="启用终端插件"
+                            checked={terminal.enabled}
+                            disabled={busy.value}
+                            onChange={(enabled) => {
+                              void runAction(async (target) => {
+                                const next = await deviceSession.requestOnHost<PluginManagementSnapshot>(
+                                  target,
+                                  '/api/plugins/manage/builtin',
+                                  'POST',
+                                  { id: 'terminal', enabled },
+                                );
+                                snapshot.value = next;
+                                syncTerminalDraft(next);
+                                notice.value = {
+                                  text: enabled
+                                    ? '终端插件已启用，现可直接打开终端或在工作台进入。'
+                                    : '终端插件已禁用，该电脑上的活动终端会话已关闭。',
+                                };
+                              });
+                            }}
+                          />
                         </div>
 
-                        <div class="plugin-feature-chips">
-                          {terminal.features.map((feat) => (
-                            <span key={feat}>{feat}</span>
-                          ))}
-                        </div>
-
-                        <div class="plugin-actions-row">
+                        <div class={terminal.enabled && host ? 'plugin-split-actions' : 'plugin-actions-row'}>
                           {terminal.enabled && host && (
                             <button
                               type="button"
+                              class="plugin-btn primary"
                               onClick={() =>
                                 navigate({
                                   page: 'workbench',
@@ -315,13 +329,13 @@ export default tsxComponent(function PluginSettings(_props: {
                           )}
                           <button
                             type="button"
-                            class="secondary"
+                            class="plugin-btn secondary"
                             onClick={() => {
                               terminalConfigOpen.value = !terminalConfigOpen.value;
                             }}
                           >
                             <Icon name="sliders" size={16} />{' '}
-                            {terminalConfigOpen.value ? '收起配置' : '配置终端与转发'}
+                            {terminalConfigOpen.value ? '收起高级配置' : '高级配置'}
                           </button>
                         </div>
 
@@ -363,109 +377,140 @@ export default tsxComponent(function PluginSettings(_props: {
                               </select>
                             </label>
 
-                            <label class="plugin-field">
-                              <span>默认工作目录（留空使用用户主目录）</span>
-                              <input
-                                type="text"
-                                value={terminalDraft.value.defaultCwd}
-                                placeholder={data.platform === 'windows' ? 'C:\\Users\\...' : '/home/...'}
-                                onInput={(event) => {
-                                  terminalDraft.value = {
-                                    ...terminalDraft.value,
-                                    defaultCwd: (event.currentTarget as HTMLInputElement).value,
-                                  };
-                                }}
-                              />
-                            </label>
-
-                            <label class="plugin-field">
-                              <span>最大并发会话数（1-16）</span>
-                              <input
-                                type="number"
-                                min={1}
-                                max={16}
-                                value={terminalDraft.value.maxSessions}
-                                onInput={(event) => {
-                                  terminalDraft.value = {
-                                    ...terminalDraft.value,
-                                    maxSessions: Math.max(
-                                      1,
-                                      Math.min(16, Number((event.currentTarget as HTMLInputElement).value) || 8),
-                                    ),
-                                  };
-                                }}
-                              />
-                            </label>
-
-                            <div class="plugin-checks">
-                              <label class="plugin-check-item">
+                            <div class="plugin-field-row">
+                              <label class="plugin-field">
+                                <span>默认工作目录（留空使用用户主目录）</span>
                                 <input
-                                  type="checkbox"
-                                  checked={terminalDraft.value.allowOsc52Clipboard}
-                                  onChange={(event) => {
+                                  type="text"
+                                  value={terminalDraft.value.defaultCwd}
+                                  placeholder={data.platform === 'windows' ? 'C:\\Users\\...' : '~/'}
+                                  onInput={(event) => {
                                     terminalDraft.value = {
                                       ...terminalDraft.value,
-                                      allowOsc52Clipboard: (event.currentTarget as HTMLInputElement).checked,
+                                      defaultCwd: (event.currentTarget as HTMLInputElement).value,
                                     };
                                   }}
                                 />
-                                <span>允许 OSC 52 剪贴板写入（tmux / vim / neovim 复制同步）</span>
                               </label>
-                              <label class="plugin-check-item">
-                                <input
-                                  type="checkbox"
-                                  checked={terminalDraft.value.allowX11Forwarding}
-                                  onChange={(event) => {
-                                    terminalDraft.value = {
-                                      ...terminalDraft.value,
-                                      allowX11Forwarding: (event.currentTarget as HTMLInputElement).checked,
-                                    };
-                                  }}
-                                />
-                                <span>
-                                  允许 X11 转发
-                                  {terminal.hostCapabilities?.x11HostDisplay
-                                    ? `（检测到本机 ${terminal.hostCapabilities.x11HostDisplay}）`
-                                    : ''}
-                                </span>
-                              </label>
-                              {data.platform !== 'windows' && (
-                                <label class="plugin-check-item">
-                                  <input
-                                    type="checkbox"
-                                    checked={terminalDraft.value.allowWaylandForwarding}
-                                    onChange={(event) => {
+
+                              <div class="plugin-field">
+                                <span>最大并发会话数</span>
+                                <div class="plugin-stepper">
+                                  <button
+                                    type="button"
+                                    aria-label="减少并发会话数"
+                                    disabled={terminalDraft.value.maxSessions <= 1}
+                                    onClick={() => {
                                       terminalDraft.value = {
                                         ...terminalDraft.value,
-                                        allowWaylandForwarding: (event.currentTarget as HTMLInputElement).checked,
+                                        maxSessions: Math.max(1, terminalDraft.value.maxSessions - 1),
+                                      };
+                                    }}
+                                  >
+                                    −
+                                  </button>
+                                  <span>{terminalDraft.value.maxSessions}</span>
+                                  <button
+                                    type="button"
+                                    aria-label="增加并发会话数"
+                                    disabled={terminalDraft.value.maxSessions >= 16}
+                                    onClick={() => {
+                                      terminalDraft.value = {
+                                        ...terminalDraft.value,
+                                        maxSessions: Math.min(16, terminalDraft.value.maxSessions + 1),
+                                      };
+                                    }}
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div class="plugin-toggle-list">
+                              <div class="plugin-toggle-row">
+                                <div class="plugin-toggle-copy">
+                                  <strong>OSC 52 剪贴板写入</strong>
+                                  <small>允许 tmux / vim / neovim 等远程工具将选中内容同步到本地剪贴板</small>
+                                </div>
+                                <PillSwitch
+                                  label="允许 OSC 52 剪贴板写入"
+                                  checked={terminalDraft.value.allowOsc52Clipboard}
+                                  onChange={(checked) => {
+                                    terminalDraft.value = {
+                                      ...terminalDraft.value,
+                                      allowOsc52Clipboard: checked,
+                                    };
+                                  }}
+                                />
+                              </div>
+
+                              <div class="plugin-toggle-row">
+                                <div class="plugin-toggle-copy">
+                                  <strong>X11 转发</strong>
+                                  <small>
+                                    按会话注入 DISPLAY 与 XAUTHORITY
+                                    {terminal.hostCapabilities?.x11HostDisplay
+                                      ? `（本机检测到 ${terminal.hostCapabilities.x11HostDisplay}）`
+                                      : ''}
+                                  </small>
+                                </div>
+                                <PillSwitch
+                                  label="允许 X11 转发"
+                                  checked={terminalDraft.value.allowX11Forwarding}
+                                  onChange={(checked) => {
+                                    terminalDraft.value = {
+                                      ...terminalDraft.value,
+                                      allowX11Forwarding: checked,
+                                    };
+                                  }}
+                                />
+                              </div>
+
+                              {data.platform !== 'windows' && (
+                                <div class="plugin-toggle-row">
+                                  <div class="plugin-toggle-copy">
+                                    <strong>Wayland 转发</strong>
+                                    <small>
+                                      按会话代理 WAYLAND_DISPLAY 套接字
+                                      {terminal.hostCapabilities?.waylandHostDisplay
+                                        ? `（本机检测到 ${terminal.hostCapabilities.waylandHostDisplay}）`
+                                        : ''}
+                                    </small>
+                                  </div>
+                                  <PillSwitch
+                                    label="允许 Wayland 转发"
+                                    checked={terminalDraft.value.allowWaylandForwarding}
+                                    onChange={(checked) => {
+                                      terminalDraft.value = {
+                                        ...terminalDraft.value,
+                                        allowWaylandForwarding: checked,
                                       };
                                     }}
                                   />
-                                  <span>
-                                    允许 Wayland 转发
-                                    {terminal.hostCapabilities?.waylandHostDisplay
-                                      ? `（检测到本机 ${terminal.hostCapabilities.waylandHostDisplay}）`
-                                      : ''}
-                                  </span>
-                                </label>
+                                </div>
                               )}
-                              <label class="plugin-check-item">
-                                <input
-                                  type="checkbox"
+
+                              <div class="plugin-toggle-row">
+                                <div class="plugin-toggle-copy">
+                                  <strong>本机回环端口转发</strong>
+                                  <small>安全映射并探测目标主机 127.0.0.1 / localhost 服务</small>
+                                </div>
+                                <PillSwitch
+                                  label="允许本机回环端口转发"
                                   checked={terminalDraft.value.allowPortForwarding}
-                                  onChange={(event) => {
+                                  onChange={(checked) => {
                                     terminalDraft.value = {
                                       ...terminalDraft.value,
-                                      allowPortForwarding: (event.currentTarget as HTMLInputElement).checked,
+                                      allowPortForwarding: checked,
                                     };
                                   }}
                                 />
-                                <span>允许本机回环端口转发与 HTTP 预览（仅限 127.0.0.1 / localhost）</span>
-                              </label>
+                              </div>
                             </div>
 
-                            <div class="plugin-actions-row">
-                              <button type="submit" disabled={busy.value}>
+                            <div class="plugin-actions-row end">
+                              <button type="submit" class="plugin-btn primary" disabled={busy.value}>
                                 保存配置
                               </button>
                             </div>
@@ -477,19 +522,24 @@ export default tsxComponent(function PluginSettings(_props: {
                 </section>
 
                 <section class="settings-section" aria-labelledby="plugins-instances-heading">
-                  <h2 class="settings-section-title" id="plugins-instances-heading">
-                    插件实例管理
-                  </h2>
-                  <div class="plugin-actions-row" style="margin-bottom: 10px">
-                    <button type="button" onClick={() => openAddForm('dsh')} disabled={busy.value}>
-                      <Icon name="plus" size={16} /> 添加插件实例
+                  <div class="plugin-section-head">
+                    <h2 class="settings-section-title" id="plugins-instances-heading">
+                      插件实例
+                    </h2>
+                    <button
+                      type="button"
+                      class="plugin-btn secondary compact"
+                      onClick={() => openAddForm('dsh')}
+                      disabled={busy.value}
+                    >
+                      <Icon name="plus" size={14} /> 添加插件实例
                     </button>
                   </div>
 
                   {addFormOpen.value && (
                     <form
                       class="plugin-card"
-                      style="margin-bottom: 12px"
+                      style="margin-bottom: 14px"
                       onSubmit={(event) => {
                         event.preventDefault();
                         void runAction(async (target) => {
@@ -530,68 +580,76 @@ export default tsxComponent(function PluginSettings(_props: {
                       <strong>{editingInstanceId.value ? `编辑实例：${editingInstanceId.value}` : '添加插件实例'}</strong>
                       {!editingInstanceId.value && (
                         <div class="plugin-actions-row">
-                          <button type="button" class="secondary" onClick={() => openAddForm('dsh')}>
+                          <button type="button" class="plugin-btn secondary compact" onClick={() => openAddForm('dsh')}>
                             DSH 模板
                           </button>
-                          <button type="button" class="secondary" onClick={() => openAddForm('codex')}>
+                          <button type="button" class="plugin-btn secondary compact" onClick={() => openAddForm('codex')}>
                             Codex 模板
                           </button>
-                          <button type="button" class="secondary" onClick={() => openAddForm('antigravity')}>
+                          <button
+                            type="button"
+                            class="plugin-btn secondary compact"
+                            onClick={() => openAddForm('antigravity')}
+                          >
                             Antigravity 模板
                           </button>
-                          <button type="button" class="secondary" onClick={() => openAddForm('custom')}>
+                          <button type="button" class="plugin-btn secondary compact" onClick={() => openAddForm('custom')}>
                             自定义插件
                           </button>
                         </div>
                       )}
-                      <label class="plugin-field">
-                        <span>实例 ID（字母、数字、下划线或连字符）</span>
-                        <input
-                          type="text"
-                          required
-                          disabled={editingInstanceId.value !== null}
-                          value={formId.value}
-                          placeholder="my-dsh"
-                          onInput={(e) => {
-                            formId.value = (e.currentTarget as HTMLInputElement).value;
-                          }}
-                        />
-                      </label>
-                      <label class="plugin-field">
-                        <span>显示名称</span>
-                        <input
-                          type="text"
-                          required
-                          value={formName.value}
-                          placeholder="我的 Agent"
-                          onInput={(e) => {
-                            formName.value = (e.currentTarget as HTMLInputElement).value;
-                          }}
-                        />
-                      </label>
-                      <label class="plugin-field">
-                        <span>插件包名</span>
-                        <input
-                          type="text"
-                          required
-                          value={formPlugin.value}
-                          placeholder="@agent-remote/adapter-dsh"
-                          onInput={(e) => {
-                            formPlugin.value = (e.currentTarget as HTMLInputElement).value;
-                          }}
-                        />
-                      </label>
-                      <label class="plugin-field">
-                        <span>固定版本（可选，留空自动使用最新兼容版本）</span>
-                        <input
-                          type="text"
-                          value={formVersion.value}
-                          placeholder="留空自动选择"
-                          onInput={(e) => {
-                            formVersion.value = (e.currentTarget as HTMLInputElement).value;
-                          }}
-                        />
-                      </label>
+                      <div class="plugin-field-row">
+                        <label class="plugin-field">
+                          <span>实例 ID</span>
+                          <input
+                            type="text"
+                            required
+                            disabled={editingInstanceId.value !== null}
+                            value={formId.value}
+                            placeholder="my-dsh"
+                            onInput={(e) => {
+                              formId.value = (e.currentTarget as HTMLInputElement).value;
+                            }}
+                          />
+                        </label>
+                        <label class="plugin-field">
+                          <span>显示名称</span>
+                          <input
+                            type="text"
+                            required
+                            value={formName.value}
+                            placeholder="我的 Agent"
+                            onInput={(e) => {
+                              formName.value = (e.currentTarget as HTMLInputElement).value;
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <div class="plugin-field-row">
+                        <label class="plugin-field">
+                          <span>插件包名</span>
+                          <input
+                            type="text"
+                            required
+                            value={formPlugin.value}
+                            placeholder="@agent-remote/adapter-dsh"
+                            onInput={(e) => {
+                              formPlugin.value = (e.currentTarget as HTMLInputElement).value;
+                            }}
+                          />
+                        </label>
+                        <label class="plugin-field">
+                          <span>固定版本（可选）</span>
+                          <input
+                            type="text"
+                            value={formVersion.value}
+                            placeholder="留空自动选择"
+                            onInput={(e) => {
+                              formVersion.value = (e.currentTarget as HTMLInputElement).value;
+                            }}
+                          />
+                        </label>
+                      </div>
                       <label class="plugin-field">
                         <span>实例配置 JSON（config）</span>
                         <textarea
@@ -603,22 +661,19 @@ export default tsxComponent(function PluginSettings(_props: {
                         />
                       </label>
                       <label class="plugin-field">
-                        <span>凭据环境变量映射 JSON（仅填写环境变量名，不存明文密钥）</span>
+                        <span>凭据环境变量映射 JSON（仅填环境变量名，不存明文密钥）</span>
                         <textarea
-                          rows={3}
+                          rows={2}
                           value={formSecrets.value}
                           onInput={(e) => {
                             formSecrets.value = (e.currentTarget as HTMLTextAreaElement).value;
                           }}
                         />
                       </label>
-                      <div class="plugin-actions-row">
-                        <button type="submit" disabled={busy.value}>
-                          保存实例
-                        </button>
+                      <div class="plugin-actions-row end">
                         <button
                           type="button"
-                          class="secondary"
+                          class="plugin-btn secondary"
                           onClick={() => {
                             addFormOpen.value = false;
                             editingInstanceId.value = null;
@@ -626,17 +681,20 @@ export default tsxComponent(function PluginSettings(_props: {
                         >
                           取消
                         </button>
+                        <button type="submit" class="plugin-btn primary" disabled={busy.value}>
+                          保存实例
+                        </button>
                       </div>
                     </form>
                   )}
 
-                  <div class="plugin-card-list">
+                  <div class="plugin-instances-grid">
                     {data.instances.map((item) => (
-                      <article class="plugin-card" key={item.id}>
+                      <article class="plugin-card plugin-instance-card" key={item.id}>
                         <div class="plugin-card-header">
                           <div class="plugin-card-title">
-                            <span class="surface-icon">
-                              <Icon name="puzzle" size={20} />
+                            <span class="plugin-icon-badge small" aria-hidden="true">
+                              <Icon name="puzzle" size={17} />
                             </span>
                             <div class="plugin-card-copy">
                               <strong>
@@ -646,55 +704,48 @@ export default tsxComponent(function PluginSettings(_props: {
                                 >
                                   {!item.enabled ? '已禁用' : item.connected ? '在线' : '已启用'}
                                 </span>
-                                {item.builtin && <span class="plugin-badge muted">内置发现</span>}
                               </strong>
-                              <p>
-                                ID: {item.id} · 插件: {item.plugin}
-                                {item.currentPackage ? ` · 绑定: ${item.currentPackage}` : ''}
-                              </p>
+                              <p>{item.id}</p>
                             </div>
                           </div>
                           {item.editable && (
-                            <label class="plugin-switch">
-                              <input
-                                type="checkbox"
-                                role="switch"
-                                aria-label={`启停 ${item.name}`}
-                                checked={item.enabled}
-                                disabled={busy.value}
-                                onChange={(event) => {
-                                  const enabled = (event.currentTarget as HTMLInputElement).checked;
-                                  void runAction(async (target) => {
-                                    const next = await deviceSession.requestOnHost<PluginManagementSnapshot>(
-                                      target,
-                                      `/api/plugins/manage/instances/${encodeURIComponent(item.id)}/toggle`,
-                                      'POST',
-                                      { id: item.id, enabled },
-                                    );
-                                    snapshot.value = next;
-                                    notice.value = { text: `实例 ${item.name} 已${enabled ? '启用' : '禁用'}` };
-                                  });
-                                }}
-                              />
-                              <span>{item.enabled ? '启用' : '禁用'}</span>
-                            </label>
+                            <PillSwitch
+                              label={`启停 ${item.name}`}
+                              checked={item.enabled}
+                              disabled={busy.value}
+                              onChange={(enabled) => {
+                                void runAction(async (target) => {
+                                  const next = await deviceSession.requestOnHost<PluginManagementSnapshot>(
+                                    target,
+                                    `/api/plugins/manage/instances/${encodeURIComponent(item.id)}/toggle`,
+                                    'POST',
+                                    { id: item.id, enabled },
+                                  );
+                                  snapshot.value = next;
+                                  notice.value = { text: `实例 ${item.name} 已${enabled ? '启用' : '禁用'}` };
+                                });
+                              }}
+                            />
                           )}
                         </div>
+                        <p style="margin: 0; font-size: 12px; color: var(--muted); word-break: break-all">
+                          {item.currentPackage || item.plugin}
+                        </p>
                         {(item.editable || item.previousPackage) && (
                           <div class="plugin-actions-row">
                             {item.editable && (
                               <>
                                 <button
                                   type="button"
-                                  class="secondary"
+                                  class="plugin-btn secondary compact"
                                   disabled={busy.value}
                                   onClick={() => openEditForm(item)}
                                 >
-                                  编辑配置
+                                  编辑
                                 </button>
                                 <button
                                   type="button"
-                                  class="secondary"
+                                  class="plugin-btn danger compact"
                                   disabled={busy.value}
                                   onClick={() => {
                                     if (!window.confirm(`确定删除插件实例「${item.name}」？`)) return;
@@ -710,14 +761,14 @@ export default tsxComponent(function PluginSettings(_props: {
                                     });
                                   }}
                                 >
-                                  <Icon name="trash" size={15} /> 删除
+                                  删除
                                 </button>
                               </>
                             )}
                             {item.previousPackage && (
                               <button
                                 type="button"
-                                class="secondary"
+                                class="plugin-btn secondary compact"
                                 disabled={busy.value}
                                 onClick={() =>
                                   void runAction(async (target) => {
@@ -728,11 +779,11 @@ export default tsxComponent(function PluginSettings(_props: {
                                       { instance: item.id },
                                     );
                                     snapshot.value = next;
-                                    notice.value = { text: `已提交 ${item.name} 版本回滚请求` };
+                                    notice.value = { text: `已提交 ${item.name} 回滚请求` };
                                   })
                                 }
                               >
-                                回滚至 {item.previousPackage}
+                                回滚
                               </button>
                             )}
                           </div>
@@ -743,9 +794,11 @@ export default tsxComponent(function PluginSettings(_props: {
                 </section>
 
                 <section class="settings-section" aria-labelledby="plugins-packages-heading">
-                  <h2 class="settings-section-title" id="plugins-packages-heading">
-                    已安装原生插件包
-                  </h2>
+                  <div class="plugin-section-head">
+                    <h2 class="settings-section-title" id="plugins-packages-heading">
+                      已安装原生包
+                    </h2>
+                  </div>
                   <div class="plugin-card">
                     <div class="plugin-package-list">
                       {data.packages.length === 0 ? (
@@ -764,7 +817,7 @@ export default tsxComponent(function PluginSettings(_props: {
                       )}
                     </div>
                     <p style="margin: 0; font-size: 12px; color: var(--muted)">
-                      提示：为保证安全，新的本地原生插件二进制需在该电脑的桌面适配器本机设置页「插件」标签中安装，或执行{' '}
+                      安全提示：新的本地原生插件二进制需在该电脑的桌面适配器本机设置页「插件」标签安装，或运行{' '}
                       <code>agent-space-native --adapter install &lt;插件目录&gt;</code>。
                     </p>
                   </div>

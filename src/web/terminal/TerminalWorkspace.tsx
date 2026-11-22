@@ -1,10 +1,4 @@
 import { onScopeDispose, shallowRef } from 'vue';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import { SearchAddon } from '@xterm/addon-search';
-import { WebLinksAddon } from '@xterm/addon-web-links';
-import { Unicode11Addon } from '@xterm/addon-unicode11';
-import { ImageAddon } from '@xterm/addon-image';
 import { tsxComponent } from '../tsx-component';
 import { watchRender } from '../render-effects';
 import { deviceSession } from '../device-session';
@@ -12,29 +6,35 @@ import type { AppRoute } from '../shell/routes';
 import { Icon } from '../Icon';
 import {
   TERMINAL_BACKEND_ID,
+  type PluginManagementSnapshot,
   type TerminalHostCapabilities,
   type TerminalPluginSettings,
   type TerminalSessionSummary,
   type TerminalShellOption,
 } from '../../shared/plugins';
-import { ZmodemFilter, type TerminalTransferProgress } from './zmodem';
-import { TrzszFilter } from './trzsz';
-import { TerminalSequenceFilter, type TerminalCapturedImage } from './kitty-graphics';
+import type { TerminalTransferProgress } from './zmodem';
+import type { TerminalCapturedImage } from './kitty-graphics';
 import { formatTransferBytes } from './shell-escape';
-import { TerminalForwardDrawer } from './TerminalForwardDrawer';
+import {
+  loadTerminalPrefs,
+  saveTerminalPrefs,
+  TERMINAL_THEMES,
+  type TerminalPreferences,
+} from './terminal-prefs';
+import { createTerminalPane, type TerminalPaneRuntime } from './terminal-pane';
+import { TerminalPrefsPopover } from './TerminalPrefsPopover';
+import { TerminalSidePanel, type SidePanelTab } from './TerminalSidePanel';
 import './terminal.css';
 
-interface ActiveTerminalTab {
-  session: TerminalSessionSummary;
-  title: string;
-  cwd: string;
-  term: Terminal;
-  fit: FitAddon;
-  search: SearchAddon;
-  zmodem: ZmodemFilter;
-  trzsz: TrzszFilter;
-  sequences: TerminalSequenceFilter;
-  container: HTMLDivElement;
+type SplitLayout = 'single' | 'horizontal' | 'vertical';
+
+interface TerminalTab {
+  id: string;
+  customTitle: string;
+  layout: SplitLayout;
+  splitRatio: number;
+  panes: TerminalPaneRuntime[];
+  activePaneId: string;
 }
 
 const encoder = new TextEncoder();
@@ -44,53 +44,116 @@ export default tsxComponent(function TerminalWorkspace(_props: {
   route: AppRoute;
   navigate: (route: AppRoute, replace?: boolean) => void;
 }) {
-  const hostMount = shallowRef<HTMLDivElement | null>(null);
-  const tabs = shallowRef<ActiveTerminalTab[]>([]);
-  const activeTabId = shallowRef<string>('');
+  const paneAreaRef = shallowRef<HTMLDivElement | null>(null);
+  const filePickerRef = shallowRef<HTMLInputElement | null>(null);
+
+  const tabs = shallowRef<TerminalTab[]>([]);
+  const activeTabId = shallowRef('');
+  const renamingTabId = shallowRef('');
+  const renameDraft = shallowRef('');
+
   const shells = shallowRef<TerminalShellOption[]>([]);
-  const selectedShell = shallowRef<string>('');
+  const selectedShell = shallowRef('');
   const settings = shallowRef<TerminalPluginSettings | null>(null);
   const capabilities = shallowRef<TerminalHostCapabilities | null>(null);
-  const disabledMessage = shallowRef<string>('');
+  const disabledMessage = shallowRef('');
   const loading = shallowRef(true);
-  const fontSize = shallowRef(14);
+
+  const prefs = shallowRef<TerminalPreferences>(loadTerminalPrefs());
+  const newMenuOpen = shallowRef(false);
+  const prefsOpen = shallowRef(false);
   const searchOpen = shallowRef(false);
   const searchQuery = shallowRef('');
-  const forwardDrawerOpen = shallowRef(false);
+  const sidePanelOpen = shallowRef(false);
+  const sidePanelTab = shallowRef<SidePanelTab>('files');
+  const zenMode = shallowRef(false);
   const keybarOpen = shallowRef(typeof window !== 'undefined' && window.innerWidth < 820);
   const ctrlArmed = shallowRef(false);
   const altArmed = shallowRef(false);
   const draggingFile = shallowRef(false);
+  const splittingDrag = shallowRef(false);
   const transfer = shallowRef<TerminalTransferProgress | null>(null);
   const images = shallowRef<TerminalCapturedImage[]>([]);
   const lightboxImage = shallowRef<TerminalCapturedImage | null>(null);
-  const toast = shallowRef<string>('');
+  const toast = shallowRef('');
   const newTabX11 = shallowRef(false);
   const newTabWayland = shallowRef(false);
+  const contextMenu = shallowRef<{ x: number; y: number; paneId: string } | null>(null);
 
-  const filePickerRef = shallowRef<HTMLInputElement | null>(null);
+  let uploadTargetDir: string | undefined;
   let pendingTransferFileResolve: ((files: File[]) => void) | null = null;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
+  let tabSeq = 1;
 
   const watchInit = watchRender();
-  const watchActiveMount = watchRender();
-  const watchFontSize = watchRender();
+  const watchResizeArea = watchRender();
+  const watchPrefs = watchRender();
 
   function notify(message: string) {
     toast.value = message;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
       if (toast.value === message) toast.value = '';
-    }, 3200);
+    }, 3000);
   }
 
-  function currentTab(): ActiveTerminalTab | undefined {
-    return tabs.value.find((tab) => tab.session.id === activeTabId.value) ?? tabs.value[0];
+  function currentTab(): TerminalTab | undefined {
+    return tabs.value.find((tab) => tab.id === activeTabId.value) ?? tabs.value[0];
+  }
+
+  function currentPane(): TerminalPaneRuntime | undefined {
+    const tab = currentTab();
+    if (!tab) return undefined;
+    return tab.panes.find((p) => p.session.id === tab.activePaneId) ?? tab.panes[0];
+  }
+
+  function findPaneBySession(sessionId: string): { tab: TerminalTab; pane: TerminalPaneRuntime } | undefined {
+    for (const tab of tabs.value) {
+      const pane = tab.panes.find((p) => p.session.id === sessionId);
+      if (pane) return { tab, pane };
+    }
+    return undefined;
+  }
+
+  function touchTabs() {
+    tabs.value = [...tabs.value];
   }
 
   function sendRawInput(sessionId: string, bytes: Uint8Array) {
     if (!bytes.length) return;
     void deviceSession.terminalRequest('terminal-input', { sessionId }, bytes).catch(() => {});
+  }
+
+  function fitActiveTabPanes() {
+    const tab = currentTab();
+    if (!tab) return;
+    for (const pane of tab.panes) {
+      try {
+        if (pane.term.element) pane.fit.fit();
+      } catch {
+        /* Ignore fit while hidden. */
+      }
+    }
+  }
+
+  function bindPaneHost(pane: TerminalPaneRuntime, el: HTMLDivElement | null) {
+    if (!el) return;
+    if (pane.container.parentElement !== el) {
+      el.replaceChildren(pane.container);
+    }
+    if (!pane.term.element) {
+      pane.term.open(pane.container);
+    }
+    requestAnimationFrame(() => {
+      try {
+        pane.fit.fit();
+      } catch {
+        /* Ignore initial layout race. */
+      }
+      if (currentPane()?.session.id === pane.session.id) {
+        pane.term.focus();
+      }
+    });
   }
 
   function triggerDownload(name: string, data: Uint8Array) {
@@ -101,7 +164,7 @@ export default tsxComponent(function TerminalWorkspace(_props: {
     a.download = name || 'download.bin';
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    notify(`已保存文件 ${name}（${formatTransferBytes(data.byteLength)}）`);
+    notify(`已保存 ${name}（${formatTransferBytes(data.byteLength)}）`);
     if (/\.(png|jpe?g|gif|webp|svg)$/i.test(name)) {
       const reader = new FileReader();
       reader.onload = () => {
@@ -131,199 +194,198 @@ export default tsxComponent(function TerminalWorkspace(_props: {
         return;
       }
       pendingTransferFileResolve = resolve;
+      uploadTargetDir = undefined;
       input.value = '';
       input.click();
     });
   }
 
-  function buildTab(session: TerminalSessionSummary): ActiveTerminalTab {
-    const container = document.createElement('div');
-    container.style.width = '100%';
-    container.style.height = '100%';
-
-    const term = new Terminal({
-      cursorBlink: true,
-      fontSize: fontSize.value,
-      fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-      allowProposedApi: true,
-      scrollback: 10000,
-      theme: {
-        background: '#0d1317',
-        foreground: '#e6edf3',
-        cursor: '#87d1b5',
-        selectionBackground: 'rgba(135, 209, 181, 0.32)',
+  function buildPane(session: TerminalSessionSummary): TerminalPaneRuntime {
+    return createTerminalPane({
+      session,
+      getPrefs: () => prefs.value,
+      allowOsc52: () => settings.value?.allowOsc52Clipboard !== false,
+      transformInput: (text) => {
+        let payload = text;
+        if (ctrlArmed.value && text.length === 1) {
+          const code = text.toUpperCase().charCodeAt(0);
+          if (code >= 64 && code <= 95) payload = String.fromCharCode(code - 64);
+          ctrlArmed.value = false;
+        } else if (altArmed.value) {
+          payload = `\x1b${text}`;
+          altArmed.value = false;
+        }
+        return payload;
       },
-    });
-
-    const fit = new FitAddon();
-    const search = new SearchAddon();
-    const webLinks = new WebLinksAddon();
-    const unicode11 = new Unicode11Addon();
-    const imageAddon = new ImageAddon({
-      sixelSupport: true,
-      sixelScrolling: true,
-      iipSupport: true,
-      enableSizeReports: true,
-    });
-    term.loadAddon(fit);
-    term.loadAddon(search);
-    term.loadAddon(webLinks);
-    term.loadAddon(unicode11);
-    term.loadAddon(imageAddon);
-    term.unicode.activeVersion = '11';
-
-    const sendBytes = (bytes: Uint8Array) => sendRawInput(session.id, bytes);
-    const zmodem = new ZmodemFilter({
-      sendBytes,
+      sendBytes: sendRawInput,
+      sendResize: (sessionId, cols, rows) => {
+        void deviceSession.terminalRequest('terminal-resize', { sessionId, cols, rows }).catch(() => {});
+      },
       onProgress: (p) => {
         transfer.value = p;
       },
       onDownloadFile: triggerDownload,
       onRequestUploadFiles: requestUploadFiles,
-    });
-    const trzsz = new TrzszFilter({
-      sendBytes,
-      onProgress: (p) => {
-        transfer.value = p;
-      },
-      onDownloadFile: triggerDownload,
-      onRequestUploadFiles: requestUploadFiles,
-    });
-    const sequences = new TerminalSequenceFilter({
-      sendReply: sendBytes,
       onImage: (img) => {
         images.value = [...images.value.slice(-19), img];
       },
-      onClipboardWrite: (text) => {
-        if (settings.value?.allowOsc52Clipboard === false) return;
-        void navigator.clipboard?.writeText(text).then(
-          () => notify('已通过 OSC 52 同步到剪贴板'),
-          () => {},
-        );
-      },
-      onCwdChange: (cwd) => {
-        tab.cwd = cwd;
-        tabs.value = [...tabs.value];
-      },
+      onNotify: notify,
+      onMetaChange: touchTabs,
     });
-
-    const tab: ActiveTerminalTab = {
-      session,
-      title: session.title || '终端',
-      cwd: session.cwd,
-      term,
-      fit,
-      search,
-      zmodem,
-      trzsz,
-      sequences,
-      container,
-    };
-
-    term.onTitleChange((title) => {
-      if (title.trim()) {
-        tab.title = title.trim();
-        tabs.value = [...tabs.value];
-      }
-    });
-
-    term.onData((text) => {
-      let payload = text;
-      if (ctrlArmed.value && text.length === 1) {
-        const code = text.toUpperCase().charCodeAt(0);
-        if (code >= 64 && code <= 95) payload = String.fromCharCode(code - 64);
-        ctrlArmed.value = false;
-      } else if (altArmed.value) {
-        payload = `\x1b${text}`;
-        altArmed.value = false;
-      }
-      sendRawInput(session.id, encoder.encode(payload));
-    });
-
-    term.onBinary((bin) => {
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i) & 0xff;
-      sendRawInput(session.id, bytes);
-    });
-
-    term.onResize(({ cols, rows }) => {
-      void deviceSession
-        .terminalRequest('terminal-resize', { sessionId: session.id, cols, rows })
-        .catch(() => {});
-    });
-
-    return tab;
   }
 
-  function feedOutput(tab: ActiveTerminalTab, chunk: Uint8Array) {
-    if (!chunk.length) return;
-    const afterZ = tab.zmodem.process(chunk);
-    if (!afterZ.length) return;
-    const afterT = tab.trzsz.process(afterZ);
-    if (!afterT.length) return;
-    const afterSeq = tab.sequences.process(afterT);
-    if (afterSeq.length) tab.term.write(afterSeq);
+  async function requestNewSession(shell?: string, cwd?: string): Promise<TerminalSessionSummary> {
+    const active = currentPane();
+    const res = (await deviceSession.api(
+      '/api/terminal/sessions',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          shell: shell !== undefined ? shell || undefined : selectedShell.value || undefined,
+          cwd: cwd || undefined,
+          cols: active?.term.cols || 100,
+          rows: active?.term.rows || 30,
+          enableX11: newTabX11.value,
+          enableWayland: newTabWayland.value,
+        }),
+      },
+      TERMINAL_BACKEND_ID,
+    )) as { session: TerminalSessionSummary };
+    return res.session;
   }
 
-  async function attachTab(session: TerminalSessionSummary) {
-    const existing = tabs.value.find((t) => t.session.id === session.id);
-    const tab = existing ?? buildTab(session);
-    if (!existing) {
-      tabs.value = [...tabs.value, tab];
-    }
-    activeTabId.value = session.id;
+  async function attachPane(pane: TerminalPaneRuntime) {
     const { bytes } = await deviceSession.terminalRequest('terminal-attach', {
-      sessionId: session.id,
+      sessionId: pane.session.id,
     });
     if (bytes && bytes.length) {
-      feedOutput(tab, bytes);
+      pane.feed(bytes);
     }
   }
 
-  async function createNewTab() {
+  async function attachSessionAsTab(session: TerminalSessionSummary) {
+    const existing = findPaneBySession(session.id);
+    if (existing) {
+      activeTabId.value = existing.tab.id;
+      existing.tab.activePaneId = existing.pane.session.id;
+      touchTabs();
+      return;
+    }
+    const pane = buildPane(session);
+    const tab: TerminalTab = {
+      id: `tab-${tabSeq++}`,
+      customTitle: '',
+      layout: 'single',
+      splitRatio: 0.5,
+      panes: [pane],
+      activePaneId: session.id,
+    };
+    tabs.value = [...tabs.value, tab];
+    activeTabId.value = tab.id;
+    await attachPane(pane);
+  }
+
+  async function createNewTab(shell?: string) {
     try {
-      const active = currentTab();
-      const cols = active?.term.cols || 100;
-      const rows = active?.term.rows || 30;
-      const res = (await deviceSession.api(
-        '/api/terminal/sessions',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            shell: selectedShell.value || undefined,
-            cols,
-            rows,
-            enableX11: newTabX11.value,
-            enableWayland: newTabWayland.value,
-          }),
-        },
-        TERMINAL_BACKEND_ID,
-      )) as { session: TerminalSessionSummary };
-      await attachTab(res.session);
+      const session = await requestNewSession(shell);
+      await attachSessionAsTab(session);
     } catch (error) {
       notify(error instanceof Error ? error.message : '无法新建终端会话');
     }
   }
 
-  async function closeTab(sessionId: string) {
-    const idx = tabs.value.findIndex((t) => t.session.id === sessionId);
-    if (idx < 0) return;
-    const tab = tabs.value[idx];
-    tab.zmodem.cancel();
-    tab.trzsz.cancel();
-    tab.term.dispose();
-    tabs.value = tabs.value.filter((t) => t.session.id !== sessionId);
-    if (activeTabId.value === sessionId) {
-      activeTabId.value = tabs.value[Math.max(0, idx - 1)]?.session.id ?? '';
+  async function splitCurrentTab(direction: 'horizontal' | 'vertical') {
+    const tab = currentTab();
+    if (!tab) {
+      await createNewTab();
+      return;
     }
-    void deviceSession
-      .api(`/api/terminal/sessions/${encodeURIComponent(sessionId)}/close`, { method: 'POST', body: '{}' }, TERMINAL_BACKEND_ID)
-      .catch(() => {});
+    if (tab.panes.length >= 2) {
+      tab.layout = direction;
+      touchTabs();
+      requestAnimationFrame(fitActiveTabPanes);
+      return;
+    }
+    try {
+      const source = currentPane();
+      const session = await requestNewSession(undefined, source?.cwd);
+      const pane = buildPane(session);
+      tab.panes = [...tab.panes, pane];
+      tab.layout = direction;
+      tab.splitRatio = 0.5;
+      tab.activePaneId = session.id;
+      touchTabs();
+      await attachPane(pane);
+      requestAnimationFrame(fitActiveTabPanes);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '分屏失败');
+    }
   }
 
-  async function uploadFilesToSession(files: File[]) {
-    const tab = currentTab();
-    if (!tab || !files.length) return;
+  async function restartPane(paneId: string) {
+    const found = findPaneBySession(paneId);
+    if (!found) return;
+    const { tab, pane: oldPane } = found;
+    try {
+      const session = await requestNewSession(undefined, oldPane.cwd);
+      const nextPane = buildPane(session);
+      const idx = tab.panes.findIndex((p) => p.session.id === paneId);
+      oldPane.dispose();
+      void deviceSession
+        .api(`/api/terminal/sessions/${encodeURIComponent(paneId)}/close`, { method: 'POST', body: '{}' }, TERMINAL_BACKEND_ID)
+        .catch(() => {});
+      if (idx >= 0) tab.panes[idx] = nextPane;
+      if (tab.activePaneId === paneId) tab.activePaneId = session.id;
+      touchTabs();
+      await attachPane(nextPane);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '重启会话失败');
+    }
+  }
+
+  function closePane(paneId: string) {
+    const found = findPaneBySession(paneId);
+    if (!found) return;
+    const { tab, pane } = found;
+    pane.dispose();
+    void deviceSession
+      .api(`/api/terminal/sessions/${encodeURIComponent(paneId)}/close`, { method: 'POST', body: '{}' }, TERMINAL_BACKEND_ID)
+      .catch(() => {});
+    tab.panes = tab.panes.filter((p) => p.session.id !== paneId);
+    if (!tab.panes.length) {
+      const idx = tabs.value.findIndex((t) => t.id === tab.id);
+      tabs.value = tabs.value.filter((t) => t.id !== tab.id);
+      if (activeTabId.value === tab.id) {
+        activeTabId.value = tabs.value[Math.max(0, idx - 1)]?.id ?? '';
+      }
+      return;
+    }
+    tab.layout = 'single';
+    tab.activePaneId = tab.panes[0].session.id;
+    touchTabs();
+    requestAnimationFrame(fitActiveTabPanes);
+  }
+
+  function closeTab(tabId: string) {
+    const idx = tabs.value.findIndex((t) => t.id === tabId);
+    if (idx < 0) return;
+    const tab = tabs.value[idx];
+    for (const pane of tab.panes) {
+      pane.dispose();
+      void deviceSession
+        .api(`/api/terminal/sessions/${encodeURIComponent(pane.session.id)}/close`, { method: 'POST', body: '{}' }, TERMINAL_BACKEND_ID)
+        .catch(() => {});
+    }
+    tabs.value = tabs.value.filter((t) => t.id !== tabId);
+    if (activeTabId.value === tabId) {
+      activeTabId.value = tabs.value[Math.max(0, idx - 1)]?.id ?? '';
+    }
+  }
+
+  async function uploadFilesToSession(files: File[], directory?: string) {
+    const pane = currentPane();
+    if (!pane || !files.length) return;
+    const targetDir = directory || pane.cwd || undefined;
     for (const file of files) {
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
@@ -334,15 +396,15 @@ export default tsxComponent(function TerminalWorkspace(_props: {
           shellPath: string;
           size: number;
         }>(
-          `/api/terminal/sessions/${encodeURIComponent(tab.session.id)}/upload`,
+          `/api/terminal/sessions/${encodeURIComponent(pane.session.id)}/upload`,
           'POST',
-          { name: file.name, directory: tab.cwd || undefined },
+          { name: file.name, directory: targetDir },
           bytes,
           TERMINAL_BACKEND_ID,
           60000,
         );
-        sendRawInput(tab.session.id, encoder.encode(`${value.shellPath} `));
-        notify(`已上传到 ${value.path} 并插入路径`);
+        sendRawInput(pane.session.id, encoder.encode(`${value.shellPath} `));
+        notify(`已上传到 ${value.path}`);
         if (file.type.startsWith('image/')) {
           const reader = new FileReader();
           reader.onload = () => {
@@ -368,9 +430,65 @@ export default tsxComponent(function TerminalWorkspace(_props: {
     }
   }
 
+  async function updateHostSettings(patch: Partial<TerminalPluginSettings>) {
+    if (!settings.value) return;
+    const merged: TerminalPluginSettings = { ...settings.value, ...patch };
+    try {
+      const snap = (await deviceSession.api('/api/plugins/manage/builtin', {
+        method: 'POST',
+        body: JSON.stringify({ id: 'terminal', config: merged }),
+      })) as PluginManagementSnapshot;
+      const terminal = snap.builtins?.find((item) => item.id === 'terminal');
+      settings.value = terminal?.config ?? merged;
+      if (terminal?.hostCapabilities) capabilities.value = terminal.hostCapabilities;
+      notify('已更新宿主机转发权限');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '更新宿主机配置失败');
+    }
+  }
+
+  function exportCurrentTranscript() {
+    const pane = currentPane();
+    if (!pane) return;
+    const text = pane.exportTranscript();
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `terminal-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    notify('已导出终端记录');
+  }
+
+  function startSplitterDrag(event: PointerEvent, tab: TerminalTab) {
+    const area = paneAreaRef.value;
+    if (!area) return;
+    event.preventDefault();
+    splittingDrag.value = true;
+    const onMove = (ev: PointerEvent) => {
+      const rect = area.getBoundingClientRect();
+      const raw =
+        tab.layout === 'horizontal'
+          ? (ev.clientX - rect.left) / Math.max(1, rect.width)
+          : (ev.clientY - rect.top) / Math.max(1, rect.height);
+      tab.splitRatio = Math.max(0.2, Math.min(0.8, Number(raw.toFixed(3))));
+      touchTabs();
+      fitActiveTabPanes();
+    };
+    const onUp = () => {
+      splittingDrag.value = false;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      fitActiveTabPanes();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
+
   function disposeAllTabs() {
     for (const tab of tabs.value) {
-      tab.term.dispose();
+      for (const pane of tab.panes) pane.dispose();
     }
     tabs.value = [];
     activeTabId.value = '';
@@ -386,23 +504,41 @@ export default tsxComponent(function TerminalWorkspace(_props: {
       if (!active) return;
       let alive = true;
       const stopEvents = deviceSession.onTerminalEvent((event, bytes) => {
-        const tab = tabs.value.find((t) => t.session.id === event.sessionId);
-        if (!tab) return;
+        const found = findPaneBySession(event.sessionId);
+        if (!found) return;
+        const { pane } = found;
         if (event.type === 'terminal-output' && bytes) {
-          feedOutput(tab, bytes);
+          pane.feed(bytes);
         } else if (event.type === 'terminal-exit') {
-          tab.session = { ...tab.session, running: false, exitCode: event.exitCode ?? null };
-          tab.term.writeln(`\r\n\x1b[90m[进程已退出，退出码: ${event.exitCode ?? '未知'}]\x1b[0m`);
-          tabs.value = [...tabs.value];
+          pane.session = { ...pane.session, running: false, exitCode: event.exitCode ?? null };
+          pane.term.writeln(`\r\n\x1b[90m[进程已退出，退出码: ${event.exitCode ?? '未知'}]\x1b[0m`);
+          touchTabs();
         }
       });
 
       const onKeydown = (event: KeyboardEvent) => {
-        if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'f') {
-          event.preventDefault();
-          searchOpen.value = !searchOpen.value;
+        if ((event.ctrlKey || event.metaKey) && event.shiftKey) {
+          const key = event.key.toLowerCase();
+          if (key === 'f') {
+            event.preventDefault();
+            searchOpen.value = !searchOpen.value;
+          } else if (key === 'd') {
+            event.preventDefault();
+            void splitCurrentTab('horizontal');
+          } else if (key === 'e') {
+            event.preventDefault();
+            void splitCurrentTab('vertical');
+          }
+        } else if (event.key === 'Escape') {
+          if (contextMenu.value) contextMenu.value = null;
+          else if (newMenuOpen.value) newMenuOpen.value = false;
+          else if (prefsOpen.value) prefsOpen.value = false;
+          else if (searchOpen.value) searchOpen.value = false;
+          else if (lightboxImage.value) lightboxImage.value = null;
+          else if (zenMode.value) zenMode.value = false;
         }
       };
+
       const onPaste = (event: ClipboardEvent) => {
         const items = event.clipboardData?.items;
         if (!items) return;
@@ -425,6 +561,7 @@ export default tsxComponent(function TerminalWorkspace(_props: {
           void uploadFilesToSession(pastedImages);
         }
       };
+
       window.addEventListener('keydown', onKeydown);
       window.addEventListener('paste', onPaste);
 
@@ -449,21 +586,16 @@ export default tsxComponent(function TerminalWorkspace(_props: {
           if (!selectedShell.value && shells.value.length) {
             selectedShell.value = st?.settings?.defaultShell || '';
           }
-          const existing: TerminalSessionSummary[] = (res.sessions ?? []).filter(
-            (s: TerminalSessionSummary) => s.running,
-          );
+          const existing = (res.sessions ?? []).filter((s) => s.running);
           if (existing.length) {
-            for (const session of existing) {
-              await attachTab(session);
-            }
+            for (const session of existing) await attachSessionAsTab(session);
           } else {
             await createNewTab();
           }
         })
         .catch((error) => {
           if (!alive) return;
-          disabledMessage.value =
-            error instanceof Error ? error.message : '终端插件未启用或电脑暂未连接';
+          disabledMessage.value = error instanceof Error ? error.message : '终端插件未启用或电脑暂未连接';
         })
         .finally(() => {
           if (alive) loading.value = false;
@@ -478,48 +610,41 @@ export default tsxComponent(function TerminalWorkspace(_props: {
     }, [active, deviceSession.host?.hostId]);
 
     const activeTab = currentTab();
-    watchActiveMount(() => {
-      const mount = hostMount.value;
-      if (!mount || !activeTab) return;
-      mount.replaceChildren(activeTab.container);
-      if (!activeTab.term.element) {
-        activeTab.term.open(activeTab.container);
-      }
-      const fitNow = () => {
-        try {
-          activeTab.fit.fit();
-        } catch {
-          /* Ignore resize while hidden. */
-        }
-      };
-      fitNow();
-      activeTab.term.focus();
-      const observer = new ResizeObserver(() => fitNow());
-      observer.observe(mount);
-      return () => observer.disconnect();
-    }, [hostMount.value, activeTab?.session.id, active, forwardDrawerOpen.value, keybarOpen.value]);
+    const activePane = currentPane();
 
-    watchFontSize(() => {
+    watchResizeArea(() => {
+      const area = paneAreaRef.value;
+      if (!area) return;
+      const observer = new ResizeObserver(() => fitActiveTabPanes());
+      observer.observe(area);
+      requestAnimationFrame(fitActiveTabPanes);
+      return () => observer.disconnect();
+    }, [paneAreaRef.value, activeTab?.id, activeTab?.layout, activeTab?.panes.length, sidePanelOpen.value, zenMode.value, keybarOpen.value, active]);
+
+    watchPrefs(() => {
+      saveTerminalPrefs(prefs.value);
       for (const tab of tabs.value) {
-        tab.term.options.fontSize = fontSize.value;
-        try {
-          tab.fit.fit();
-        } catch {}
+        for (const pane of tab.panes) {
+          pane.applyPrefs(prefs.value);
+        }
       }
-    }, [fontSize.value]);
+    }, [prefs.value]);
+
+    const theme = TERMINAL_THEMES[prefs.value.theme] ?? TERMINAL_THEMES['pavilion-night'];
+    const themeVars = `--t-chrome:${theme.chromeBg};--t-panel:${theme.panelBg};--t-canvas:${theme.canvasBg};--t-border:${theme.border};--t-ink:${theme.ink};--t-muted:${theme.muted};--t-accent:${theme.accent}`;
 
     if (disabledMessage.value) {
       return (
-        <main class="terminal-workspace">
-          <div class="terminal-disabled-card">
+        <main class={`term-ws${theme.light ? ' light' : ''}`} style={themeVars}>
+          <div class="term-disabled-card">
             <Icon name="terminal" size={32} />
-            <h2 style="margin: 0; font-size: 18px">终端插件当前不可用</h2>
-            <p style="margin: 0; color: #9bb0be; font-size: 13px">{disabledMessage.value}</p>
-            <div style="display: flex; justify-content: center; gap: 10px">
-              <button type="button" class="terminal-btn" onClick={() => navigate({ page: 'plugins' })}>
+            <h2 style="margin:0;font-size:17px">终端插件当前不可用</h2>
+            <p class="term-side-hint">{disabledMessage.value}</p>
+            <div style="display:flex;gap:10px">
+              <button type="button" class="term-action-btn primary" onClick={() => navigate({ page: 'plugins' })}>
                 前往插件管理开启
               </button>
-              <button type="button" class="terminal-btn" onClick={() => navigate({ page: 'workbench' })}>
+              <button type="button" class="term-action-btn" onClick={() => navigate({ page: 'workbench' })}>
                 返回工作台
               </button>
             </div>
@@ -528,9 +653,19 @@ export default tsxComponent(function TerminalWorkspace(_props: {
       );
     }
 
+    const closePopovers = () => {
+      if (newMenuOpen.value) newMenuOpen.value = false;
+      if (prefsOpen.value) prefsOpen.value = false;
+      if (contextMenu.value) contextMenu.value = null;
+    };
+
+    const ctxPane = contextMenu.value ? findPaneBySession(contextMenu.value.paneId)?.pane : undefined;
+
     return (
       <main
-        class="terminal-workspace"
+        class={`term-ws${theme.light ? ' light' : ''}${zenMode.value ? ' term-zen' : ''}`}
+        style={themeVars}
+        onClick={closePopovers}
         onDragover={(event) => {
           event.preventDefault();
           draggingFile.value = true;
@@ -558,322 +693,500 @@ export default tsxComponent(function TerminalWorkspace(_props: {
               pendingTransferFileResolve = null;
               fn(picked);
             } else if (picked.length) {
-              void uploadFilesToSession(picked);
+              const dir = uploadTargetDir;
+              uploadTargetDir = undefined;
+              void uploadFilesToSession(picked, dir);
             }
           }}
         />
 
-        <header class="terminal-topbar">
+        <header class="term-chrome">
           <button
             type="button"
-            class="terminal-btn"
-            aria-label="返回工作台"
-            onClick={() => navigate({ page: 'workbench' })}
+            class="term-icon-btn"
+            aria-label={zenMode.value ? '退出专注全屏' : '返回工作台'}
+            title={zenMode.value ? '退出专注全屏 (Esc)' : '返回工作台'}
+            onClick={() => {
+              if (zenMode.value) zenMode.value = false;
+              else navigate({ page: 'workbench' });
+            }}
           >
-            <Icon name="back" size={15} />
+            <Icon name="back" size={16} />
           </button>
 
-          <div class="terminal-tabs" role="tablist" aria-label="终端标签页">
-            {tabs.value.map((tab) => (
-              <div
-                key={tab.session.id}
-                role="tab"
-                aria-selected={tab.session.id === activeTab?.session.id}
-                class={`terminal-tab${tab.session.id === activeTab?.session.id ? ' active' : ''}`}
-                onClick={() => {
-                  activeTabId.value = tab.session.id;
-                }}
-              >
-                <Icon name="terminal" size={13} />
-                <span class="terminal-tab-title">{tab.title}</span>
-                <button
-                  type="button"
-                  class="terminal-tab-close"
-                  aria-label={`关闭 ${tab.title}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void closeTab(tab.session.id);
+          <div class="term-tabs" role="tablist" aria-label="终端标签页">
+            {tabs.value.map((tab) => {
+              const lead = tab.panes.find((p) => p.session.id === tab.activePaneId) ?? tab.panes[0];
+              const running = tab.panes.some((p) => p.session.running);
+              const label = tab.customTitle || lead?.title || '终端';
+              const isRenaming = renamingTabId.value === tab.id;
+              return (
+                <div
+                  key={tab.id}
+                  role="tab"
+                  aria-selected={tab.id === activeTab?.id}
+                  class={`term-tab${tab.id === activeTab?.id ? ' active' : ''}`}
+                  onClick={() => {
+                    activeTabId.value = tab.id;
+                  }}
+                  onDblclick={() => {
+                    renamingTabId.value = tab.id;
+                    renameDraft.value = label;
                   }}
                 >
-                  ×
-                </button>
-              </div>
-            ))}
+                  <i class={`term-tab-dot${running ? '' : ' exited'}`} aria-hidden="true" />
+                  {isRenaming ? (
+                    <input
+                      type="text"
+                      class="term-tab-rename"
+                      value={renameDraft.value}
+                      onClick={(e) => e.stopPropagation()}
+                      onInput={(e) => {
+                        renameDraft.value = (e.currentTarget as HTMLInputElement).value;
+                      }}
+                      onBlur={() => {
+                        tab.customTitle = renameDraft.value.trim();
+                        renamingTabId.value = '';
+                        touchTabs();
+                      }}
+                      onKeydown={(e) => {
+                        if (e.key === 'Enter') {
+                          tab.customTitle = renameDraft.value.trim();
+                          renamingTabId.value = '';
+                          touchTabs();
+                        } else if (e.key === 'Escape') {
+                          renamingTabId.value = '';
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span class="term-tab-title" title="双击重命名标签页">
+                      {label}
+                      {tab.panes.length > 1 ? ' · 分屏' : ''}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    class="term-tab-close"
+                    aria-label={`关闭 ${label}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeTab(tab.id);
+                    }}
+                  >
+                    <Icon name="close" size={11} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
-          <div class="terminal-toolbar">
-            {shells.value.length > 0 && (
-              <select
-                class="terminal-select"
-                aria-label="新建终端 Shell"
-                value={selectedShell.value}
-                onChange={(e) => {
-                  selectedShell.value = (e.currentTarget as HTMLSelectElement).value;
-                }}
-              >
-                <option value="">默认 Shell</option>
-                {shells.value.map((sh) => (
-                  <option key={sh.path} value={sh.path}>
-                    {sh.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            {settings.value?.allowX11Forwarding && (
-              <button
-                type="button"
-                class={`terminal-btn${newTabX11.value ? ' active' : ''}`}
-                title="新建标签页时注入 X11 转发"
-                onClick={() => {
-                  newTabX11.value = !newTabX11.value;
-                }}
-              >
-                X11
-              </button>
-            )}
-            {settings.value?.allowWaylandForwarding && activeTab?.session.platform !== 'windows' && (
-              <button
-                type="button"
-                class={`terminal-btn${newTabWayland.value ? ' active' : ''}`}
-                title="新建标签页时注入 Wayland 转发"
-                onClick={() => {
-                  newTabWayland.value = !newTabWayland.value;
-                }}
-              >
-                Wayland
-              </button>
-            )}
-            <button type="button" class="terminal-btn" onClick={() => void createNewTab()} title="新建终端">
-              <Icon name="plus" size={14} /> 新建
+          <div class="term-split-new" onClick={(e) => e.stopPropagation()}>
+            <button type="button" title="新建终端标签页" aria-label="新建终端标签页" onClick={() => void createNewTab()}>
+              <Icon name="plus" size={14} />
             </button>
             <button
               type="button"
-              class="terminal-btn"
-              title="上传图片或文件到当前目录"
+              title="选择 Shell / 分屏 / 显示转发"
+              aria-label="更多新建选项"
               onClick={() => {
-                pendingTransferFileResolve = null;
-                filePickerRef.value?.click();
+                prefsOpen.value = false;
+                newMenuOpen.value = !newMenuOpen.value;
               }}
             >
-              <Icon name="image" size={14} /> 传图/文件
+              <Icon name="down" size={12} />
+            </button>
+
+            {newMenuOpen.value && (
+              <div class="term-popover term-new-menu" role="menu">
+                <div class="term-menu-label">新建会话（Shell）</div>
+                <button
+                  type="button"
+                  class={`term-menu-item${selectedShell.value === '' ? ' active' : ''}`}
+                  onClick={() => {
+                    selectedShell.value = '';
+                    newMenuOpen.value = false;
+                    void createNewTab('');
+                  }}
+                >
+                  <span>默认 Shell</span>
+                </button>
+                {shells.value.map((sh) => (
+                  <button
+                    key={sh.path}
+                    type="button"
+                    class={`term-menu-item${selectedShell.value === sh.path ? ' active' : ''}`}
+                    onClick={() => {
+                      selectedShell.value = sh.path;
+                      newMenuOpen.value = false;
+                      void createNewTab(sh.path);
+                    }}
+                  >
+                    <span>{sh.name}</span>
+                  </button>
+                ))}
+                <div class="term-menu-sep" />
+                <button
+                  type="button"
+                  class="term-menu-item"
+                  onClick={() => {
+                    newMenuOpen.value = false;
+                    void splitCurrentTab('horizontal');
+                  }}
+                >
+                  <span>
+                    <Icon name="splitH" size={13} /> 向右分屏
+                  </span>
+                  <kbd>Ctrl+Shift+D</kbd>
+                </button>
+                <button
+                  type="button"
+                  class="term-menu-item"
+                  onClick={() => {
+                    newMenuOpen.value = false;
+                    void splitCurrentTab('vertical');
+                  }}
+                >
+                  <span>
+                    <Icon name="splitV" size={13} /> 向下分屏
+                  </span>
+                  <kbd>Ctrl+Shift+E</kbd>
+                </button>
+                {(settings.value?.allowX11Forwarding ||
+                  (settings.value?.allowWaylandForwarding && activePane?.session.platform !== 'windows')) && (
+                  <>
+                    <div class="term-menu-sep" />
+                    <div class="term-menu-label">新建会话显示转发</div>
+                    {settings.value?.allowX11Forwarding && (
+                      <button
+                        type="button"
+                        class={`term-menu-item${newTabX11.value ? ' active' : ''}`}
+                        onClick={() => {
+                          newTabX11.value = !newTabX11.value;
+                        }}
+                      >
+                        <span>注入 X11 转发</span>
+                        <kbd>{newTabX11.value ? '开' : '关'}</kbd>
+                      </button>
+                    )}
+                    {settings.value?.allowWaylandForwarding && activePane?.session.platform !== 'windows' && (
+                      <button
+                        type="button"
+                        class={`term-menu-item${newTabWayland.value ? ' active' : ''}`}
+                        onClick={() => {
+                          newTabWayland.value = !newTabWayland.value;
+                        }}
+                      >
+                        <span>注入 Wayland 转发</span>
+                        <kbd>{newTabWayland.value ? '开' : '关'}</kbd>
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div class="term-chrome-actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              class={`term-icon-btn${activeTab && activeTab.panes.length > 1 ? ' active' : ''}`}
+              title={
+                activeTab && activeTab.panes.length > 1
+                  ? activeTab.layout === 'horizontal'
+                    ? '切换为上下分屏'
+                    : '切换为左右分屏'
+                  : '向右分屏 (Ctrl+Shift+D)'
+              }
+              aria-label="分屏"
+              onClick={() =>
+                void splitCurrentTab(
+                  activeTab && activeTab.panes.length > 1 && activeTab.layout === 'horizontal'
+                    ? 'vertical'
+                    : 'horizontal',
+                )
+              }
+            >
+              <Icon
+                name={activeTab?.layout === 'vertical' ? 'splitV' : 'splitH'}
+                size={15}
+              />
             </button>
             <button
               type="button"
-              class={`terminal-btn${searchOpen.value ? ' active' : ''}`}
+              class={`term-icon-btn${searchOpen.value ? ' active' : ''}`}
               title="搜索终端内容 (Ctrl+Shift+F)"
+              aria-label="搜索"
               onClick={() => {
                 searchOpen.value = !searchOpen.value;
               }}
             >
-              <Icon name="search" size={14} />
+              <Icon name="search" size={15} />
             </button>
             <button
               type="button"
-              class={`terminal-btn${forwardDrawerOpen.value ? ' active' : ''}`}
-              title="X11 / Wayland / 端口转发与文件下载"
+              class={`term-icon-btn${sidePanelOpen.value ? ' active' : ''}`}
+              title="侧边面板（文件 / 转发 / 命令片段）"
+              aria-label="侧边面板"
               onClick={() => {
-                forwardDrawerOpen.value = !forwardDrawerOpen.value;
+                sidePanelOpen.value = !sidePanelOpen.value;
               }}
             >
-              <Icon name="globe" size={14} /> 转发
+              <Icon name="panelRight" size={15} />
             </button>
             <button
               type="button"
-              class="terminal-btn"
-              title="缩小字体"
+              class={`term-icon-btn${zenMode.value ? ' active' : ''}`}
+              title={zenMode.value ? '退出专注全屏' : '专注全屏'}
+              aria-label={zenMode.value ? '退出专注全屏' : '专注全屏'}
               onClick={() => {
-                fontSize.value = Math.max(10, fontSize.value - 1);
+                zenMode.value = !zenMode.value;
               }}
             >
-              A-
+              <Icon name={zenMode.value ? 'minimize' : 'maximize'} size={15} />
             </button>
             <button
               type="button"
-              class="terminal-btn"
-              title="放大字体"
+              class={`term-icon-btn${prefsOpen.value ? ' active' : ''}`}
+              title="终端外观与偏好设置"
+              aria-label="终端设置"
               onClick={() => {
-                fontSize.value = Math.min(26, fontSize.value + 1);
+                newMenuOpen.value = false;
+                prefsOpen.value = !prefsOpen.value;
               }}
             >
-              A+
+              <Icon name="gear" size={15} />
             </button>
-            <button
-              type="button"
-              class={`terminal-btn${keybarOpen.value ? ' active' : ''}`}
-              title="切换快捷按键栏"
-              onClick={() => {
-                keybarOpen.value = !keybarOpen.value;
-              }}
-            >
-              键盘
-            </button>
+
+            {prefsOpen.value && (
+              <TerminalPrefsPopover
+                prefs={prefs.value}
+                keybarOpen={keybarOpen.value}
+                onUpdate={(next) => {
+                  prefs.value = next;
+                }}
+                onToggleKeybar={() => {
+                  keybarOpen.value = !keybarOpen.value;
+                }}
+                onExportTranscript={exportCurrentTranscript}
+                onClose={() => {
+                  prefsOpen.value = false;
+                }}
+              />
+            )}
           </div>
         </header>
 
-        {activeTab && (
-          <div class="terminal-meta-bar">
-            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-              {deviceSession.host?.name ?? '电脑'} · {activeTab.cwd}
-            </span>
-            <div class="terminal-meta-badges">
-              <span class="terminal-meta-badge">
-                {activeTab.session.platform === 'windows' ? 'Windows ConPTY' : 'POSIX PTY'}
-              </span>
-              <span class="terminal-meta-badge">lrzsz · trzsz · 图片</span>
-              {activeTab.session.x11Display && (
-                <span class="terminal-meta-badge">DISPLAY={activeTab.session.x11Display}</span>
-              )}
-              {activeTab.session.waylandDisplay && (
-                <span class="terminal-meta-badge">WAYLAND={activeTab.session.waylandDisplay}</span>
-              )}
-            </div>
+        <div class="term-stage">
+          <div ref={paneAreaRef} class="term-pane-area">
+            {loading.value && !tabs.value.length ? (
+              <div style="margin:auto;color:var(--t-muted)">正在启动终端会话…</div>
+            ) : activeTab ? (
+              <div class={`term-pane-grid ${activeTab.layout}`}>
+                {activeTab.panes.map((pane, idx) => {
+                  const isSplit = activeTab.panes.length > 1;
+                  const isFocused = pane.session.id === activePane?.session.id;
+                  const flexBasis = isSplit
+                    ? idx === 0
+                      ? `${activeTab.splitRatio * 100}%`
+                      : `${(1 - activeTab.splitRatio) * 100}%`
+                    : '100%';
+                  return (
+                    <>
+                      {idx === 1 && (
+                        <div
+                          class={`term-splitter${splittingDrag.value ? ' dragging' : ''}`}
+                          onPointerdown={(e) => startSplitterDrag(e, activeTab)}
+                        />
+                      )}
+                      <div
+                        key={pane.session.id}
+                        class={`term-pane${isSplit ? ' split' : ''}${isFocused ? ' focused' : ''}`}
+                        style={`flex:0 0 ${flexBasis}`}
+                        onMousedown={() => {
+                          if (activeTab.activePaneId !== pane.session.id) {
+                            activeTab.activePaneId = pane.session.id;
+                            touchTabs();
+                          }
+                        }}
+                        onContextmenu={(e) => {
+                          e.preventDefault();
+                          activeTab.activePaneId = pane.session.id;
+                          touchTabs();
+                          const x = Math.min(e.clientX, window.innerWidth - 224);
+                          const y = Math.min(e.clientY, window.innerHeight - 310);
+                          contextMenu.value = { x: Math.max(8, x), y: Math.max(8, y), paneId: pane.session.id };
+                        }}
+                      >
+                        {isSplit && (
+                          <div class="term-pane-head">
+                            <span class="term-pane-title">
+                              {pane.title} · {pane.cwd}
+                            </span>
+                            <button
+                              type="button"
+                              class="term-icon-btn xs"
+                              title="关闭此窗格"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                closePane(pane.session.id);
+                              }}
+                            >
+                              <Icon name="close" size={11} />
+                            </button>
+                          </div>
+                        )}
+                        <div
+                          class="term-pane-host"
+                          ref={(el) => bindPaneHost(pane, el as HTMLDivElement | null)}
+                        />
+                      </div>
+                    </>
+                  );
+                })}
+              </div>
+            ) : (
+              <div class="term-disabled-card">
+                <p class="term-side-hint">当前没有打开的终端标签页。</p>
+                <button type="button" class="term-action-btn primary" onClick={() => void createNewTab()}>
+                  <Icon name="plus" size={14} /> 新建终端
+                </button>
+              </div>
+            )}
+
+            {searchOpen.value && (
+              <div class="term-search-float" onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="search"
+                  placeholder="搜索终端输出…"
+                  value={searchQuery.value}
+                  onInput={(e) => {
+                    searchQuery.value = (e.currentTarget as HTMLInputElement).value;
+                    if (searchQuery.value) activePane?.search.findNext(searchQuery.value);
+                  }}
+                  onKeydown={(e) => {
+                    if (e.key === 'Enter' && searchQuery.value) {
+                      if (e.shiftKey) activePane?.search.findPrevious(searchQuery.value);
+                      else activePane?.search.findNext(searchQuery.value);
+                    } else if (e.key === 'Escape') {
+                      searchOpen.value = false;
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  class="term-icon-btn sm"
+                  title="上一个"
+                  onClick={() => searchQuery.value && activePane?.search.findPrevious(searchQuery.value)}
+                >
+                  <Icon name="up" size={13} />
+                </button>
+                <button
+                  type="button"
+                  class="term-icon-btn sm"
+                  title="下一个"
+                  onClick={() => searchQuery.value && activePane?.search.findNext(searchQuery.value)}
+                >
+                  <Icon name="down" size={13} />
+                </button>
+                <button
+                  type="button"
+                  class="term-icon-btn sm"
+                  title="关闭搜索"
+                  onClick={() => {
+                    searchOpen.value = false;
+                  }}
+                >
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
+            )}
+
+            {draggingFile.value && (
+              <div class="term-drop-overlay">松开以上传图片或文件到当前目录</div>
+            )}
           </div>
-        )}
 
-        {searchOpen.value && (
-          <div class="terminal-search-bar">
-            <input
-              type="search"
-              placeholder="搜索终端输出…"
-              value={searchQuery.value}
-              onInput={(e) => {
-                searchQuery.value = (e.currentTarget as HTMLInputElement).value;
-                if (searchQuery.value) activeTab?.search.findNext(searchQuery.value);
-              }}
-              onKeydown={(e) => {
-                if (e.key === 'Enter' && searchQuery.value) {
-                  if (e.shiftKey) activeTab?.search.findPrevious(searchQuery.value);
-                  else activeTab?.search.findNext(searchQuery.value);
-                } else if (e.key === 'Escape') {
-                  searchOpen.value = false;
-                }
-              }}
-            />
-            <button
-              type="button"
-              class="terminal-btn"
-              onClick={() => searchQuery.value && activeTab?.search.findPrevious(searchQuery.value)}
-            >
-              上一个
-            </button>
-            <button
-              type="button"
-              class="terminal-btn"
-              onClick={() => searchQuery.value && activeTab?.search.findNext(searchQuery.value)}
-            >
-              下一个
-            </button>
-            <button
-              type="button"
-              class="terminal-btn"
-              onClick={() => {
-                searchOpen.value = false;
-              }}
-            >
-              关闭
-            </button>
-          </div>
-        )}
-
-        <div class="terminal-stage">
-          {loading.value && !tabs.value.length ? (
-            <div class="page-loading" style="margin: auto; color: #9bb0be">
-              正在启动终端会话…
-            </div>
-          ) : (
-            <div ref={hostMount} class="terminal-canvas-host" />
-          )}
-
-          {draggingFile.value && (
-            <div class="terminal-drop-overlay">松开以上传图片或文件到当前终端目录</div>
-          )}
-
-          {forwardDrawerOpen.value && (
-            <TerminalForwardDrawer
-              session={activeTab?.session ?? null}
+          {sidePanelOpen.value && (
+            <TerminalSidePanel
+              tab={sidePanelTab.value}
+              session={activePane?.session ?? null}
+              sessionCwd={activePane?.cwd ?? ''}
               settings={settings.value}
               capabilities={capabilities.value}
+              images={images.value}
+              onTabChange={(next) => {
+                sidePanelTab.value = next;
+              }}
               onClose={() => {
-                forwardDrawerOpen.value = false;
+                sidePanelOpen.value = false;
               }}
               onNotify={notify}
+              onInsertText={(text) => {
+                if (!activePane) return;
+                sendRawInput(activePane.session.id, encoder.encode(text));
+                activePane.term.focus();
+              }}
+              onRunCommand={(cmd, execute) => {
+                if (!activePane) return;
+                sendRawInput(activePane.session.id, encoder.encode(execute ? `${cmd}\r` : cmd));
+                activePane.term.focus();
+              }}
+              onUploadToDirectory={(dir) => {
+                pendingTransferFileResolve = null;
+                uploadTargetDir = dir;
+                filePickerRef.value?.click();
+              }}
+              onPreviewImage={(img) => {
+                lightboxImage.value = img;
+              }}
+              onClearImages={() => {
+                images.value = [];
+              }}
+              onUpdateHostSettings={updateHostSettings}
             />
           )}
         </div>
 
         {transfer.value && (
-          <div class="terminal-transfer-hud" role="status">
-            <strong>
-              {transfer.value.protocol.toUpperCase()}{' '}
-              {transfer.value.direction === 'upload' ? '上传' : '下载'}
-            </strong>
-            <span>{transfer.value.message || transfer.value.fileName}</span>
-            <div class="terminal-transfer-bar">
+          <div class="term-transfer-hud">
+            <span>
+              {transfer.value.protocol.toUpperCase()} {transfer.value.direction === 'upload' ? '上传' : '下载'}：
+              {transfer.value.fileName || '传输中'}
+            </span>
+            <div class="term-transfer-bar">
               <i
                 style={`width: ${
                   transfer.value.total > 0
                     ? Math.min(100, Math.round((transfer.value.transferred / transfer.value.total) * 100))
-                    : transfer.value.status === 'done'
-                      ? 100
-                      : 30
+                    : 100
                 }%`}
               />
             </div>
-            {transfer.value.total > 0 && (
-              <span>
-                {formatTransferBytes(transfer.value.transferred)} / {formatTransferBytes(transfer.value.total)}
-              </span>
-            )}
-            {transfer.value.status === 'active' && (
-              <button
-                type="button"
-                class="terminal-btn"
-                onClick={() => {
-                  activeTab?.zmodem.cancel();
-                  activeTab?.trzsz.cancel();
-                }}
-              >
-                取消
-              </button>
-            )}
-          </div>
-        )}
-
-        {images.value.length > 0 && (
-          <div class="terminal-image-strip" aria-label="终端图片记录">
-            <small style="color: #8ea5b4; flex: none">图片 ({images.value.length})</small>
-            {images.value.map((img) => (
-              <button
-                type="button"
-                key={img.id}
-                class="terminal-image-thumb"
-                title={img.name || img.protocol}
-                onClick={() => {
-                  lightboxImage.value = img;
-                }}
-              >
-                <img src={img.dataUrl} alt={img.name || '终端图片'} />
-              </button>
-            ))}
+            <span>
+              {formatTransferBytes(transfer.value.transferred)}
+              {transfer.value.total > 0 ? ` / ${formatTransferBytes(transfer.value.total)}` : ''}
+            </span>
             <button
               type="button"
-              class="terminal-btn"
-              style="margin-left: auto"
+              class="term-action-btn"
               onClick={() => {
-                images.value = [];
+                activePane?.zmodem.cancel();
+                activePane?.trzsz.cancel();
+                transfer.value = null;
               }}
             >
-              清空
+              取消
             </button>
           </div>
         )}
 
-        {keybarOpen.value && activeTab && (
-          <div class="terminal-keybar" role="toolbar" aria-label="终端快捷按键">
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x1b'))}>
+        {keybarOpen.value && activePane && (
+          <div class="term-keybar" aria-label="快捷按键栏">
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, new Uint8Array([0x1b]))}>
               Esc
             </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\t'))}>
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, new Uint8Array([0x09]))}>
               Tab
             </button>
             <button
@@ -881,6 +1194,7 @@ export default tsxComponent(function TerminalWorkspace(_props: {
               class={ctrlArmed.value ? 'armed' : undefined}
               onClick={() => {
                 ctrlArmed.value = !ctrlArmed.value;
+                activePane.term.focus();
               }}
             >
               Ctrl
@@ -890,80 +1204,258 @@ export default tsxComponent(function TerminalWorkspace(_props: {
               class={altArmed.value ? 'armed' : undefined}
               onClick={() => {
                 altArmed.value = !altArmed.value;
+                activePane.term.focus();
               }}
             >
               Alt
             </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x03'))}>
-              Ctrl+C
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, new Uint8Array([0x03]))}>
+              ^C
             </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x04'))}>
-              Ctrl+D
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, new Uint8Array([0x04]))}>
+              ^D
             </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x1a'))}>
-              Ctrl+Z
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, new Uint8Array([0x1a]))}>
+              ^Z
             </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x1b[A'))}>
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, new Uint8Array([0x0c]))}>
+              清屏
+            </button>
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, encoder.encode('\x1b[A'))}>
               ↑
             </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x1b[B'))}>
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, encoder.encode('\x1b[B'))}>
               ↓
             </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x1b[D'))}>
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, encoder.encode('\x1b[D'))}>
               ←
             </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x1b[C'))}>
+            <button type="button" onClick={() => sendRawInput(activePane.session.id, encoder.encode('\x1b[C'))}>
               →
-            </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x1b[H'))}>
-              Home
-            </button>
-            <button type="button" onClick={() => sendRawInput(activeTab.session.id, encoder.encode('\x1b[F'))}>
-              End
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                void navigator.clipboard?.readText().then((text) => {
-                  if (text) sendRawInput(activeTab.session.id, encoder.encode(text));
-                });
-              }}
-            >
-              粘贴
             </button>
           </div>
         )}
 
-        {toast.value && (
-          <div class="terminal-toast" role="status">
-            {toast.value}
+        <footer class="term-statusbar">
+          <div class="term-status-left">
+            <span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap">
+              <i class={`term-tab-dot${activePane?.session.running ? '' : ' exited'}`} aria-hidden="true" />
+              {deviceSession.host?.name ?? '宿主机'} ·{' '}
+              {activePane?.session.platform === 'windows' ? 'Windows ConPTY' : 'POSIX PTY'}
+            </span>
+            {activePane && (
+              <button
+                type="button"
+                class="term-status-btn"
+                title="点击在右侧文件面板打开当前目录"
+                onClick={() => {
+                  sidePanelTab.value = 'files';
+                  sidePanelOpen.value = true;
+                }}
+              >
+                <Icon name="folder" size={12} />
+                {activePane.cwd}
+              </button>
+            )}
+          </div>
+          <div class="term-status-right">
+            {activePane?.session.x11Display && (
+              <button
+                type="button"
+                class="term-status-btn active"
+                onClick={() => {
+                  sidePanelTab.value = 'forwards';
+                  sidePanelOpen.value = true;
+                }}
+              >
+                X11 {activePane.session.x11Display}
+              </button>
+            )}
+            {activePane?.session.waylandDisplay && (
+              <button
+                type="button"
+                class="term-status-btn active"
+                onClick={() => {
+                  sidePanelTab.value = 'forwards';
+                  sidePanelOpen.value = true;
+                }}
+              >
+                Wayland
+              </button>
+            )}
+            <button
+              type="button"
+              class="term-status-btn"
+              title="查看文件管理与传输"
+              onClick={() => {
+                sidePanelTab.value = 'files';
+                sidePanelOpen.value = !sidePanelOpen.value;
+              }}
+            >
+              lrzsz · trzsz
+            </button>
+            <button
+              type="button"
+              class={`term-status-btn${keybarOpen.value ? ' active' : ''}`}
+              onClick={() => {
+                keybarOpen.value = !keybarOpen.value;
+              }}
+            >
+              快捷键
+            </button>
+          </div>
+        </footer>
+
+        {contextMenu.value && ctxPane && (
+          <div
+            class="term-context-menu"
+            style={`left:${contextMenu.value.x}px;top:${contextMenu.value.y}px`}
+            role="menu"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              class="term-menu-item"
+              disabled={!ctxPane.term.hasSelection()}
+              onClick={() => {
+                const text = ctxPane.term.getSelection();
+                contextMenu.value = null;
+                if (text) {
+                  void navigator.clipboard?.writeText(text).then(() => notify('已复制选中内容'));
+                }
+              }}
+            >
+              <span>复制</span>
+              <kbd>Ctrl+Shift+C</kbd>
+            </button>
+            <button
+              type="button"
+              class="term-menu-item"
+              onClick={() => {
+                contextMenu.value = null;
+                void navigator.clipboard?.readText().then((text) => {
+                  if (text) sendRawInput(ctxPane.session.id, encoder.encode(text));
+                });
+              }}
+            >
+              <span>粘贴</span>
+              <kbd>Ctrl+Shift+V</kbd>
+            </button>
+            <button
+              type="button"
+              class="term-menu-item"
+              onClick={() => {
+                ctxPane.term.selectAll();
+                contextMenu.value = null;
+              }}
+            >
+              <span>全选</span>
+            </button>
+            <button
+              type="button"
+              class="term-menu-item"
+              onClick={() => {
+                ctxPane.term.clear();
+                contextMenu.value = null;
+              }}
+            >
+              <span>清屏</span>
+            </button>
+            <button
+              type="button"
+              class="term-menu-item"
+              onClick={() => {
+                searchOpen.value = true;
+                contextMenu.value = null;
+              }}
+            >
+              <span>搜索</span>
+              <kbd>Ctrl+Shift+F</kbd>
+            </button>
+            <div class="term-menu-sep" />
+            <button
+              type="button"
+              class="term-menu-item"
+              onClick={() => {
+                contextMenu.value = null;
+                void splitCurrentTab('horizontal');
+              }}
+            >
+              <span>向右分屏</span>
+              <kbd>Ctrl+Shift+D</kbd>
+            </button>
+            <button
+              type="button"
+              class="term-menu-item"
+              onClick={() => {
+                contextMenu.value = null;
+                void splitCurrentTab('vertical');
+              }}
+            >
+              <span>向下分屏</span>
+              <kbd>Ctrl+Shift+E</kbd>
+            </button>
+            <button
+              type="button"
+              class="term-menu-item"
+              onClick={() => {
+                contextMenu.value = null;
+                pendingTransferFileResolve = null;
+                uploadTargetDir = ctxPane.cwd;
+                filePickerRef.value?.click();
+              }}
+            >
+              <span>上传文件 / 图片…</span>
+            </button>
+            <button
+              type="button"
+              class="term-menu-item"
+              onClick={() => {
+                contextMenu.value = null;
+                exportCurrentTranscript();
+              }}
+            >
+              <span>导出终端记录 (.txt)</span>
+            </button>
+            <div class="term-menu-sep" />
+            <button
+              type="button"
+              class="term-menu-item"
+              onClick={() => {
+                const id = ctxPane.session.id;
+                contextMenu.value = null;
+                void restartPane(id);
+              }}
+            >
+              <span>重启当前会话</span>
+            </button>
           </div>
         )}
 
         {lightboxImage.value && (
           <div
-            class="terminal-lightbox"
+            class="term-lightbox"
             onClick={() => {
               lightboxImage.value = null;
             }}
           >
-            <div class="terminal-lightbox-inner" onClick={(e) => e.stopPropagation()}>
-              <img src={lightboxImage.value.dataUrl} alt={lightboxImage.value.name || '终端图片预览'} />
-              <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px">
-                <small style="color: #c2d1db">
-                  {lightboxImage.value.name || `协议: ${lightboxImage.value.protocol}`}
-                </small>
-                <div style="display: flex; gap: 8px">
+            <div class="term-lightbox-inner" onClick={(e) => e.stopPropagation()}>
+              <img src={lightboxImage.value.dataUrl} alt={lightboxImage.value.name || '终端图片'} />
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+                <span class="term-side-meta">
+                  {lightboxImage.value.name || lightboxImage.value.protocol.toUpperCase()}
+                </span>
+                <div style="display:flex;gap:8px">
                   <a
-                    class="terminal-btn"
+                    class="term-action-btn primary"
                     href={lightboxImage.value.dataUrl}
-                    download={lightboxImage.value.name || `terminal-${lightboxImage.value.id}.png`}
+                    download={lightboxImage.value.name || 'terminal-image.png'}
                   >
                     保存图片
                   </a>
                   <button
                     type="button"
-                    class="terminal-btn"
+                    class="term-action-btn"
                     onClick={() => {
                       lightboxImage.value = null;
                     }}
@@ -975,6 +1467,8 @@ export default tsxComponent(function TerminalWorkspace(_props: {
             </div>
           </div>
         )}
+
+        {toast.value && <div class="term-toast">{toast.value}</div>}
       </main>
     );
   };
