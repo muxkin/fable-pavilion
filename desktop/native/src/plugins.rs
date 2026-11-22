@@ -267,18 +267,25 @@ pub(crate) enum Delivery {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct Registry(Arc<HashMap<String, Arc<dyn Adapter>>>);
+pub(crate) struct Registry(Arc<std::sync::RwLock<HashMap<String, Arc<dyn Adapter>>>>);
 
-#[derive(Deserialize)]
-struct Instance {
-    id: String,
-    name: String,
-    plugin: String,
-    version: Option<String>,
+fn default_instance_enabled() -> bool {
+    true
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Instance {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) plugin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) version: Option<String>,
+    #[serde(default = "default_instance_enabled")]
+    pub(crate) enabled: bool,
     #[serde(default)]
-    config: Value,
+    pub(crate) config: Value,
     #[serde(default)]
-    secrets: HashMap<String, String>,
+    pub(crate) secrets: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -313,6 +320,7 @@ impl ConfigRow {
                 name,
                 plugin: "@agent-remote/adapter-dsh".to_owned(),
                 version: None,
+                enabled: true,
                 config: json!({"url":url,"version":version}),
                 secrets: HashMap::from([("token".to_owned(), token_env)]),
             }),
@@ -405,6 +413,7 @@ fn instance_configuration(
             name: "Antigravity".into(),
             plugin: "@agent-remote/adapter-antigravity".into(),
             version: None,
+            enabled: true,
             config: json!({"home":home}),
             secrets: HashMap::new(),
         });
@@ -435,6 +444,9 @@ impl Registry {
         let mut hosts = Vec::new();
         let mut codex = BTreeMap::new();
         for row in rows {
+            if !row.enabled {
+                continue;
+            }
             let mut config = row.config.as_object().cloned().unwrap_or_default();
             for (key, variable) in row.secrets {
                 ensure!(
@@ -518,15 +530,100 @@ impl Registry {
             )?;
             codex.insert(codex_backend::ID.into(), selection);
         }
-        Ok((Self(Arc::new(plugins)), codex))
+        Ok((Self(Arc::new(std::sync::RwLock::new(plugins))), codex))
+    }
+
+    pub(crate) fn spawn_plugin_instance(
+        &self,
+        directory: &Path,
+        runtime: &tokio::runtime::Handle,
+        bundled: bool,
+        environment: &GatewayEnvironment,
+        row: Instance,
+    ) -> Result<()> {
+        if !row.enabled || row.plugin == codex_backend::PACKAGE {
+            return Ok(());
+        }
+        let read_only = ["POCKET_NATIVE_READ_ONLY", "POCKET_READ_ONLY"]
+            .iter()
+            .any(|key| env::var(key).as_deref() == Ok("1") || environment.get(key) == Some("1"));
+        let mut config = row.config.as_object().cloned().unwrap_or_default();
+        for (key, variable) in row.secrets {
+            ensure!(
+                !variable.is_empty()
+                    && variable
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
+                "插件凭据变量无效"
+            );
+            let value = env::var(&variable)
+                .ok()
+                .or_else(|| environment.get(&variable).map(str::to_owned))
+                .unwrap_or_default();
+            config.insert(key, json!(value));
+        }
+        let instance_read_only = read_only || config.get("readOnly") == Some(&json!(true));
+        let official_product = match row.plugin.as_str() {
+            "@agent-remote/adapter-dsh" => Some("dsh"),
+            "@agent-remote/adapter-antigravity" => Some("antigravity"),
+            _ => None,
+        };
+        let package = crate::plugin_catalog::Catalog::open(directory)
+            .and_then(|catalog| {
+                if official_product.is_some() {
+                    catalog.bind_official(&row.id, &row.plugin, row.version.as_deref(), bundled)
+                } else {
+                    catalog.bind(&row.id, &row.plugin, row.version.as_deref())
+                }
+            })
+            .ok()
+            .flatten();
+        ensure!(
+            official_product.is_none()
+                || package
+                    .as_ref()
+                    .is_none_or(|package| Some(package.manifest.product.as_str()) == official_product),
+            "官方插件产品标识无效"
+        );
+        let private = directory
+            .join("native-plugins")
+            .join("instances")
+            .join(&row.id);
+        let host = Arc::new(crate::plugin_host::Host::new(
+            row.id.clone(),
+            row.name,
+            package,
+            Value::Object(config),
+            private,
+            instance_read_only,
+        ));
+        self.0
+            .write()
+            .expect("plugins registry lock")
+            .insert(row.id, host.clone());
+        runtime.spawn(host.supervise(directory.to_owned()));
+        Ok(())
+    }
+
+    pub(crate) fn remove(&self, id: &str) -> Option<Arc<dyn Adapter>> {
+        self.0
+            .write()
+            .expect("plugins registry lock")
+            .remove(id)
     }
 
     pub(crate) fn update_hosts(&self) -> Result<Vec<Arc<crate::plugin_host::Host>>> {
-        self.0
+        let values: Vec<_> = self
+            .0
+            .read()
+            .expect("plugins registry lock")
             .values()
+            .cloned()
+            .collect();
+        values
+            .into_iter()
             .map(|adapter| {
                 adapter
-                    .clone()
                     .update_host()
                     .context("此插件尚不支持安全更新，请先更新插件")
             })
@@ -534,13 +631,23 @@ impl Registry {
     }
 
     pub(crate) fn get(&self, id: &str) -> Option<Arc<dyn Adapter>> {
-        self.0.get(id).cloned()
+        self.0
+            .read()
+            .expect("plugins registry lock")
+            .get(id)
+            .cloned()
     }
 
     pub(crate) async fn infos(&self) -> Vec<Value> {
-        let mut plugins: Vec<_> = self.0.values().collect();
-        plugins.sort_unstable_by_key(|plugin| plugin.id());
-        futures::future::join_all(plugins.into_iter().map(|plugin| plugin.info())).await
+        let mut plugins: Vec<_> = self
+            .0
+            .read()
+            .expect("plugins registry lock")
+            .values()
+            .cloned()
+            .collect();
+        plugins.sort_unstable_by(|a, b| a.id().cmp(b.id()));
+        futures::future::join_all(plugins.into_iter().map(|plugin| async move { plugin.info().await })).await
     }
 }
 

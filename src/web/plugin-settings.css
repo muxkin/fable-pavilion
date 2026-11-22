@@ -1,0 +1,249 @@
+.plugin-settings-page {
+  display: grid;
+  gap: 20px;
+}
+
+.plugin-host-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.plugin-host-select {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.plugin-host-select select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.plugin-host-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.plugin-card-list {
+  display: grid;
+  gap: 12px;
+}
+
+.plugin-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.plugin-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plugin-card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.plugin-card-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.plugin-card-copy strong {
+  font-size: 15px;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plugin-card-copy p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.plugin-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.plugin-badge.muted {
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  color: var(--muted);
+}
+
+.plugin-badge.online {
+  background: color-mix(in srgb, #2e8b57 18%, transparent);
+  color: #2e8b57;
+}
+
+.plugin-feature-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plugin-feature-chips span {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--muted);
+}
+
+.plugin-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.plugin-switch input[type='checkbox'] {
+  width: 38px;
+  height: 22px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.plugin-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugin-form-grid {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.plugin-field {
+  display: grid;
+  gap: 6px;
+}
+
+.plugin-field span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.plugin-field input,
+.plugin-field select,
+.plugin-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.plugin-field textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+}
+
+.plugin-checks {
+  display: grid;
+  gap: 8px;
+}
+
+.plugin-check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.plugin-package-list {
+  display: grid;
+  gap: 8px;
+}
+
+.plugin-package-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  font-size: 13px;
+}
+
+.plugin-package-item code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.plugin-notice {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--ink);
+}
+
+.plugin-notice.error {
+  background: color-mix(in srgb, #c62828 14%, transparent);
+  color: #b71c1c;
+}
+
+.plugin-empty-state {
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px dashed var(--line);
+  text-align: center;
+  color: var(--muted);
+}

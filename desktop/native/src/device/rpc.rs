@@ -155,6 +155,98 @@ impl DeviceSession {
             };
             return Ok(Some(value));
         }
+        if method.starts_with("plugins.manage.") {
+            let manager = self
+                .backends
+                .plugin_manager
+                .as_ref()
+                .context("此适配器暂不支持插件管理")?;
+            let value = match method {
+                "plugins.manage.read" => manager.snapshot().await?,
+                "plugins.manage.builtin.update" => {
+                    manager.update_builtin(call["body"].clone()).await?
+                }
+                "plugins.manage.instance.upsert" => {
+                    manager.upsert_instance(call["body"].clone()).await?
+                }
+                "plugins.manage.instance.toggle" => {
+                    let mut body = call["body"].clone();
+                    if body.get("id").is_none()
+                        && let Some(id) = call["params"]["id"].as_str()
+                    {
+                        body["id"] = json!(id);
+                    }
+                    manager.toggle_instance(body).await?
+                }
+                "plugins.manage.instance.delete" => {
+                    let id = call["params"]["id"]
+                        .as_str()
+                        .or_else(|| call["body"]["id"].as_str())
+                        .context("插件实例 ID 无效")?;
+                    manager.delete_instance(id).await?
+                }
+                "plugins.manage.switch" => {
+                    manager.switch_instance(call["body"].clone()).await?
+                }
+                _ => return Ok(None),
+            };
+            return Ok(Some(value));
+        }
+        if method.starts_with("terminal.") {
+            let terminal = self
+                .backends
+                .terminal
+                .as_ref()
+                .context("此适配器暂不支持终端插件")?;
+            let value = match method {
+                "terminal.sessions.list" => json!({
+                    "sessions": terminal.list_sessions()?,
+                    "status": terminal.status(),
+                }),
+                "terminal.session.create" => {
+                    let req: crate::terminal::CreateSessionRequest =
+                        serde_json::from_value(call["body"].clone()).unwrap_or_default();
+                    let session = terminal.create_session(req).await?;
+                    json!({ "session": session })
+                }
+                "terminal.session.resize" => {
+                    let id = call["params"]["id"].as_str().context("终端会话 ID 无效")?;
+                    let cols = call["body"]["cols"].as_u64().unwrap_or(100) as u16;
+                    let rows = call["body"]["rows"].as_u64().unwrap_or(30) as u16;
+                    terminal.resize(id, cols, rows)?;
+                    json!({ "ok": true })
+                }
+                "terminal.session.close" => {
+                    let id = call["params"]["id"].as_str().context("终端会话 ID 无效")?;
+                    let closed = terminal.close_session(id)?;
+                    json!({ "ok": true, "closed": closed })
+                }
+                "terminal.forwards.list" => json!({
+                    "forwards": terminal.list_forwards()?,
+                    "capabilities": terminal.capabilities(),
+                }),
+                "terminal.forward.create" => {
+                    let host = call["body"]["targetHost"].as_str().unwrap_or("127.0.0.1");
+                    let port = call["body"]["targetPort"].as_u64().unwrap_or(0) as u16;
+                    let forward = terminal.create_tcp_forward(host, port)?;
+                    json!({ "forward": forward })
+                }
+                "terminal.forward.close" => {
+                    let id = call["params"]["id"].as_str().context("端口转发 ID 无效")?;
+                    let closed = terminal.close_forward(id)?;
+                    json!({ "ok": true, "closed": closed })
+                }
+                "terminal.forward.http" => {
+                    let id = call["params"]["id"].as_str().context("端口转发 ID 无效")?;
+                    let http_method = call["body"]["method"].as_str().unwrap_or("GET");
+                    let path = call["body"]["path"].as_str().unwrap_or("/");
+                    let body = call["body"]["body"].as_str();
+                    terminal.forward_http(id, http_method, path, body).await?
+                }
+                _ => return Ok(None),
+            };
+            return Ok(Some(value));
+        }
         if method == "backends.list" {
             let mut backends: Vec<_> = self
                 .backends
@@ -163,6 +255,14 @@ impl DeviceSession {
                 .filter_map(|(id, backend)| backend.info(id, self.online(id)))
                 .collect();
             backends.extend(self.backends.plugins.infos().await);
+            if let Some(terminal_info) = self
+                .backends
+                .terminal
+                .as_ref()
+                .and_then(|service| service.backend_info())
+            {
+                backends.push(terminal_info);
+            }
             let store = self.db.lock().expect("database mutex poisoned");
             for info in &mut backends {
                 let id = info["id"].as_str().context("实例 ID 无效")?;
@@ -200,6 +300,20 @@ impl DeviceSession {
                 .map(Some);
         }
         let Some(connector) = self.backends.codex.get(backend) else {
+            if backend == crate::terminal::BACKEND_ID
+                && let Some(terminal) = self.backends.terminal.as_ref()
+                && let Some(info) = terminal.backend_info()
+            {
+                return match method {
+                    "status.read" => Ok(Some(terminal.status())),
+                    "session.read" => Ok(Some(json!({
+                        "device": {"id": self.device.id, "name": self.device.name},
+                        "status": terminal.status(),
+                        "backend": info,
+                    }))),
+                    _ => Ok(None),
+                };
+            }
             let Some(plugin) = call["backendId"]
                 .as_str()
                 .and_then(|id| self.backends.plugins.get(id))
@@ -573,6 +687,11 @@ impl DeviceSession {
             backend.info(id, self.online(id))
         } else if let Some(plugin) = self.backends.plugins.get(id) {
             Some(plugin.info().await)
+        } else if id == crate::terminal::BACKEND_ID {
+            self.backends
+                .terminal
+                .as_ref()
+                .and_then(|service| service.backend_info())
         } else {
             None
         };

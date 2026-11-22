@@ -21,7 +21,7 @@ pub(crate) struct Manifest {
     pub name: String,
     pub version: String,
     pub product: String,
-    state_version: u32,
+    pub state_version: u32,
     entry: String,
     sha256: String,
 }
@@ -322,7 +322,7 @@ impl Catalog {
         Ok(())
     }
 
-    fn queue(&mut self, id: &str, target: Option<&str>) -> Result<(String, String)> {
+    pub(crate) fn queue(&mut self, id: &str, target: Option<&str>) -> Result<(String, String)> {
         let tx = self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -431,6 +431,53 @@ impl Catalog {
             )
             .optional()?
             .context("找不到插件切换请求")
+    }
+
+    pub(crate) fn list_detailed(
+        &self,
+    ) -> Result<(Vec<Value>, std::collections::HashMap<String, (String, Option<String>)>)> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT key, manifest FROM packages ORDER BY key")?;
+        let mut packages = Vec::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (key, document) = row?;
+            if let Ok(manifest) = serde_json::from_str::<Manifest>(&document) {
+                let official = matches!(
+                    manifest.name.as_str(),
+                    "@agent-remote/adapter-codex"
+                        | "@agent-remote/adapter-dsh"
+                        | "@agent-remote/adapter-antigravity"
+                );
+                packages.push(json!({
+                    "key": key,
+                    "name": manifest.name,
+                    "version": manifest.version,
+                    "product": manifest.product,
+                    "stateVersion": manifest.state_version,
+                    "official": official,
+                }));
+            }
+        }
+        let mut binding_stmt = self
+            .db
+            .prepare("SELECT instance, current, previous FROM bindings ORDER BY instance")?;
+        let mut bindings = std::collections::HashMap::new();
+        let binding_rows = binding_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        for row in binding_rows {
+            let (instance, current, previous) = row?;
+            bindings.insert(instance, (current, previous));
+        }
+        Ok((packages, bindings))
     }
 
     fn list(&self) -> Result<Value> {

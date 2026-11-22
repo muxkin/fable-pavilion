@@ -45,6 +45,7 @@ mod offline_security_rpc;
 mod operations;
 mod plugin_catalog;
 mod plugin_host;
+mod plugin_management;
 #[cfg(feature = "official-plugins")]
 mod plugin_server;
 mod plugins;
@@ -57,6 +58,7 @@ mod requests;
 mod settings;
 mod state;
 mod storage;
+mod terminal;
 #[cfg(feature = "official-plugins")]
 mod tool_activity;
 #[cfg(feature = "official-plugins")]
@@ -240,6 +242,23 @@ pub fn start() -> Result<()> {
     let connected_security = security.clone();
     let account_status = Arc::new(Mutex::new(desktop_account::Store::open(&directory)?));
     let connected_account_status = account_status.clone();
+    let plugin_settings = plugin_management::PluginSettings::load(&directory)?;
+    let terminal_service = Arc::new(terminal::TerminalService::new(
+        &directory,
+        plugin_settings.terminal.clone(),
+    ));
+    let plugin_manager = Arc::new(Mutex::new(plugin_management::PluginManager::new(
+        directory.clone(),
+        environment.clone(),
+        bundled,
+        Some(handle.clone()),
+        plugins::Registry::default(),
+        codex_backend::Group::default(),
+        terminal_service.clone(),
+        plugin_settings,
+    )));
+    let connected_plugin_manager = plugin_manager.clone();
+    let connected_terminal = terminal_service.clone();
     let update_gate = update::UpdateGate::default();
     let connection_gate = update_gate.clone();
     let mut connect = move |origin: &str, enrollment: String| -> Result<management::Connected> {
@@ -255,6 +274,23 @@ pub fn start() -> Result<()> {
         config.codex = codex_backend::Group::load(&directory, &handle, codex, bundled)?;
         let transports = storage::Transports::load(&directory, &config.origin, &environment)?;
         config.plugins = plugins;
+        let current_settings = plugin_management::PluginSettings::load(&directory)?;
+        connected_terminal.update_settings(current_settings.terminal.clone());
+        let live_plugin_manager = plugin_management::PluginManager::new(
+            directory.clone(),
+            environment.clone(),
+            bundled,
+            Some(handle.clone()),
+            config.plugins.clone(),
+            config.codex.clone(),
+            connected_terminal.clone(),
+            current_settings,
+        );
+        *connected_plugin_manager
+            .lock()
+            .expect("plugin manager mutex") = live_plugin_manager.clone();
+        config.plugin_manager = Some(live_plugin_manager);
+        config.terminal = Some(connected_terminal.clone());
         config.direct = transports.direct;
         config.storage = transports.storage;
         if let Some(storage) = config.storage.clone() {
@@ -320,6 +356,7 @@ pub fn start() -> Result<()> {
                 connected,
                 security,
                 account_status,
+                plugin_manager,
                 update_gate,
                 package_origin,
                 error,

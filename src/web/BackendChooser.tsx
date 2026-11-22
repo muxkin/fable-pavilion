@@ -419,7 +419,13 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
                           disabled={busy || working.value}
                           onClick={() => open(hostId, backend.id)}
                         >
-                          {online && connected ? '打开会话' : cached ? '查看历史' : '打开工作区'}
+                          {backend.product === 'terminal'
+                            ? '打开终端'
+                            : online && connected
+                              ? '打开会话'
+                              : cached
+                                ? '查看历史'
+                                : '打开工作区'}
                           <Icon name="arrow" size={16} />
                         </button>
                       )}

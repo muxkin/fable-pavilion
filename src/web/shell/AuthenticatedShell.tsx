@@ -4,6 +4,7 @@ import { useExternalSnapshot, watchRender, writeRef } from '../render-effects';
 import { useMessaging } from '../messaging/context';
 import { BackendChooser } from '../BackendChooser';
 import { DEFAULT_BACKEND } from '../../shared/backends';
+import { TERMINAL_BACKEND_ID } from '../../shared/plugins';
 import { deviceSession } from '../device-session';
 import type { PairedHost } from '../sync-store';
 import { Icon } from '../Icon';
@@ -22,6 +23,7 @@ import { afterDialogs, handleDialogBack, usesMobileHistory } from './dialog-hist
 import { rememberWorkbenchDevice } from './workbench-recency';
 import { lazyPage as lazy } from './lazy-page';
 const AgentWorkspace = lazy(workspaceTools[0].load);
+const TerminalWorkspace = lazy(() => import('../terminal/TerminalWorkspace'));
 const MessagingPages = lazy(() => import('../messaging/MessagingPages'));
 import MePages from './MePages';
 import { useSoftwareUpdates } from './software-updates';
@@ -505,14 +507,23 @@ export default tsxComponent(function AuthenticatedShell() {
                               >
                                 {() => (
                                   <>
-                                    <AgentWorkspace
-                                      key={`${hostId || 'unpaired'}:${backendId}`}
-                                      active={showWorkspace}
-                                      route={workspaceRoute}
-                                      navigate={navigate}
-                                      onBusy={setBusy}
-                                      onUpdateBlocked={setWorkbenchUpdateBlocked}
-                                    />
+                                    {backendId === TERMINAL_BACKEND_ID ? (
+                                      <TerminalWorkspace
+                                        key={`${hostId || 'unpaired'}:${backendId}`}
+                                        active={showWorkspace}
+                                        route={workspaceRoute}
+                                        navigate={navigate}
+                                      />
+                                    ) : (
+                                      <AgentWorkspace
+                                        key={`${hostId || 'unpaired'}:${backendId}`}
+                                        active={showWorkspace}
+                                        route={workspaceRoute}
+                                        navigate={navigate}
+                                        onBusy={setBusy}
+                                        onUpdateBlocked={setWorkbenchUpdateBlocked}
+                                      />
+                                    )}
                                   </>
                                 )}
                               </PageBoundary>

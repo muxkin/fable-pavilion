@@ -20,6 +20,7 @@ import './settings-hierarchy.css';
 const DownloadsPage = lazy(() => import('./DownloadsPage.vue'));
 const DonationPage = lazy(() => import('./DonationPage.vue'));
 const AppearanceSettings = lazy(() => import('../theme/AppearanceSettings.vue'));
+const PluginSettings = lazy(() => import('../PluginSettings'));
 const LoginSecurity = lazy(() => import('../messaging/LoginSecurity'));
 const AccountCredentials = lazy(() => import('../messaging/AccountCredentials'));
 const ResourceSettings = lazy(() => import('../messaging/ResourceSettings'));
@@ -102,6 +103,7 @@ export default tsxComponent(function MePages(_props: {
     const titles: Partial<Record<AppRoute['page'], string>> = {
       me: '我的',
       settings: '设置',
+      plugins: '插件管理',
       appearance: '外观',
       devices: '我的电脑',
       integrations: 'Agent 接入',
@@ -119,7 +121,7 @@ export default tsxComponent(function MePages(_props: {
     };
     return (
       <main
-        class={`module-page me-page${['me', 'settings', 'resources', 'account-credentials', 'login-security', 'trusted-devices', 'login-devices', 'authenticators', 'account-recovery'].includes(route.page) ? ' settings-hierarchy' : ''}`}
+        class={`module-page me-page${['me', 'settings', 'plugins', 'resources', 'account-credentials', 'login-security', 'trusted-devices', 'login-devices', 'authenticators', 'account-recovery'].includes(route.page) ? ' settings-hierarchy' : ''}`}
       >
         <PageHeader title={titles[route.page] ?? '我的'} back={route.page === 'me' ? undefined : back} />
         {route.page === 'me' && (
@@ -187,7 +189,7 @@ export default tsxComponent(function MePages(_props: {
               <Row
                 icon="sliders"
                 title="设置"
-                detail="外观、缓存与关于"
+                detail="外观、插件、缓存与关于"
                 onClick={() => navigate({ page: 'settings' })}
               />
             </section>
@@ -212,6 +214,17 @@ export default tsxComponent(function MePages(_props: {
         {route.page === 'settings' && (
           <div class="settings-hierarchy-content settings-preferences-content">
             {user && <NotificationSettings />}
+            <section class="settings-section" aria-labelledby="settings-plugins-group">
+              <h2 class="settings-section-title" id="settings-plugins-group">
+                扩展与插件
+              </h2>
+              <Row
+                icon="puzzle"
+                title="插件管理"
+                detail="管理内置终端与自定义插件实例"
+                onClick={() => navigate({ page: 'plugins' })}
+              />
+            </section>
             <section class="settings-section" aria-labelledby="settings-appearance-group">
               <h2 class="settings-section-title" id="settings-appearance-group">
                 外观与阅读
@@ -344,6 +357,18 @@ export default tsxComponent(function MePages(_props: {
               default: () => (
                 <>
                   <DonationPage />
+                </>
+              ),
+            }}
+          </Suspense>
+        )}
+        {route.page === 'plugins' && (
+          <Suspense timeout={0}>
+            {{
+              fallback: () => <div class="page-loading">正在打开插件管理…</div>,
+              default: () => (
+                <>
+                  <PluginSettings navigate={navigate} />
                 </>
               ),
             }}

@@ -32,9 +32,9 @@ export class DeviceLink {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
-  private listeners = new Set<(message: Record<string, any>) => void>();
+  private listeners = new Set<(message: Record<string, any>, bytes?: Uint8Array) => void>();
   private closedListeners = new Set<() => void>();
-  private backlog: Record<string, any>[] = [];
+  private backlog: { message: Record<string, any>; bytes?: Uint8Array }[] = [];
   private readyResolve!: (value: DeviceReady) => void;
   private readyReject!: (error: Error) => void;
   readonly ready = new Promise<DeviceReady>((resolve, reject) => {
@@ -55,8 +55,8 @@ export class DeviceLink {
         clearTimeout(pending.timer);
         if (message.error) pending.reject(new RpcError(message.error, message.status));
         else pending.resolve({ value: message.result, bytes });
-      } else if (this.listeners.size) for (const listener of this.listeners) listener(message);
-      else if (this.backlog.length < 32) this.backlog.push(message);
+      } else if (this.listeners.size) for (const listener of this.listeners) listener(message, bytes);
+      else if (this.backlog.length < 32) this.backlog.push({ message, bytes });
     });
     channel.onClose(() => {
       this.closed = true;
@@ -83,11 +83,11 @@ export class DeviceLink {
       clearTimeout(timer);
     }
   }
-  onEvent(listener: (message: Record<string, any>) => void) {
+  onEvent(listener: (message: Record<string, any>, bytes?: Uint8Array) => void) {
     this.listeners.add(listener);
     const queued = this.backlog;
     this.backlog = [];
-    for (const message of queued) listener(message);
+    for (const item of queued) listener(item.message, item.bytes);
     return () => this.listeners.delete(listener);
   }
   onClose(listener: () => void) {

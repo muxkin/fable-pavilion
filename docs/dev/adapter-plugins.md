@@ -11,6 +11,7 @@
 | `@agent-remote/adapter-codex` | Codex | 默认实例 ID 为 `codex-local`，自动发现本机状态目录与桌面连接；支持多实例配置（分别指定 `home`、`socket`、`appTools`、`cli`）。支持历史、实时控制、模型/权限/技能/插件、审批、提问、计划确认、用量查询及 Codex Voice。 |
 | `@agent-remote/adapter-dsh` | DSH Web | 连接已运行的 DSH Web 实例（配置 `url` 与访问 token 环境变量引用 `secrets.token`）。支持历史、实时流与思考过程/活动状态、新建（含附件与技能）/改名、项目归属、工具活动摘要与回复复制、审批、同步/补答提问、预设、权限、计划、目标管理、工作区文件引用、技能、反馈与 ZIP 日志导出。 |
 | `@agent-remote/adapter-antigravity` | Antigravity | 本机数据目录（默认 `~/.gemini/antigravity`）含 `daemon` 时自动发现为 `antigravity-local`。支持项目与会话同步、超大历史分页、结构化工具步骤与代码 Diff、实时活动状态与回复复制、新建（含图片附件、技能与已启用插件）/改名/中断/队列/追加、下一轮模型选择、单选/多选/手填提问、单次命令与文件修改审批、图片与引用文件下载、工作区文件引用、脱敏 JSON 日志导出及模型组额度查询。 |
+| `@agent-remote/plugin-terminal` | 终端（默认禁用） | 桌面适配器内置终端插件，默认关闭，可在网页端「我的 → 设置 → 插件管理」或桌面本机设置页「插件」标签开启。Linux/macOS 使用 POSIX PTY，Windows 使用原生 ConPTY（支持 PowerShell 7 / Windows PowerShell / CMD / Git Bash / WSL）。支持多标签会话、lrzsz（ZMODEM `rz`/`sz`）、trzsz（`trz`/`tsz`）、内联图片（Sixel / iTerm2 OSC 1337 / Kitty Graphics）、剪贴板粘贴与拖拽上传图片/文件、OSC 52 剪贴板、OSC 7 工作目录跟踪以及可选的 X11 / Wayland / 本机回环端口转发。 |
 
 > **运行原则**：插件只连接本机已运行或已存在的 Agent 实例，不负责启动或关闭原 Agent 进程；单实例异常或版本不兼容不会影响同一网关上的其他实例。插件以本机受信任代码运行，进程隔离提供故障遏制而非不可信代码沙箱。
 
@@ -60,7 +61,9 @@
 ```
 
 - `secrets` 中的键指向环境变量名；解析后的真实凭据仅注入该实例的初始化消息，不会写入公开描述或注册表，也不会泄露给其他实例。
-- 新增、删除实例或变更连接配置后重启适配器生效；已绑定实例的版本以本地私有注册表为准，修改 JSON 中的 `version` 不会暗中升级。
+- 实例支持可选布尔字段 `enabled`（默认 `true`），可在网页端「我的 → 设置 → 插件管理」或桌面适配器本机设置页「插件」标签直接新增、编辑、启停、删除或回滚实例，也可在桌面本机设置页直接安装本地原生插件目录。
+- 内置终端插件的开关与配置独立持久化于状态目录的 `plugin-settings.json`（默认 `terminal.enabled = false`）。
+- 已绑定实例的版本以本地私有注册表为准，修改 JSON 中的 `version` 不会暗中升级。
 
 ## 三、安装、在线升级与回滚
 

@@ -32,6 +32,7 @@ const ENDPOINT: &str = "management.json";
 const HTML: &str = include_str!("management/index.html");
 const CSS: &str = include_str!("management/style.css");
 const SCRIPT: &str = include_str!("management/app.js");
+const PLUGINS_SCRIPT: &str = include_str!("management/plugins.js");
 const DAY_SCENE: &[u8] = include_bytes!("../../../src/web/theme/assets/moon-white.webp");
 const NIGHT_SCENE: &[u8] = include_bytes!("../../../src/web/theme/assets/night-pavilion.webp");
 const TICKET_LIFETIME: Duration = Duration::from_secs(120);
@@ -60,6 +61,7 @@ pub(crate) struct Startup {
     pub(crate) connected: Option<Connected>,
     pub(crate) security: crate::offline_security::Shared,
     pub(crate) account_status: crate::desktop_account::Shared,
+    pub(crate) plugin_manager: Arc<Mutex<crate::plugin_management::PluginManager>>,
     pub(crate) update_gate: UpdateGate,
     pub(crate) package_origin: Option<&'static str>,
     pub(crate) error: Option<String>,
@@ -183,6 +185,7 @@ pub(crate) struct Panel {
     startup: Mutex<Option<bool>>,
     security: crate::offline_security::Shared,
     account_status: crate::desktop_account::Shared,
+    plugin_manager: Arc<Mutex<crate::plugin_management::PluginManager>>,
     update_gate: UpdateGate,
 }
 
@@ -226,6 +229,7 @@ impl Manager {
             startup: Mutex::new(startup_state()),
             security: startup.security,
             account_status: startup.account_status,
+            plugin_manager: startup.plugin_manager,
             update_gate: startup.update_gate,
         });
         let temporary = owner
@@ -323,7 +327,7 @@ async fn body<T: DeserializeOwned>(request: Request<Incoming>) -> Result<T> {
             .is_some_and(|v| v == "application/json"),
         "请求格式无效"
     );
-    let data = Limited::new(request.into_body(), 8192)
+    let data = Limited::new(request.into_body(), 65_536)
         .collect()
         .await
         .map_err(|_| anyhow::anyhow!("请求过大或不完整"))?;
@@ -438,6 +442,13 @@ impl Panel {
                 "/app.js" => {
                     return reply(StatusCode::OK, "text/javascript; charset=utf-8", SCRIPT);
                 }
+                "/plugins.js" => {
+                    return reply(
+                        StatusCode::OK,
+                        "text/javascript; charset=utf-8",
+                        PLUGINS_SCRIPT,
+                    );
+                }
                 "/scene-light.webp" => {
                     return reply(StatusCode::OK, "image/webp", Bytes::from_static(DAY_SCENE));
                 }
@@ -481,6 +492,53 @@ impl Panel {
         }
         if !authenticated(&request, self.auth) {
             return failure(StatusCode::UNAUTHORIZED, "请从托盘重新打开设置");
+        }
+        if request.method() == Method::GET && path == "/api/plugins" {
+            let manager = self
+                .plugin_manager
+                .lock()
+                .expect("plugin manager mutex")
+                .clone();
+            return match manager.snapshot().await {
+                Ok(value) => json_reply(StatusCode::OK, value),
+                Err(error) => failure(StatusCode::BAD_REQUEST, error),
+            };
+        }
+        if request.method() == Method::POST && path.starts_with("/api/plugins/") {
+            let action = path.to_owned();
+            let payload: Result<Value> = body(request).await;
+            let payload = match payload {
+                Ok(value) => value,
+                Err(error) => return failure(StatusCode::BAD_REQUEST, error),
+            };
+            let manager = self
+                .plugin_manager
+                .lock()
+                .expect("plugin manager mutex")
+                .clone();
+            let result = match action.as_str() {
+                "/api/plugins/builtin" => manager.update_builtin(payload).await,
+                "/api/plugins/instances" => manager.upsert_instance(payload).await,
+                "/api/plugins/instances/toggle" => manager.toggle_instance(payload).await,
+                "/api/plugins/instances/delete" => {
+                    match payload["id"].as_str() {
+                        Some(id) => manager.delete_instance(id).await,
+                        None => Err(anyhow::anyhow!("插件实例 ID 无效")),
+                    }
+                }
+                "/api/plugins/install" => {
+                    match payload["path"].as_str() {
+                        Some(dir) => manager.install_local_package(dir).await,
+                        None => Err(anyhow::anyhow!("插件目录路径无效")),
+                    }
+                }
+                "/api/plugins/switch" => manager.switch_instance(payload).await,
+                _ => return failure(StatusCode::NOT_FOUND, "接口不存在"),
+            };
+            return match result {
+                Ok(value) => json_reply(StatusCode::OK, value),
+                Err(error) => failure(StatusCode::BAD_REQUEST, error),
+            };
         }
         if request.method() == Method::GET && path == "/api/security" {
             return json_reply(
@@ -858,6 +916,21 @@ mod tests {
                 account_status: Arc::new(Mutex::new(crate::desktop_account::Store::open(
                     &directory,
                 )?)),
+                plugin_manager: Arc::new(Mutex::new(
+                    crate::plugin_management::PluginManager::new(
+                        directory.clone(),
+                        crate::migration::GatewayEnvironment::default(),
+                        false,
+                        Some(runtime.handle().clone()),
+                        crate::plugins::Registry::default(),
+                        crate::codex_backend::Group::default(),
+                        Arc::new(crate::terminal::TerminalService::new(
+                            &directory,
+                            crate::terminal::TerminalSettings::default(),
+                        )),
+                        crate::plugin_management::PluginSettings::default(),
+                    ),
+                )),
                 update_gate: UpdateGate::default(),
                 package_origin: Some("https://package.example.test"),
                 error: None,

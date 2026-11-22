@@ -88,6 +88,7 @@ export class DeviceSession {
   private pc?: RTCPeerConnection;
   private candidates: RTCIceCandidateInit[] = [];
   private watchers = new Map<string, Set<(event: ServerEvent) => void>>();
+  private terminalListeners = new Set<(event: Record<string, any>, bytes?: Uint8Array) => void>();
   private usageWatchers = new Map<string, (snapshot: UsageSnapshot) => void>();
   private usageVersion = 0;
   private views = new Map<string, CachedThread>();
@@ -704,8 +705,12 @@ export class DeviceSession {
         else void this.connect();
       }
     });
-    link.onEvent((event) => {
+    link.onEvent((event, bytes) => {
       if (generation !== this.generation || this.links.get(key) !== link) return;
+      if (event.type === 'terminal-output' || event.type === 'terminal-exit') {
+        for (const listener of this.terminalListeners) listener(event, bytes);
+        return;
+      }
       if (event.type === 'usage') {
         if (generation === this.generation && this.online && this.link() === link)
           this.usageWatchers.get(event.backendId)?.(event.snapshot);
@@ -738,6 +743,58 @@ export class DeviceSession {
       if (link && !link.closed) return link;
     }
     throw new RpcError('电脑未连接，当前显示缓存内容', 0);
+  }
+  onTerminalEvent(listener: (event: Record<string, any>, bytes?: Uint8Array) => void) {
+    this.terminalListeners.add(listener);
+    return () => this.terminalListeners.delete(listener);
+  }
+  async terminalRequest(
+    type: 'terminal-attach' | 'terminal-detach' | 'terminal-input' | 'terminal-resize',
+    data: Record<string, unknown>,
+    bytes?: Uint8Array,
+    timeout = 15000,
+  ) {
+    if (!this.online) await this.connect();
+    return this.link('control').request(type, data, bytes, timeout);
+  }
+  async rpcBinary<T = any>(
+    path: string,
+    method: 'GET' | 'POST',
+    body: unknown,
+    bytes?: Uint8Array,
+    backendId = this.backendId,
+    timeout = 30000,
+  ): Promise<{ value: T; bytes?: Uint8Array }> {
+    if (!this.online) await this.connect();
+    const call = { ...apiCall(path, method, body), backendId };
+    return this.link('control').request('rpc', { call }, bytes, timeout);
+  }
+  async requestOnHost<T>(
+    host: PairedHost,
+    path: string,
+    method: 'GET' | 'POST' = 'GET',
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const call = apiCall(path, method, body);
+    if (this.host?.hostId === host.hostId && this.host.ticket === host.ticket && this.running) {
+      if (!this.online) await this.connect();
+      return this.link('control').rpc<T>(call);
+    }
+    const identity = host.identity ?? (await this.cache.identity(this.cache.scope));
+    const link = await this.openRelay(
+      host.hostId,
+      host.ticket,
+      'control',
+      { type: 'authenticate', protocol: 2, sessionId: browserId() },
+      identity,
+      signal,
+    );
+    try {
+      return await link.rpc<T>(call);
+    } finally {
+      link.close();
+    }
   }
   voice(
     hostId: string,

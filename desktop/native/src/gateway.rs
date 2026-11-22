@@ -99,6 +99,8 @@ pub struct RelayConfig {
     pub direct: Option<crate::direct::Direct>,
     pub storage: Option<crate::storage::Storage>,
     pub plugins: crate::plugins::Registry,
+    pub plugin_manager: Option<crate::plugin_management::PluginManager>,
+    pub terminal: Option<Arc<crate::terminal::TerminalService>>,
     usage_reset: ResetProofVerifier,
     pub(crate) account_security: Option<crate::offline_security_rpc::Service>,
 }
@@ -126,6 +128,8 @@ impl RelayConfig {
             direct: None,
             storage: None,
             plugins: Default::default(),
+            plugin_manager: None,
+            terminal: None,
             account_security: None,
         })
     }
@@ -362,7 +366,7 @@ async fn run_connection(
                             if let Some(route) = route.filter(|_| !wires.contains_key(&id))
                                 && gate.connection_allowed()
                             {
-                                wires.insert(id, spawn_wire(id, route.clone(), db.clone(), identity.clone(), lane, Backends { codex: config.codex.clone(), direct: config.direct.clone(), storage: config.storage.clone(), update_gate: gate.clone(), plugins: config.plugins.clone(), usage_reset: config.usage_reset.clone(), account_security: config.account_security.clone() }, outgoing.clone()));
+                                wires.insert(id, spawn_wire(id, route.clone(), db.clone(), identity.clone(), lane, Backends { codex: config.codex.clone(), direct: config.direct.clone(), storage: config.storage.clone(), update_gate: gate.clone(), plugins: config.plugins.clone(), plugin_manager: config.plugin_manager.clone(), terminal: config.terminal.clone(), usage_reset: config.usage_reset.clone(), account_security: config.account_security.clone() }, outgoing.clone()));
                             } else if !wires.contains_key(&id) {
                                 send(&mut socket, text(json!({"type": "close", "id": id}))).await?;
                             }

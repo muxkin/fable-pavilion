@@ -46,7 +46,7 @@ pub(crate) fn source() -> Option<&'static Path> {
     SOURCE.get().map(PathBuf::as_path)
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GatewaySource {
     environment_file: PathBuf,
@@ -54,7 +54,7 @@ struct GatewaySource {
     origin: Option<String>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct GatewayEnvironment {
     pub(crate) values: HashMap<String, String>,
     external: Option<GatewaySource>,

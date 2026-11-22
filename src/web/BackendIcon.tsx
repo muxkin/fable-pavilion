@@ -19,7 +19,7 @@ const marks = {
 export const BackendIcon = tsxComponent(function BackendIcon(_props: { icon: IconValue; product?: string }) {
   return ({ icon, product = '' }) => {
     const style = backendStyle(product);
-    const mark = style === 'generic' ? undefined : marks[style];
+    const mark = style === 'generic' || style === 'terminal' ? undefined : marks[style];
     const official = icon.kind === 'builtin' && mark?.icon === icon.value;
     return (
       <span

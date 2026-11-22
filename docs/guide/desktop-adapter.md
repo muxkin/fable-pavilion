@@ -47,7 +47,8 @@
 - **Codex**：自动发现本机 Codex 状态目录与桌面端点（默认实例 ID 为 `codex-local`）。可通过 `POCKET_NATIVE_CODEX_HOME`、`CODEX_HOME`、`POCKET_NATIVE_CODEX_SOCKET`、`POCKET_NATIVE_CODEX_APP_TOOLS`、`POCKET_NATIVE_CODEX_CLI` 等环境变量按需覆盖；如需只读模式，可设置 `POCKET_NATIVE_READ_ONLY=1`。
 - **Codex Voice**：在工作台打开 Codex 会话后，可通过标题栏麦克风图标发起实时语音通话（需本机 Codex 账号已开通原生语音功能，且手机端通过 HTTPS 访问）。语音通话基于只读独立分支运行，结束后可查看保存的转写。
 - **Antigravity**：当本机数据目录（默认 `~/.gemini/antigravity`，可用 `POCKET_NATIVE_ANTIGRAVITY_HOME` 覆盖）存在 `daemon` 时，适配器会自动发现并添加 `antigravity-local` 实例；设置 `POCKET_NATIVE_ANTIGRAVITY=0` 可关闭自动发现。
-- **DSH 与多实例配置**：可在状态目录的 `instances.json`（或通过 `POCKET_ADAPTERS_FILE` 指定路径）配置多个 Codex、DSH、Antigravity 或第三方插件实例。完整配置格式及插件在线升级/回滚命令见 [适配器插件与开发](../dev/adapter-plugins.md)。
+- **DSH 与多实例配置**：可在网页端「我的 → 设置 → 插件管理」、桌面适配器本机设置页「插件」标签，或状态目录的 `instances.json`（也可通过 `POCKET_ADAPTERS_FILE` 指定路径）管理多个 Codex、DSH、Antigravity 或第三方原生插件实例。完整配置格式及插件在线升级/回滚命令见 [适配器插件与开发](../dev/adapter-plugins.md)。
+- **内置终端插件（默认禁用）**：适配器内置纯 Rust 跨平台终端插件（Linux/macOS 使用 POSIX PTY，Windows 使用原生 ConPTY，支持 PowerShell 7 / Windows PowerShell / CMD / Git Bash / WSL）。默认关闭，需在网页端「我的 → 设置 → 插件管理」或桌面本机设置页「插件」标签手动开启。开启后可在工作台打开交互式终端，支持多标签会话、lrzsz（`rz`/`sz`）、trzsz（`trz`/`tsz`）、Sixel / iTerm2 / Kitty 内联图片显示、剪贴板与拖拽传图、OSC 52 剪贴板以及可选的 X11 / Wayland / 本机回环端口转发。
 
 ### 修改实例外观
 

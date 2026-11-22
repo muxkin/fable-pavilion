@@ -552,3 +552,58 @@ button.danger-action:hover:not(:disabled) { background: var(--alert-bg); }
   .keybook-management-actions { gap: 8px; }
   .keybook-management-actions button { font-size: 12px; padding-inline: 9px; }
 }
+
+.plugin-list {
+  display: grid;
+  gap: .85rem;
+  margin-top: .85rem;
+}
+.plugin-card {
+  padding: .95rem 1.05rem;
+  border: 1px solid color-mix(in srgb, var(--edge) 45%, transparent);
+  border-radius: .75rem;
+  background: color-mix(in srgb, var(--field) 82%, transparent);
+  display: grid;
+  gap: .65rem;
+}
+.plugin-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.plugin-card-actions {
+  display: flex;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+.plugin-meta {
+  font-size: .88rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+.plugin-config-details {
+  margin-top: .45rem;
+}
+.plugin-form {
+  display: grid;
+  gap: .65rem;
+  margin-top: .75rem;
+}
+.plugin-form textarea {
+  width: 100%;
+  padding: .55rem .75rem;
+  border: 1px solid var(--edge);
+  border-radius: .5rem;
+  background: var(--field);
+  color: var(--ink);
+  font: .88rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.plugin-package-row {
+  padding: .55rem .75rem;
+  border-radius: .5rem;
+  background: color-mix(in srgb, var(--panel) 75%, transparent);
+  font: .86rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}

@@ -47,6 +47,8 @@ async function request(path, options = {}) {
   return response;
 }
 
+window.__adapterManagementApi = request;
+
 const post = (path, body = {}) => request(path, { method: 'POST', body });
 
 function showPair(pair) {
@@ -370,7 +372,7 @@ function selectManagementTab(name, focus = false) {
     codeHidden = false;
   }
   currentTab = name;
-  for (const tab of ['connection', 'security', 'runtime']) {
+  for (const tab of ['connection', 'plugins', 'security', 'runtime']) {
     const selected = tab === name;
     el(`tab-${tab}`).setAttribute('aria-selected', String(selected));
     el(`tab-${tab}`).tabIndex = selected ? 0 : -1;
@@ -378,17 +380,18 @@ function selectManagementTab(name, focus = false) {
   }
   if (focus) el(`tab-${name}`).focus();
   if (name === 'security') void refreshSecurity();
+  if (name === 'plugins' && window.__refreshAdapterPlugins) void window.__refreshAdapterPlugins();
 }
-for (const name of ['connection', 'security', 'runtime']) {
+for (const name of ['connection', 'plugins', 'security', 'runtime']) {
   el(`tab-${name}`).addEventListener('click', () => selectManagementTab(name));
 }
 el('panel').querySelector('[role="tablist"]').addEventListener('keydown', (event) => {
-  const names = ['connection', 'security', 'runtime'];
+  const names = ['connection', 'plugins', 'security', 'runtime'];
   let next;
   if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = names[(names.indexOf(currentTab) + 1) % names.length];
-  if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = names[(names.indexOf(currentTab) + 2) % names.length];
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = names[(names.indexOf(currentTab) + names.length - 1) % names.length];
   if (event.key === 'Home') next = names[0];
-  if (event.key === 'End') next = names[2];
+  if (event.key === 'End') next = names[names.length - 1];
   if (next) { event.preventDefault(); selectManagementTab(next, true); }
 });
 function renderSecurity() {

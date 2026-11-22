@@ -43,6 +43,8 @@ pub struct Backends {
     pub storage: Option<crate::storage::Storage>,
     pub update_gate: crate::update::UpdateGate,
     pub plugins: crate::plugins::Registry,
+    pub plugin_manager: Option<crate::plugin_management::PluginManager>,
+    pub terminal: Option<Arc<crate::terminal::TerminalService>>,
     pub(crate) usage_reset: ResetProofVerifier,
     pub(crate) account_security: Option<crate::offline_security_rpc::Service>,
 }
@@ -54,6 +56,9 @@ pub struct DeviceSession {
     backends: Backends,
     watches: HashMap<(String, Uuid), Watch>,
     plugin_watches: HashMap<(String, String), PluginWatch>,
+    terminal_tasks: HashMap<String, tokio::task::JoinHandle<()>>,
+    terminal_tx: mpsc::UnboundedSender<(Value, Vec<u8>)>,
+    terminal_rx: Option<mpsc::UnboundedReceiver<(Value, Vec<u8>)>>,
     last_status: HashMap<String, Value>,
     bulk: bool,
     signaling: Option<Uuid>,
@@ -125,13 +130,16 @@ impl<T: 'static> Drop for StorageJobs<T> {
 }
 
 fn rpc_activity(method: &str) -> bool {
-    !(method.ends_with(".read") || method.ends_with(".list") || method == "security.backup.status")
+    !(method.ends_with(".read")
+        || method.ends_with(".list")
+        || method == "security.backup.status"
+        || method == "plugins.manage.read")
 }
 fn needs_activity(request: &Value) -> bool {
     match request["type"].as_str() {
         Some("rpc") => rpc_activity(request["call"]["method"].as_str().unwrap_or_default()),
         Some("file") => request["action"] != "read",
-        Some("voice-start") => true,
+        Some("voice-start" | "terminal-attach") => true,
         _ => false,
     }
 }
@@ -145,6 +153,7 @@ impl DeviceSession {
         bulk: bool,
         signaling: Option<Uuid>,
     ) -> Self {
+        let (terminal_tx, terminal_rx) = mpsc::unbounded_channel();
         Self {
             db,
             peer,
@@ -153,6 +162,9 @@ impl DeviceSession {
             backends,
             watches: HashMap::new(),
             plugin_watches: HashMap::new(),
+            terminal_tasks: HashMap::new(),
+            terminal_tx,
+            terminal_rx: Some(terminal_rx),
             bulk,
             signaling,
             connection: None,
@@ -172,8 +184,16 @@ impl DeviceSession {
         let mut upload_expiry = interval(Duration::from_secs(1));
         let mut desktop_probe = interval(Duration::from_secs(10));
         let mut probing = JoinSet::new();
+        let mut terminal_rx = self
+            .terminal_rx
+            .take()
+            .expect("terminal receiver available once");
         loop {
             tokio::select! {
+                Some((event, payload)) = terminal_rx.recv(), if !self.bulk => {
+                    self.ensure_device()?;
+                    reply_packet(io, event, &payload).await?;
+                }
                 _ = upload_expiry.tick(), if !self.uploads.is_empty() => {
                     let store = self.db.lock().expect("database mutex poisoned");
                     self.uploads.retain(|id, (_, deadline)| {
@@ -260,11 +280,38 @@ impl DeviceSession {
                     let result = match request["type"].as_str() {
                         Some("rpc") if !self.bulk && request["call"]["method"] == "upload.chunk" =>
                             self.legacy_upload_chunk(&request["call"], bytes).await,
+                        Some("rpc") if !self.bulk && request["call"]["method"] == "terminal.session.upload" =>
+                            self.terminal_upload(&request["call"], &bytes),
+                        Some("rpc") if !self.bulk && request["call"]["method"] == "terminal.session.download" =>
+                            self.terminal_download(&request["call"]).map(|(meta, data)| {
+                                reply_bytes = data;
+                                Some(meta)
+                            }),
                         Some("rpc") if !self.bulk && bytes.is_empty() => self.rpc(request["call"].clone()).await,
                         Some("file") => self.file(request.clone(), bytes).await.map(|(value, bytes)| {
                             reply_bytes = bytes;
                             Some(value)
                         }),
+                        Some("terminal-attach") if !self.bulk && bytes.is_empty() => {
+                            self.terminal_attach(&request).map(|(meta, scrollback)| {
+                                reply_bytes = scrollback;
+                                Some(meta)
+                            })
+                        }
+                        Some("terminal-detach") if !self.bulk && bytes.is_empty() => {
+                            if let Some(session_id) = request["sessionId"].as_str()
+                                && let Some(handle) = self.terminal_tasks.remove(session_id)
+                            {
+                                handle.abort();
+                            }
+                            Ok(Some(json!({"ok": true})))
+                        }
+                        Some("terminal-input") if !self.bulk => {
+                            self.terminal_input(&request, &bytes).map(|()| Some(json!({"ok": true})))
+                        }
+                        Some("terminal-resize") if !self.bulk && bytes.is_empty() => {
+                            self.terminal_resize(&request).map(|()| Some(json!({"ok": true})))
+                        }
                         Some("watch") if !self.bulk && bytes.is_empty() => {
                             if let Some(id) = backend_id(&request).filter(|id| self.backends.codex.get(id).is_some()) {
                                 self.watch(id, &request).await.map(Some)
@@ -422,5 +469,126 @@ impl DeviceSession {
         self.watches.iter().any(|((id, _), watch)| {
             id == backend && watch.live.as_ref().and_then(Live::view).is_some()
         })
+    }
+
+    fn terminal_attach(&mut self, request: &Value) -> Result<(Value, Vec<u8>)> {
+        let terminal = self
+            .backends
+            .terminal
+            .as_ref()
+            .context("终端服务不可用")?;
+        let session_id = request["sessionId"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 80)
+            .context("终端会话 ID 无效")?;
+        if let Some(old) = self.terminal_tasks.remove(session_id) {
+            old.abort();
+        }
+        let (summary, scrollback, mut rx) = terminal.attach(session_id)?;
+        let tx = self.terminal_tx.clone();
+        let sid = session_id.to_owned();
+        let handle = tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(crate::terminal::TerminalEvent::Output(chunk)) => {
+                        if tx
+                            .send((
+                                json!({"type": "terminal-output", "sessionId": sid}),
+                                chunk,
+                            ))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(crate::terminal::TerminalEvent::Exit(code)) => {
+                        let _ = tx.send((
+                            json!({"type": "terminal-exit", "sessionId": sid, "exitCode": code}),
+                            Vec::new(),
+                        ));
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        self.terminal_tasks.insert(session_id.to_owned(), handle);
+        Ok((json!({"session": summary}), scrollback))
+    }
+
+    fn terminal_input(&self, request: &Value, bytes: &[u8]) -> Result<()> {
+        let terminal = self
+            .backends
+            .terminal
+            .as_ref()
+            .context("终端服务不可用")?;
+        let session_id = request["sessionId"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 80)
+            .context("终端会话 ID 无效")?;
+        if !bytes.is_empty() {
+            terminal.write_input(session_id, bytes)
+        } else if let Some(text) = request["data"].as_str() {
+            terminal.write_input(session_id, text.as_bytes())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn terminal_resize(&self, request: &Value) -> Result<()> {
+        let terminal = self
+            .backends
+            .terminal
+            .as_ref()
+            .context("终端服务不可用")?;
+        let session_id = request["sessionId"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 80)
+            .context("终端会话 ID 无效")?;
+        let cols = request["cols"].as_u64().unwrap_or(100) as u16;
+        let rows = request["rows"].as_u64().unwrap_or(30) as u16;
+        terminal.resize(session_id, cols, rows)
+    }
+
+    fn terminal_upload(&self, call: &Value, bytes: &[u8]) -> Result<Option<Value>> {
+        let terminal = self
+            .backends
+            .terminal
+            .as_ref()
+            .context("终端服务不可用")?;
+        let session_id = call["params"]["id"]
+            .as_str()
+            .context("终端会话 ID 无效")?;
+        let name = call["body"]["name"]
+            .as_str()
+            .context("上传文件名无效")?;
+        let directory = call["body"]["directory"].as_str();
+        let result = terminal.upload_file(session_id, name, bytes, directory)?;
+        Ok(Some(result))
+    }
+
+    fn terminal_download(&self, call: &Value) -> Result<(Value, Vec<u8>)> {
+        let terminal = self
+            .backends
+            .terminal
+            .as_ref()
+            .context("终端服务不可用")?;
+        let session_id = call["params"]["id"]
+            .as_str()
+            .context("终端会话 ID 无效")?;
+        let path = call["body"]["path"]
+            .as_str()
+            .context("下载路径无效")?;
+        let (name, bytes) = terminal.download_file(session_id, path)?;
+        Ok((json!({"name": name, "size": bytes.len()}), bytes))
+    }
+}
+
+impl Drop for DeviceSession {
+    fn drop(&mut self) {
+        for (_, handle) in self.terminal_tasks.drain() {
+            handle.abort();
+        }
     }
 }
