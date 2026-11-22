@@ -705,6 +705,10 @@ fn projects_inline_images_together_with_file_and_video_attachments() {
 
 #[test]
 fn projects_error_details_and_tool_image_attachments() {
+    let view_path = std::env::temp_dir()
+        .join("promo video")
+        .join("01b-hook-codex-phone.png");
+    let view_uri = url::Url::from_file_path(&view_path).unwrap().to_string();
     let steps = vec![
         json!({
             "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
@@ -721,7 +725,7 @@ fn projects_error_details_and_tool_image_attachments() {
             "type": "CORTEX_STEP_TYPE_VIEW_FILE",
             "status": "CORTEX_STEP_STATUS_DONE",
             "viewFile": {
-                "absolutePathUri": "file:///work/promo%20video/01b-hook-codex-phone.png"
+                "absolutePathUri": view_uri
             }
         }),
         json!({
@@ -756,7 +760,7 @@ fn projects_error_details_and_tool_image_attachments() {
     assert_eq!(projected[1]["attachments"][0]["name"], "01b-hook-codex-phone.png");
     assert_eq!(
         projected[1]["attachments"][0]["path"],
-        "/work/promo video/01b-hook-codex-phone.png"
+        view_path.to_string_lossy().as_ref()
     );
 
     assert_eq!(projected[2]["attachments"][0]["media"], "image");
