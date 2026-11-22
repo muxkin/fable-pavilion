@@ -973,7 +973,7 @@ mod tests {
         let (_summary, mut collected, mut rx) = service.attach(&session.id).unwrap();
         service.resize(&session.id, 120, 40).unwrap();
         service
-            .write_input(&session.id, b"echo HELLO_WIN_CONPTY\r\nexit\r\n")
+            .write_input(&session.id, b"echo HELLO_WIN_CONPTY\r\n")
             .unwrap();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         while tokio::time::Instant::now() < deadline {
@@ -989,6 +989,7 @@ mod tests {
                 }
             }
         }
+        let _ = service.write_input(&session.id, b"exit\r\n");
         assert!(
             String::from_utf8_lossy(&collected).contains("HELLO_WIN_CONPTY"),
             "unexpected Windows ConPTY output: {}",
