@@ -1208,6 +1208,7 @@
   "正在验证安装包…": "Verifying installer package…",
   "正在验证身份…": "Verifying identity…",
   "此会话只能添加 PNG、JPEG、WebP 或 GIF 图片": "Only PNG, JPEG, WebP, or GIF images can be added to this session",
+  "请先处理上方的审批或交互请求…": "Please handle the approval or prompt above first…",
   "此会话当前只读": "This session is currently read-only",
   "此会话暂时没有可显示的消息": "No messages to display in this session yet",
   "此会话有一个控制请求正在确认": "A control request is already awaiting confirmation in this session",

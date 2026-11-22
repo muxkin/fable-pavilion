@@ -116,7 +116,8 @@ impl Page {
             return None;
         }
         let step = self.steps.get(index - self.start)?;
-        (step["status"] == "CORTEX_STEP_STATUS_WAITING").then_some(step)
+        (step["status"] == "CORTEX_STEP_STATUS_WAITING" || super::pending_interaction(step))
+            .then_some(step)
     }
 
     fn parse(mut frame: Value, thread: &str, requested: Range<usize>) -> Result<Self> {

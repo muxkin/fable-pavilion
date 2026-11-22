@@ -1805,7 +1805,9 @@ export default tsxComponent(function AgentWorkspace(_props: {
                       ? view?.activeTurnId
                         ? (canSteer ? '给当前任务追加指令…' : '任务运行中，可以先写草稿…')
                         : `给 ${agentName} 发消息…`
-                      : '此会话当前只读'
+                      : view?.requests?.length
+                        ? '请先处理上方的审批或交互请求…'
+                        : '此会话当前只读'
                   }
                   uploading={uploading}
                   uploadItems={uploadThread === selected.id ? uploadJobs : []}

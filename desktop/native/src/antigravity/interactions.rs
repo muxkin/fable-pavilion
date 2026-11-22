@@ -88,21 +88,11 @@ pub(super) fn views_slice(
                 if let Some(question) = questions::QuestionBatch::read(step) {
                     return Some(question.view(&target, !read_only));
                 }
-                if let Some(approval) = approvals::CommandApproval::read(step, &target) {
+                if let Some(approval) = approvals::Approval::read(step, &target) {
                     return Some(approval.view(&target, !read_only));
                 }
-                if let Some(file_approval) = approvals::FileApproval::read(step, &target) {
-                    return Some(file_approval.view(&target, !read_only));
-                }
             }
-            Some(json!({
-                "id":format!("antigravity-{index}"),
-                "kind":"unsupported",
-                "title":"请在 Antigravity 本机处理请求",
-                "description":"此请求尚未提供远程响应支持",
-                "turnId":step["metadata"]["executionId"].as_str(),
-                "actionable":false,
-            }))
+            Some(unsupported_view(index, step))
         })
         .collect()
 }
@@ -134,14 +124,43 @@ pub(super) fn step_response(
     if let Some(question) = questions::QuestionBatch::read(step) {
         return reply_to_question(&question, &target, answer);
     }
-    if let Some(approval) = approvals::CommandApproval::read(step, &target) {
-        verify(&approval.view(&target, true), answer)?;
-        return approval.reply(&target, answer);
-    }
     let approval =
-        approvals::FileApproval::read(step, &target).context("Antigravity 请求已处理或过期")?;
+        approvals::Approval::read(step, &target).context("Antigravity 请求已处理或过期")?;
     verify(&approval.view(&target, true), answer)?;
     approval.reply(&target, answer)
+}
+
+fn unsupported_view(index: usize, step: &Value) -> Value {
+    let mut keys: Vec<&str> = step["requestedInteraction"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(key, _)| key.as_str())
+        .filter(|key| !key.is_empty() && key.len() <= 80 && !key.chars().any(char::is_control))
+        .collect();
+    keys.sort_unstable();
+    let step_type = step["type"]
+        .as_str()
+        .map(|kind| kind.trim_start_matches("CORTEX_STEP_TYPE_"))
+        .filter(|kind| !kind.is_empty() && kind.len() <= 80 && !kind.chars().any(char::is_control));
+    let description = match (keys.is_empty(), step_type) {
+        (false, Some(kind)) => format!(
+            "此请求尚未提供远程响应支持（交互：{}，步骤：{}）",
+            keys.join(", "),
+            kind
+        ),
+        (false, None) => format!("此请求尚未提供远程响应支持（交互：{}）", keys.join(", ")),
+        (true, Some(kind)) => format!("此请求尚未提供远程响应支持（步骤：{kind}）"),
+        (true, None) => "此请求尚未提供远程响应支持".to_owned(),
+    };
+    json!({
+        "id": format!("antigravity-{index}"),
+        "kind": "unsupported",
+        "title": "请在 Antigravity 本机处理请求",
+        "description": description,
+        "turnId": step["metadata"]["executionId"].as_str(),
+        "actionable": false,
+    })
 }
 
 pub(super) fn request_index(answer: &Response) -> Result<usize> {
