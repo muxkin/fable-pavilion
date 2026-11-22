@@ -4,9 +4,12 @@
 
 - **插件管理（双端联动）**：在网页端「我的 → 设置 → 插件管理」与桌面适配器本机设置页新增「插件」管理界面，支持自由添加、编辑、启停、删除与回滚插件实例（凭据仅保存环境变量名），桌面端同时支持从本地目录校验安装原生插件包。
 - **内置终端插件（默认禁用）**：新增跨平台内置终端插件，默认关闭，开启后可在工作台打开多标签交互式终端，支持 **lrzsz（ZMODEM `rz`/`sz`）**、**trzsz（`trz`/`tsz`，含 Windows ConPTY 兼容模式）**、内联图片显示（**Sixel / iTerm2 OSC 1337 / Kitty Graphics**）、剪贴板粘贴与拖拽传图、**OSC 52 剪贴板**、**OSC 7 工作目录跟踪**、搜索、移动端快捷按键栏以及可选的 **X11 / Wayland / 本机回环端口转发**。
+- **审批等待态体验优化**：存在待处理审批或交互请求时，工作台输入框提示明确引导先处理上方请求，不再误显示「此会话当前只读」。
 
 ## Rust 桌面适配器 1.0.2 — 2026-11-22
 
+- **默认登录自启**：Linux / Windows / macOS 桌面版首次启动默认开启「登录后自动启动」，并持久化用户的手动关闭选择，重启或自动更新后不会强行重新开启。
+- **Antigravity 移动端权限审批完善**：支持缺失 `sourceTrajectoryStepInfo`、CRLF 命令、文件读写/删除/目录访问以及通用 `requestedInteraction.permission` 权限请求的远程审批；绕过沙箱操作改为带风险提示的可审批卡片；按原生 `approvalScopeFilter` 支持会话级授权；对非权限专属交互展示安全类型提示。
 - **纯 Rust 跨平台 PTY 与 Windows ConPTY**：Linux / macOS 使用原生 POSIX PTY，Windows 使用原生 Win32 **ConPTY**（含 Job Object 子进程树清理），自动发现 PowerShell 7、Windows PowerShell、CMD、Git Bash 与 WSL，并支持 256 KiB 滚动回放重连。
 - **插件热管理与持久化**：新增 `plugin-settings.json` 持久化内置终端配置（默认 `enabled: false`），`instances.json` 新增向后兼容的 `enabled` 字段并支持非 Codex 实例在线热启停与增删。
 - **显示与回环端口转发**：内置可选的按会话 X11（`DISPLAY` + `XAUTHORITY`）、Unix Wayland（`WAYLAND_DISPLAY`）以及仅限本机回环的 TCP/HTTP 端口转发能力。
