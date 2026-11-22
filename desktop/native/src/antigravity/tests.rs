@@ -702,3 +702,107 @@ fn projects_inline_images_together_with_file_and_video_attachments() {
     assert_eq!(attachments[1]["path"], mp4_path.to_string_lossy().as_ref());
     assert_eq!(attachments[2]["name"], "spec.pdf");
 }
+
+#[test]
+fn projects_error_details_and_tool_image_attachments() {
+    let steps = vec![
+        json!({
+            "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+            "status": "CORTEX_STEP_STATUS_ERROR",
+            "errorMessage": {
+                "error": {
+                    "userErrorMessage": "Error Unknown: Agent execution terminated due to error.",
+                    "shortError": "Agent execution terminated",
+                    "errorId": "err-574"
+                }
+            }
+        }),
+        json!({
+            "type": "CORTEX_STEP_TYPE_VIEW_FILE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "viewFile": {
+                "absolutePathUri": "file:///work/promo%20video/01b-hook-codex-phone.png"
+            }
+        }),
+        json!({
+            "type": "CORTEX_STEP_TYPE_GENERATE_IMAGE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "generateImage": {
+                "imageName": "cover.png",
+                "outputPath": "/work/promo/cover.png"
+            }
+        }),
+        json!({
+            "type": "CORTEX_STEP_TYPE_GENERIC",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "generic": {
+                "toolName": "read_file",
+                "args": { "Path": "/work/promo/frame.webp" }
+            }
+        }),
+    ];
+    let projected = messages(&steps, 0, false);
+    assert_eq!(projected.len(), 4);
+    assert_eq!(
+        projected[0]["text"],
+        "Error Unknown: Agent execution terminated due to error."
+    );
+    let details = projected[0]["details"].as_str().unwrap();
+    assert!(details.contains("Error ID: err-574"));
+    assert!(details.contains("Agent execution terminated"));
+
+    assert_eq!(projected[1]["text"], "读取 01b-hook-codex-phone.png");
+    assert_eq!(projected[1]["attachments"][0]["media"], "image");
+    assert_eq!(projected[1]["attachments"][0]["name"], "01b-hook-codex-phone.png");
+    assert_eq!(
+        projected[1]["attachments"][0]["path"],
+        "/work/promo video/01b-hook-codex-phone.png"
+    );
+
+    assert_eq!(projected[2]["attachments"][0]["media"], "image");
+    assert_eq!(projected[2]["attachments"][0]["path"], "/work/promo/cover.png");
+
+    assert_eq!(projected[3]["text"], "读取 frame.webp");
+    assert_eq!(projected[3]["attachments"][0]["media"], "image");
+    assert_eq!(projected[3]["attachments"][0]["path"], "/work/promo/frame.webp");
+}
+
+#[test]
+fn queue_snapshot_retains_paused_non_when_idle_user_messages() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    // Protobuf-encoded Step { user_input: UserInput { items: [TextItem { text: "怎么样了?" }] } }
+    // field 19 (0x9a 0x01) -> UserInput { field 3 (0x1a) -> TextItem { field 1 (0x0a) -> bytes } }
+    let text = "怎么样了?".as_bytes();
+    let mut item = vec![0x0a, text.len() as u8];
+    item.extend_from_slice(text);
+    let mut user_input = vec![0x1a, item.len() as u8];
+    user_input.extend_from_slice(&item);
+    let mut step = vec![0x9a, 0x01, user_input.len() as u8];
+    step.extend_from_slice(&user_input);
+    let frame = json!({
+        "update": {
+            "conversationId": "thread-1",
+            "status": "CASCADE_RUN_STATUS_IDLE",
+            "mainTrajectoryUpdate": {},
+            "pendingAgentMessagesUpdate": {
+                "totalLength": 1,
+                "indices": [0],
+                "pendingAgentMessages": [{
+                    "id": "pending-1",
+                    "recipient": "thread-1",
+                    "deliveryStrategy": "MESSAGE_DELIVERY_STRATEGY_UNSPECIFIED",
+                    "stepPayload": STANDARD.encode(&step),
+                }]
+            }
+        }
+    });
+    let snapshot = queue::Snapshot::from_frame(&frame, "thread-1").unwrap();
+    let mut view = json!({});
+    snapshot.display(&mut view);
+    let queued = view["queuedMessages"].as_array().unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0]["id"], "pending-1");
+    assert_eq!(queued[0]["text"], "怎么样了?");
+    assert_eq!(queued[0]["status"], "paused");
+    assert!(queued[0]["reason"].as_str().is_some());
+}

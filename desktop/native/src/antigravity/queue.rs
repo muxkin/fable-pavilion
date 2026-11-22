@@ -75,7 +75,7 @@ impl Snapshot {
         let mut ids = HashSet::new();
         let mut rows = Vec::new();
         for message in messages {
-            if message["deliveryStrategy"] != WHEN_IDLE || message["recipient"] != thread {
+            if message["recipient"] != thread {
                 continue;
             }
             let Some(encoded) = message["stepPayload"].as_str() else {
@@ -105,7 +105,15 @@ impl Snapshot {
             if text.is_empty() {
                 text = input.response;
             }
-            rows.push(json!({"id":id,"text":&text[..text.floor_char_boundary(text.len().min(12_000))],"status":"queued"}));
+            let mut row = json!({
+                "id": id,
+                "text": &text[..text.floor_char_boundary(text.len().min(12_000))],
+                "status": if running { "queued" } else { "paused" },
+            });
+            if !running {
+                row["reason"] = json!("Antigravity 已暂停自动派发，可立即发送或移除");
+            }
+            rows.push(row);
         }
         Ok(Self {
             fingerprint: hash(&json!(messages).to_string()),

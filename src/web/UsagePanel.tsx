@@ -3,6 +3,8 @@ import { nextTick, shallowRef, useId } from 'vue';
 import { writeRef, watchRender } from './render-effects';
 
 import type { UsageResetResult, UsageSnapshot } from '../shared/usage';
+type UsageBucket = NonNullable<NonNullable<UsageSnapshot['value']>['buckets']>[number];
+type UsageWindow = UsageBucket['windows'][number];
 import { RpcError } from '../shared/rpc';
 import { messaging, useMessaging } from './messaging/context';
 import { deviceSession } from './device-session';
@@ -30,12 +32,84 @@ function remaining(used: number) {
   return Math.round(Math.max(0, Math.min(100, 100 - used)));
 }
 
+function normalizeToken(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function matchUsageBucket(
+  buckets: UsageBucket[],
+  currentModel?: string | null,
+  currentModelName?: string | null,
+): UsageBucket | undefined {
+  if (!buckets.length) return undefined;
+  if (buckets.length === 1) return buckets[0];
+  const candidates = [currentModelName, currentModel]
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .map(normalizeToken)
+    .filter(Boolean);
+  if (candidates.length) {
+    let best: { bucket: UsageBucket; score: number } | undefined;
+    for (const bucket of buckets) {
+      const bName = normalizeToken(bucket.name);
+      const bId = normalizeToken(bucket.id);
+      let score = 0;
+      for (const model of candidates) {
+        if (bName && (model === bName || model.includes(bName) || bName.includes(model))) {
+          score = Math.max(score, 100 + bName.length);
+        }
+        const modelTokens = model.split(' ').filter((t) => t.length >= 2);
+        const bucketTokens = bName
+          .split(' ')
+          .filter((t) => t.length >= 2 && !['models', 'model', 'and', 'the'].includes(t));
+        if (bucketTokens.length && bucketTokens.every((tok) => modelTokens.includes(tok))) {
+          score = Math.max(score, 80 + bucketTokens.length * 10);
+        }
+        const isThirdParty = /\b(claude|opus|sonnet|haiku|gpt|o1|o3|o4)\b/.test(model);
+        const bucketThirdParty = /\b(claude|gpt|3p)\b/.test(bName) || /\b(claude|gpt|3p)\b/.test(bId);
+        if (isThirdParty && bucketThirdParty) score = Math.max(score, 60);
+        const isSpark = /\bspark\b/.test(model);
+        const bucketSpark = /\bspark\b/.test(bName) || /\bspark\b/.test(bId);
+        if (isSpark && bucketSpark) score = Math.max(score, 70);
+        const isGemini = /\bgemini\b/.test(model);
+        const bucketGenericGemini = /\bgemini\b/.test(bName) && /\bmodels?\b/.test(bName);
+        if (isGemini && bucketGenericGemini) score = Math.max(score, 40);
+      }
+      if (score > 0 && (!best || score > best.score)) best = { bucket, score };
+    }
+    if (best) return best.bucket;
+  }
+  return buckets.find(({ id }) => id === 'codex') ?? buckets[0];
+}
+
+function selectSummaryWindow(bucket: UsageBucket | undefined): UsageWindow | undefined {
+  if (!bucket?.windows.length) return undefined;
+  return (
+    bucket.windows.find(
+      ({ durationMinutes, label }) =>
+        durationMinutes === 300 || /(?:^|\s)5\s*(?:小时|h)\b/i.test(label),
+    ) ??
+    bucket.windows
+      .filter((w) => typeof w.durationMinutes === 'number' && w.durationMinutes > 0)
+      .sort((a, b) => (a.durationMinutes ?? Infinity) - (b.durationMinutes ?? Infinity))[0] ??
+    bucket.windows[0]
+  );
+}
+
+function compactWindowLabel(window: UsageWindow | undefined): string {
+  if (!window) return '用量';
+  if (window.durationMinutes === 300 || /(?:^|\s)5\s*(?:小时|h)\b/i.test(window.label)) return '5h';
+  if (window.durationMinutes === 10080 || /每周|周/.test(window.label)) return '每周';
+  return window.label.replace(/用量$/, '').trim() || '余量';
+}
+
 export const UsagePanel = tsxComponent(function UsagePanel(_props: {
   backendId: string;
   name: string;
   active: boolean;
   online: boolean;
   refreshOnOpen?: boolean;
+  currentModel?: string | null;
+  currentModelName?: string | null;
 }) {
   const snapshotState = shallowRef<UsageSnapshot>({ state: 'loading' });
   const setSnapshot = (next: UsageSnapshot) => {
@@ -66,7 +140,7 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
   const watchMobileOpen = watchRender();
   const watchResize = watchRender();
   const watchResetScope = watchRender();
-  return ({ backendId, name, active, online, refreshOnOpen }) => {
+  return ({ backendId, name, active, online, refreshOnOpen, currentModel, currentModelName }) => {
     const snapshot = snapshotState.value;
     const mobileOpen = mobileOpenState.value;
     const desktopOpen = desktopOpenState.value;
@@ -138,10 +212,8 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
     const state = online ? snapshot.state : 'stale';
     const buckets = value?.buckets ?? [];
     const codexBucket = buckets.find(({ id }) => id === 'codex');
-    const summary =
-      codexBucket?.windows.find(({ durationMinutes }) => durationMinutes === 300) ??
-      codexBucket?.windows[0] ??
-      (buckets.length === 1 && buckets[0].windows.length === 1 ? buckets[0].windows[0] : undefined);
+    const summaryBucket = matchUsageBucket(buckets, currentModel, currentModelName);
+    const summary = selectSummaryWindow(summaryBucket);
     const credits = value?.credits;
     const resetCount = value?.rateLimitResetCredits?.availableCount;
     const eligible = codexBucket?.windows.some(
@@ -249,6 +321,12 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
       summary && Number.isFinite(summary.usedPercent) ? remaining(summary.usedPercent) : undefined;
     const displayedPercent = state === 'current' ? summaryPercent : undefined;
     const summaryName = summary?.label.replace(/用量$/, '');
+    const summaryBucketLabel =
+      summaryBucket && summaryBucket.id !== 'codex' && summaryBucket.name !== name
+        ? summaryBucket.name
+        : name;
+    const triggerText =
+      displayedPercent !== undefined ? compactWindowLabel(summary) : '用量';
     const status = !online
       ? '等待电脑连接'
       : {
@@ -260,7 +338,7 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
     const triggerLabel =
       displayedPercent === undefined
         ? `${name} 用量，${status}`
-        : `${name} 用量，${summaryName}剩余 ${displayedPercent}%`;
+        : `${summaryBucketLabel} 用量，${summaryName}剩余 ${displayedPercent}%`;
 
     const content = (
       <section class="usage-panel" aria-label="账户用量">
@@ -412,7 +490,7 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
           <span class="usage-trigger-icon" aria-hidden="true">
             <Icon name="gauge" size={18} />
           </span>
-          <span class="usage-trigger-label">用量</span>
+          <span class="usage-trigger-label">{triggerText}</span>
           {displayedPercent !== undefined && (
             <span class="usage-trigger-percent" aria-hidden="true">
               {displayedPercent}%

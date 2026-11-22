@@ -2036,5 +2036,11 @@
   "鼓掌": "Clap",
   "（偏高）": "(High)",
   "，已回答": ", answered",
-  "，未回答": ", unanswered"
+  "，未回答": ", unanswered",
+  "排队消息": "Queued Messages",
+  "当前任务结束后自动发送": "Sends automatically after current task finishes",
+  "队列已暂停待发，可立即发送或移除": "Queue paused — send now or remove",
+  "立即发送": "Send now",
+  "移除排队消息": "Remove queued message",
+  "余量": "Left"
 }

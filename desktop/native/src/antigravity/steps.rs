@@ -11,6 +11,45 @@ fn short_name(path: &str) -> &str {
         .unwrap_or(trimmed)
 }
 
+fn decoded_file_path(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with("file:")
+        && let Ok(url) = url::Url::parse(trimmed)
+        && let Ok(path) = url.to_file_path()
+    {
+        return path.to_string_lossy().into_owned();
+    }
+    trimmed.strip_prefix("file://").unwrap_or(trimmed).to_owned()
+}
+
+fn is_image_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "gif" | "avif" | "bmp"
+            )
+        })
+}
+
+fn image_attachment(raw_path: &str) -> Option<Value> {
+    let decoded = decoded_file_path(raw_path);
+    if decoded.is_empty() || !is_image_path(&decoded) {
+        return None;
+    }
+    Some(json!({
+        "name": short_name(&decoded),
+        "path": decoded,
+        "media": "image",
+    }))
+}
+
+fn non_empty_str<'a>(value: &'a Value) -> Option<&'a str> {
+    value.as_str().map(str::trim).filter(|s| !s.is_empty())
+}
+
 fn step_path<'a>(step: &'a Value, keys: &[(&str, &str)]) -> Option<&'a str> {
     for (section, field) in keys {
         if let Some(value) = step[*section][*field]
@@ -233,10 +272,19 @@ fn project_tool_step(step: &Value, id: &str, turn: &Value) -> Value {
                 ],
             )
             .unwrap_or("文件");
-            message["text"] = json!(format!("读取 {}", short_name(path)));
+            let decoded = decoded_file_path(path);
+            let display_name = if path == "文件" {
+                "文件"
+            } else {
+                short_name(&decoded)
+            };
+            message["text"] = json!(format!("读取 {display_name}"));
             message["toolActions"] = json!(["read-file"]);
             if path != "文件" {
-                message["details"] = json!(path);
+                message["details"] = json!(decoded);
+                if let Some(attachment) = image_attachment(path) {
+                    message["attachments"] = json!([attachment]);
+                }
             }
         }
         "LIST_DIR" | "FIND_BY_NAME" => {
@@ -343,6 +391,21 @@ fn project_tool_step(step: &Value, id: &str, turn: &Value) -> Value {
                 .unwrap_or("图片");
             message["text"] = json!(format!("生成图片 · {name}"));
             message["toolActions"] = json!(["call-tool"]);
+            if let Some(path) = step_path(
+                step,
+                &[
+                    ("generateImage", "imagePath"),
+                    ("generateImage", "outputPath"),
+                    ("generateImage", "artifactPath"),
+                    ("generateImage", "imageUri"),
+                    ("generateImage", "uri"),
+                ],
+            ) {
+                message["details"] = json!(decoded_file_path(path));
+                if let Some(attachment) = image_attachment(path) {
+                    message["attachments"] = json!([attachment]);
+                }
+            }
         }
         "TASK_BOUNDARY" => {
             let task = step["taskBoundary"]["taskName"]
@@ -389,15 +452,61 @@ fn project_tool_step(step: &Value, id: &str, turn: &Value) -> Value {
             {
                 message["text"] = json!(format!("命令 · {cmd}"));
             } else {
-                message["text"] = json!(format!("工具 · {name}"));
+                let file_arg = ["Path", "AbsolutePath", "TargetFile", "FilePath"]
+                    .into_iter()
+                    .find_map(|key| non_empty_str(&step["generic"]["args"][key]));
+                if let Some(path) = file_arg {
+                    let decoded = decoded_file_path(path);
+                    message["text"] = json!(if name.eq_ignore_ascii_case("read_file") {
+                        format!("读取 {}", short_name(&decoded))
+                    } else {
+                        format!("工具 · {name} · {}", short_name(&decoded))
+                    });
+                    message["details"] = json!(decoded);
+                    if let Some(attachment) = image_attachment(path) {
+                        message["attachments"] = json!([attachment]);
+                    }
+                } else {
+                    message["text"] = json!(format!("工具 · {name}"));
+                }
             }
         }
         "ERROR_MESSAGE" => {
-            message["text"] = json!(
-                step["errorMessage"]["message"]
-                    .as_str()
-                    .unwrap_or("Antigravity 操作错误")
-            );
+            let err = &step["errorMessage"];
+            let nested = &err["error"];
+            let summary = non_empty_str(&nested["userErrorMessage"])
+                .or_else(|| non_empty_str(&nested["shortError"]))
+                .or_else(|| non_empty_str(&nested["message"]))
+                .or_else(|| non_empty_str(&err["message"]))
+                .or_else(|| non_empty_str(&err["modelErrorMessage"]))
+                .or_else(|| non_empty_str(&nested["fullError"]))
+                .unwrap_or("Antigravity 操作错误");
+            message["text"] = json!(summary);
+            let mut details = Vec::new();
+            if let Some(error_id) = non_empty_str(&nested["errorId"])
+                .or_else(|| non_empty_str(&err["errorId"]))
+                .or_else(|| non_empty_str(&step["metadata"]["errorId"]))
+            {
+                details.push(format!("Error ID: {error_id}"));
+            }
+            for extra in [
+                non_empty_str(&nested["shortError"]),
+                non_empty_str(&nested["fullError"]),
+                non_empty_str(&err["modelErrorMessage"]),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if extra != summary && !details.iter().any(|existing| existing == extra) {
+                    details.push(extra.to_owned());
+                }
+            }
+            if !details.is_empty() {
+                message["details"] = json!(details.join("\n"));
+            }
+            if message["phase"].is_null() {
+                message["phase"] = json!("CORTEX_STEP_STATUS_ERROR");
+            }
         }
         "NOTIFY_USER" => {
             message["text"] = json!(

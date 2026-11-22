@@ -51,6 +51,7 @@ export function translatePatternZhToEn(
     [/^当前模型：(.+?)（点击修改）$/, (_m, lbl) => `Model: ${lbl} (click to change)`],
     [/^查看\s*(\d+)\s*项工具活动$/, (_m, n) => `View ${n} tool activities`],
     [/^查看\s*(\d+)\s*项处理进度$/, (_m, n) => `View ${n} progress items`],
+    [/^排队消息\s*·\s*(\d+)$/, (_m, n) => `Queued Messages · ${n}`],
     [/^新建\s+(.+?)\s+会话$/, (_m, name) => `New ${name} Session`],
     [/^(.+?)的最近会话$/, (_m, name) => `Recent sessions on ${name}`],
     [/^已答\s*(\d+)\/(\d+)$/, (_m, a, b) => `Answered ${a}/${b}`],

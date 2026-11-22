@@ -251,8 +251,16 @@ fn collect_cited_paths(steps: &[Value], workspace_roots: &[PathBuf]) -> Vec<Path
             ("multiReplaceFileContent", "targetFileUri"),
             ("generateImage", "imagePath"),
             ("generateImage", "outputPath"),
+            ("generateImage", "artifactPath"),
+            ("generateImage", "imageUri"),
+            ("generateImage", "uri"),
         ] {
             if let Some(raw) = step[section][field].as_str() {
+                push_raw(raw);
+            }
+        }
+        for key in ["Path", "AbsolutePath", "TargetFile", "FilePath"] {
+            if let Some(raw) = step["generic"]["args"][key].as_str() {
                 push_raw(raw);
             }
         }

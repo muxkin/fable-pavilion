@@ -1258,14 +1258,17 @@ export default tsxComponent(function AgentWorkspace(_props: {
       outgoingOperation?.state === 'rejected' || outgoingOperation?.state === 'failed';
     const echoed =
       outgoingOperation &&
-      messages.some(
+      (messages.some(
         (message) =>
           message.role === 'user' &&
           (message.clientMessageId === outgoingOperation.id ||
             (outgoingOperation.kind === 'send' &&
               !!outgoingOperation.turnId &&
               message.turnId === outgoingOperation.turnId)),
-      );
+      ) ||
+        (outgoingOperation.state === 'accepted' &&
+          !!outgoing?.draft.text.trim() &&
+          !!view?.queuedMessages?.some((item) => item.text.trim() === outgoing.draft.text.trim())));
     watchOutgoingOperation(() => {
       if (outgoingOperation?.state === 'accepted' && echoed) drafts.clearOutgoing(outgoingOperation);
     }, [outgoingOperation, echoed]);
@@ -1462,6 +1465,8 @@ export default tsxComponent(function AgentWorkspace(_props: {
                   active={active}
                   online={stream}
                   refreshOnOpen={antigravity}
+                  currentModel={messageModel?.id ?? view?.model ?? undefined}
+                  currentModelName={messageModel?.name ?? view?.modelName ?? undefined}
                 />
                 {active && voiceHost && selected && selected.id !== 'new' && voiceMode && (
                   <button
@@ -1682,6 +1687,70 @@ export default tsxComponent(function AgentWorkspace(_props: {
                 />
               </div>
               <section class="composer">
+                {!!view?.queuedMessages?.length && (
+                  <div class="composer-queue-bar" role="region" aria-label="排队消息">
+                    <div class="composer-queue-head">
+                      <strong>排队消息 · {view.queuedMessages.length}</strong>
+                      <span>
+                        {view.activeTurnId
+                          ? '当前任务结束后自动发送'
+                          : '队列已暂停待发，可立即发送或移除'}
+                      </span>
+                    </div>
+                    <ul class="composer-queue-list">
+                      {view.queuedMessages.map((item) => {
+                        const canFlush =
+                          !view.activeTurnId &&
+                          view.canSend &&
+                          !!view.queueFingerprint &&
+                          !busy &&
+                          !pending &&
+                          stream;
+                        return (
+                          <li key={item.id} class="composer-queue-item">
+                            <span class="composer-queue-text" title={item.text}>
+                              {item.text}
+                            </span>
+                            <div class="composer-queue-actions">
+                              {canFlush && (
+                                <button
+                                  type="button"
+                                  class="composer-queue-send"
+                                  onClick={() => {
+                                    void act('queue-remove', { messageId: item.id }).then((opId) => {
+                                      if (opId && operationSnapshots.current.get(opId)?.state === 'completed') {
+                                        void act('send', undefined, {
+                                          text: item.text,
+                                          uploads: [],
+                                          skills: [],
+                                          plugins: [],
+                                        });
+                                      }
+                                    });
+                                  }}
+                                >
+                                  立即发送
+                                </button>
+                              )}
+                              {view.queueFingerprint && (
+                                <button
+                                  type="button"
+                                  class="composer-queue-remove"
+                                  disabled={busy || pending || !stream}
+                                  aria-label="移除排队消息"
+                                  title="移除排队消息"
+                                  onClick={() => void act('queue-remove', { messageId: item.id })}
+                                >
+                                  <Icon name="close" size={14} />
+                                </button>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
                 {error && (
                   <p class="error" role="alert">
                     {error}
