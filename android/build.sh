@@ -27,8 +27,8 @@ case "$verify" in
     ;;
   *) echo 'FABLE_ANDROID_FRONTEND_VERIFY must be 0 or 1.' >&2; exit 1 ;;
 esac
-version=${FABLE_ANDROID_VERSION:-1.0.0}
-version_code=${FABLE_ANDROID_VERSION_CODE:-17}
+version=${FABLE_ANDROID_VERSION:-1.0.1}
+version_code=${FABLE_ANDROID_VERSION_CODE:-18}
 output=${1:-"$android_dir/build/fable-pavilion-$version.apk"}
 
 if [[ ! "$origin" =~ ^https://[a-zA-Z0-9.-]+(:[0-9]{1,5})?$ ]]; then

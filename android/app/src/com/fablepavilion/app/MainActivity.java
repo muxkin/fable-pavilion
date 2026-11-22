@@ -156,7 +156,7 @@ public final class MainActivity extends Activity {
     private void applyWebViewTheme(WebView view) {
         if (view == null) return;
         boolean dark = darkMode();
-        view.setBackgroundColor(Color.parseColor(dark ? "#151B20" : "#FFFCF5"));
+        view.setBackgroundColor(Color.parseColor(dark ? "#172329" : "#FFFCF5"));
         WebSettings settings = view.getSettings();
         if (Build.VERSION.SDK_INT >= 33) {
             settings.setAlgorithmicDarkeningAllowed(false);
@@ -178,7 +178,7 @@ public final class MainActivity extends Activity {
         super.onConfigurationChanged(newConfig);
         configureSystemBars();
         boolean dark = darkMode();
-        if (offline != null) offline.setBackgroundColor(Color.parseColor(dark ? "#151B20" : "#FFFCF5"));
+        if (offline != null) offline.setBackgroundColor(Color.parseColor(dark ? "#172329" : "#FFFCF5"));
         if (unavailableSummary != null)
             unavailableSummary.setTextColor(Color.parseColor(dark ? "#F4F0E8" : "#202F37"));
         applyWebViewTheme(web);
@@ -187,7 +187,7 @@ public final class MainActivity extends Activity {
 
     private void configureSystemBars() {
         boolean dark = darkMode();
-        int background = Color.parseColor(dark ? "#151B20" : "#FFFCF5");
+        int background = Color.parseColor(dark ? "#172329" : "#FFFCF5");
         root.setBackgroundColor(background);
         getWindow().setStatusBarColor(background);
         getWindow().setNavigationBarColor(background);
@@ -216,7 +216,7 @@ public final class MainActivity extends Activity {
         offline.setOrientation(LinearLayout.VERTICAL);
         offline.setGravity(Gravity.CENTER);
         offline.setPadding(32, 32, 32, 32);
-        offline.setBackgroundColor(Color.parseColor(darkMode() ? "#151B20" : "#FFFCF5"));
+        offline.setBackgroundColor(Color.parseColor(darkMode() ? "#172329" : "#FFFCF5"));
         TextView summary = unavailableSummary = new TextView(this);
         summary.setText("暂时无法打开子虚亭");
         summary.setTextSize(18);
@@ -643,7 +643,7 @@ public final class MainActivity extends Activity {
         final long id = ++startupId;
         startingFrontend = true;
         retryUrl = target;
-        unavailableSummary.setText("正在打开已验签的前端…");
+        unavailableSummary.setText("");
         retryButton.setVisibility(View.GONE);
         resetSite.setVisibility(View.GONE);
         offline.setVisibility(View.VISIBLE);
