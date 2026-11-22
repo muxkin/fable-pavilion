@@ -171,6 +171,7 @@ impl Drop for Manager {
 }
 
 pub(crate) struct Panel {
+    directory: PathBuf,
     instance: Instance,
     auth: Uuid,
     tickets: Mutex<HashMap<Uuid, Instant>>,
@@ -201,7 +202,13 @@ impl Manager {
             secret: Uuid::new_v4(),
         };
         let (stop, receive) = watch::channel(None);
+        let directory = owner
+            .endpoint
+            .parent()
+            .context("无法定位状态目录")?
+            .to_path_buf();
         let state = Arc::new(Panel {
+            directory,
             instance,
             auth: Uuid::new_v4(),
             tickets: Mutex::new(HashMap::new()),
@@ -769,7 +776,7 @@ impl Panel {
 
     async fn configure_startup(&self, settings: Result<StartupSettings>) -> Result<()> {
         let enabled = settings?.enabled;
-        set_startup(enabled).await?;
+        set_startup(&self.directory, enabled).await?;
         *self.startup.lock().expect("startup mutex") = Some(enabled);
         Ok(())
     }
@@ -794,9 +801,10 @@ fn startup_state() -> Option<bool> {
     None
 }
 
-async fn set_startup(enabled: bool) -> Result<()> {
+async fn set_startup(directory: &Path, enabled: bool) -> Result<()> {
     #[cfg(feature = "desktop")]
     {
+        let directory = directory.to_path_buf();
         tokio::task::spawn_blocking(move || {
             let startup = crate::desktop_shell::startup()?;
             if enabled {
@@ -804,13 +812,14 @@ async fn set_startup(enabled: bool) -> Result<()> {
             } else {
                 startup.disable()?;
             }
+            crate::desktop_shell::save_startup_preference(&directory, enabled)?;
             Ok(())
         })
         .await?
     }
     #[cfg(not(feature = "desktop"))]
     {
-        let _ = enabled;
+        let _ = (directory, enabled);
         anyhow::bail!("当前构建不提供登录自启动")
     }
 }

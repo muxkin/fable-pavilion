@@ -1,7 +1,5 @@
 use crate::{ADAPTER_ICON, management::TrayEvent};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 #[cfg(target_os = "macos")]
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 use tray_icon::{
@@ -143,6 +141,128 @@ pub fn startup() -> Result<AutoLaunch> {
     Ok(setup.build()?)
 }
 
+const STARTUP_PREFERENCE_FILE: &str = "native-startup-settings.json";
+const MAX_STARTUP_PREFERENCE: u64 = 4096;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+struct StartupPreference {
+    enabled: bool,
+}
+
+trait StartupControl {
+    fn is_enabled(&self) -> Result<bool>;
+    fn is_explicitly_disabled(&self) -> Result<bool> {
+        Ok(false)
+    }
+    fn enable(&self) -> Result<()>;
+}
+
+#[cfg(target_os = "linux")]
+impl StartupControl for linux_startup::Startup {
+    fn is_enabled(&self) -> Result<bool> {
+        Self::is_enabled(self)
+    }
+
+    fn is_explicitly_disabled(&self) -> Result<bool> {
+        Self::is_explicitly_disabled(self)
+    }
+
+    fn enable(&self) -> Result<()> {
+        Self::enable(self)
+    }
+}
+
+#[cfg(windows)]
+impl StartupControl for startup_windows::Startup {
+    fn is_enabled(&self) -> Result<bool> {
+        Self::is_enabled(self)
+    }
+
+    fn enable(&self) -> Result<()> {
+        Self::enable(self)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl StartupControl for AutoLaunch {
+    fn is_enabled(&self) -> Result<bool> {
+        Ok(Self::is_enabled(self)?)
+    }
+
+    fn enable(&self) -> Result<()> {
+        Ok(Self::enable(self)?)
+    }
+}
+
+fn read_startup_preference(directory: &std::path::Path) -> Result<Option<bool>> {
+    use std::io::{self, Read};
+
+    let path = directory.join(STARTUP_PREFERENCE_FILE);
+    match crate::state::private_file(&path, false) {
+        Ok(file) => {
+            let preference: StartupPreference =
+                serde_json::from_reader(file.take(MAX_STARTUP_PREFERENCE))
+                    .context("无法解析登录自启动配置")?;
+            Ok(Some(preference.enabled))
+        }
+        Err(error)
+            if error
+                .downcast_ref::<io::Error>()
+                .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub fn save_startup_preference(directory: &std::path::Path, enabled: bool) -> Result<()> {
+    crate::state::private_directory(directory)?;
+    let path = directory.join(STARTUP_PREFERENCE_FILE);
+    let temporary = directory.join(format!(
+        "{STARTUP_PREFERENCE_FILE}.{}.tmp",
+        uuid::Uuid::new_v4()
+    ));
+    let write = (|| -> Result<()> {
+        let file = crate::state::private_file(&temporary, true)?;
+        serde_json::to_writer(&file, &StartupPreference { enabled })?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, &path)?;
+        Ok(())
+    })();
+    if write.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    write
+}
+
+pub fn initialize_default_startup(directory: &std::path::Path) -> Result<()> {
+    if read_startup_preference(directory)?.is_some() {
+        return Ok(());
+    }
+    let entry = startup()?;
+    initialize_default_startup_with(directory, &entry)
+}
+
+fn initialize_default_startup_with(
+    directory: &std::path::Path,
+    control: &impl StartupControl,
+) -> Result<()> {
+    if read_startup_preference(directory)?.is_some() {
+        return Ok(());
+    }
+    if control.is_explicitly_disabled()? {
+        save_startup_preference(directory, false)?;
+        return Ok(());
+    }
+    if !control.is_enabled()? {
+        control.enable()?;
+    }
+    save_startup_preference(directory, true)?;
+    Ok(())
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn localized_display_name(locale: &str) -> &'static str {
     let language = locale
@@ -253,6 +373,83 @@ fn localizes_tray_display_name() {
     }
     for language in [0x0409, 0x0809, 0x0407] {
         assert_eq!(windows_display_name(language), "Fable Pavilion Adapter");
+    }
+}
+
+#[cfg(test)]
+mod startup_default_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    struct FakeStartup {
+        enabled: Cell<bool>,
+        explicitly_disabled: bool,
+        enable_calls: Cell<usize>,
+    }
+
+    impl FakeStartup {
+        fn new(enabled: bool, explicitly_disabled: bool) -> Self {
+            Self {
+                enabled: Cell::new(enabled),
+                explicitly_disabled,
+                enable_calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl StartupControl for FakeStartup {
+        fn is_enabled(&self) -> Result<bool> {
+            Ok(self.enabled.get())
+        }
+
+        fn is_explicitly_disabled(&self) -> Result<bool> {
+            Ok(self.explicitly_disabled)
+        }
+
+        fn enable(&self) -> Result<()> {
+            self.enable_calls.set(self.enable_calls.get() + 1);
+            self.enabled.set(true);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn enables_startup_once_by_default_and_respects_later_opt_out() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state = temp.path().join("state");
+        let fake = FakeStartup::new(false, false);
+
+        initialize_default_startup_with(&state, &fake)?;
+        assert!(fake.enabled.get());
+        assert_eq!(fake.enable_calls.get(), 1);
+        assert_eq!(read_startup_preference(&state)?, Some(true));
+
+        // Removing the OS entry after initial setup must not forcibly re-enable it.
+        fake.enabled.set(false);
+        initialize_default_startup_with(&state, &fake)?;
+        assert!(!fake.enabled.get());
+        assert_eq!(fake.enable_calls.get(), 1);
+
+        // Explicit UI opt-out persists and keeps autostart off.
+        save_startup_preference(&state, false)?;
+        assert_eq!(read_startup_preference(&state)?, Some(false));
+        initialize_default_startup_with(&state, &fake)?;
+        assert!(!fake.enabled.get());
+        assert_eq!(fake.enable_calls.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn respects_existing_explicit_os_disable_entry() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state = temp.path().join("state");
+        let fake = FakeStartup::new(false, true);
+
+        initialize_default_startup_with(&state, &fake)?;
+        assert!(!fake.enabled.get());
+        assert_eq!(fake.enable_calls.get(), 0);
+        assert_eq!(read_startup_preference(&state)?, Some(false));
+        Ok(())
     }
 }
 

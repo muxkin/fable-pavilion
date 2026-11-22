@@ -60,6 +60,10 @@ impl Startup {
         Ok(self.contents()?.is_some_and(|content| enabled(&content)))
     }
 
+    pub(super) fn is_explicitly_disabled(&self) -> Result<bool> {
+        Ok(self.contents()?.is_some_and(|content| !enabled(&content)))
+    }
+
     pub fn refresh(&self) -> Result<()> {
         let Some(content) = self.contents()?.filter(|content| enabled(content)) else {
             return Ok(());

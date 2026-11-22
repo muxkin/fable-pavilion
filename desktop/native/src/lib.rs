@@ -303,6 +303,16 @@ pub fn start() -> Result<()> {
     };
 
     let result = if let Some(owner) = owner {
+        #[cfg(feature = "desktop")]
+        if !configure {
+            #[cfg(target_os = "linux")]
+            if let Err(error) = desktop_shell::startup().and_then(|startup| startup.refresh()) {
+                eprintln!("无法更新登录自启动入口：{error}");
+            }
+            if let Err(error) = desktop_shell::initialize_default_startup(&run_directory) {
+                eprintln!("无法初始化登录自启动：{error}");
+            }
+        }
         let manager = management::Manager::start(
             &runtime,
             owner,
@@ -355,13 +365,8 @@ fn run_managed(
     #[cfg(feature = "desktop")]
     let tray = {
         #[cfg(target_os = "linux")]
-        {
-            if let Err(error) = desktop_shell::register_launcher() {
-                eprintln!("无法注册应用入口：{error}");
-            }
-            if let Err(error) = desktop_shell::startup().and_then(|startup| startup.refresh()) {
-                eprintln!("无法更新登录自启动入口：{error}");
-            }
+        if let Err(error) = desktop_shell::register_launcher() {
+            eprintln!("无法注册应用入口：{error}");
         }
         match desktop_shell::install(tray_events) {
             Ok(tray) => Some(tray),
