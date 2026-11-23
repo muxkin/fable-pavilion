@@ -543,7 +543,7 @@
 .conversation-header-actions .icon-button:hover {
   background: var(--surface-hover);
 }
-@media (min-width: 701px) {
+@container app-viewport (width > 700px) {
   .app-shell .bottom-navigation {
     justify-content: flex-start;
     padding: 18px 6px;
@@ -580,7 +580,7 @@
     padding-top: 26px;
   }
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .app-shell .conversation-header {
     min-height: 72px;
     padding: 12px;
@@ -604,7 +604,7 @@
     display: none;
   }
 }
-@media (max-width: 360px) {
+@container app-viewport (max-width: 360px) {
   .app-shell {
     --ui-gutter: 16px;
   }
@@ -727,14 +727,14 @@
 .backend-image-picker button { display: inline-flex; align-items: center; gap: 8px; }
 .backend-editor .hint { margin: 0; }
 .backend-editor .im-dialog-actions { padding-top: 0; }
-@media (max-width: 480px) {
+@container app-viewport (max-width: 480px) {
   .backend-open { grid-template-columns: 44px minmax(0, 1fr); gap: 6px 12px; padding: 16px; }
   .backend-open .backend-icon { grid-row: span 2; width: 44px; height: 44px; }
   .backend-open .backend-status { grid-column: 2; }
   .backend-open .backend-reason { grid-column: 1 / -1; }
 }
 
-@media (max-width: 360px) {
+@container app-viewport (max-width: 360px) {
   .app-shell .profile-card > .im-avatar {
     width: 60px;
     height: 60px;

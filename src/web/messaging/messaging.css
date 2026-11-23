@@ -989,7 +989,7 @@
 .im-mobile-back {
   display: none;
 }
-@media (min-width: 1600px) {
+@container app-viewport (min-width: 1600px) {
   .im-messages-layout {
     grid-template-columns: 340px minmax(0, 1fr);
   }
@@ -997,7 +997,7 @@
     padding-inline: max(40px, calc((100% - 960px) / 2));
   }
 }
-@media (min-width: 701px) and (max-width: 1000px) {
+@container app-viewport (width > 700px) and (max-width: 1000px) {
   .im-messages-layout {
     grid-template-columns: 270px minmax(0, 1fr);
   }
@@ -1017,7 +1017,7 @@
     gap: 8px;
   }
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .im-messages-layout,
   .im-contacts-layout {
     display: block;
@@ -1121,12 +1121,12 @@
   }
   .im-dialog {
     width: calc(100% - 20px);
-    max-height: 88dvh;
+    max-height: calc(var(--app-viewport-height, 100dvh) * 0.88);
     border-radius: 16px;
   }
   .im-dialog-body {
     padding: 18px;
-    max-height: calc(88dvh - 70px);
+    max-height: calc(calc(var(--app-viewport-height, 100dvh) * 0.88) - 70px);
   }
   .im-member .im-avatar {
     width: 34px;
@@ -1175,7 +1175,7 @@
   color: var(--ink);
   font-size: 14px;
 }
-@media (max-width: 500px) {
+@container app-viewport (max-width: 500px) {
   .im-onboarding-steps {
     grid-template-columns: 1fr;
     gap: 16px;
@@ -1292,7 +1292,7 @@
 .im-dialog .request-card pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 45vh;
+  max-height: calc(var(--app-viewport-height, 100dvh) * 0.45);
   overflow-y: auto;
 }
 .im-dialog .im-checkbox {
@@ -1480,7 +1480,7 @@
   background: var(--surface);
   border-radius: 10px;
 }
-@media (max-width: 600px) {
+@container app-viewport (max-width: 600px) {
   .im-emoji-grid {
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
@@ -1669,7 +1669,7 @@
 }
 .im-expression-body {
   padding: 8px 12px 12px;
-  max-height: min(350px, 49dvh);
+  max-height: min(350px, calc(var(--app-viewport-height, 100dvh) * 0.49));
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1749,12 +1749,12 @@
   color: var(--muted);
   font-size: 11px;
 }
-@media (min-width: 1600px) {
+@container app-viewport (min-width: 1600px) {
   .im-transcript {
     padding-inline: max(40px, calc((100% - 1120px) / 2));
   }
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .im-message-main {
     max-width: calc(100% - 36px);
   }
@@ -1882,7 +1882,7 @@
   background: var(--accent, #2e6f5d);
 }
 
-@media (max-width: 380px) {
+@container app-viewport (max-width: 380px) {
   .app-shell .im-chat-header {
     padding-inline: 8px;
     gap: 4px;
@@ -2043,7 +2043,7 @@
   color: var(--ink);
   font-size: 14px;
 }
-@media (max-width: 600px) {
+@container app-viewport (max-width: 600px) {
   .login-device-card {
     grid-template-columns: auto minmax(0, 1fr);
   }

@@ -1,6 +1,7 @@
 import type { ChatMessage } from '../../shared/messaging';
+import { appViewport } from '../shell/app-zoom';
 
-export const mobileComposer = window.matchMedia('(max-width: 700px)');
+export const mobileComposer = () => appViewport().windowWidth <= 700;
 export const attachmentLimit = 10 * 1024 * 1024;
 
 export const activityNames = {
@@ -20,8 +21,8 @@ export const activityStates = {
 } as const;
 
 export function subscribeComposerLayout(listener: () => void) {
-  mobileComposer.addEventListener('change', listener);
-  return () => mobileComposer.removeEventListener('change', listener);
+  window.addEventListener('resize', listener);
+  return () => window.removeEventListener('resize', listener);
 }
 
 export function mergeMessages(old: ChatMessage[], next: ChatMessage[]) {

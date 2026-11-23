@@ -24,7 +24,7 @@ async function serverFixture() {
   cleanups.push(() => relay.app.close());
   const device = () => {
     let cookie = '';
-    const calls: { path: string; method: string; setCookies: number }[] = [];
+    const calls: { path: string; method: string; setCookies: string[] }[] = [];
     const request = async <T>(path: string, method = 'GET', body?: unknown): Promise<T> => {
       const response = await relay.app.inject({
         method: method as 'GET',
@@ -32,9 +32,9 @@ async function serverFixture() {
         headers: { host: 'unlock.test', origin: 'https://unlock.test', cookie },
         payload: body as object,
       });
-      calls.push({ path, method, setCookies: response.cookies.length });
-      if (response.cookies.length)
-        cookie = response.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
+      const setCookies = response.cookies.map(({ name, value }) => `${name}=${value}`);
+      calls.push({ path, method, setCookies });
+      if (setCookies.length) cookie = setCookies.join('; ');
       if (response.statusCode >= 400) throw new MessagingError(response.statusCode, response.json().error);
       return response.json() as T;
     };
@@ -43,7 +43,7 @@ async function serverFixture() {
   return { device };
 }
 
-it('unlocks a complete existing session after local keys are lost without signing in or issuing a cookie', async () => {
+it('restores local keys using the existing complete session and its token', async () => {
   const { device } = await serverFixture();
   const owner = device();
   await owner.account.register('unlock-owner', 'Owner', password);
@@ -57,11 +57,12 @@ it('unlocks a complete existing session after local keys are lost without signin
   expect(result.user.id).toBe(user.id);
   expect(owner.account.secrets!.root).toBe(root);
   expect(owner.cookie()).toBe(cookie);
+  // GET /me refreshes the browser cookie lifetime using the same session token.
   expect(owner.calls.slice(start)).toEqual([
-    { path: '/me', method: 'GET', setCookies: 0 },
-    { path: '/crypto/account', method: 'GET', setCookies: 0 },
-    { path: '/crypto/account', method: 'GET', setCookies: 0 },
-    { path: '/me', method: 'GET', setCookies: 0 },
+    { path: '/me', method: 'GET', setCookies: [cookie] },
+    { path: '/crypto/account', method: 'GET', setCookies: [] },
+    { path: '/crypto/account', method: 'GET', setCookies: [] },
+    { path: '/me', method: 'GET', setCookies: [cookie] },
   ]);
   expect((await owner.request<{ code: string }>('/crypto/totp/display', 'POST', {})).code).toMatch(/^\d{6}$/);
 });
@@ -79,9 +80,10 @@ it('keeps the complete session valid on a wrong local password and permits a suc
   expect(owner.account.user).toBe(user);
   expect(owner.account.secrets).toBeUndefined();
   expect(owner.cookie()).toBe(cookie);
-  expect(owner.calls.slice(start).every(({ method, setCookies }) => method === 'GET' && !setCookies)).toBe(
-    true,
-  );
+  expect(owner.calls.slice(start)).toEqual([
+    { path: '/me', method: 'GET', setCookies: [cookie] },
+    { path: '/crypto/account', method: 'GET', setCookies: [] },
+  ]);
   expect((await owner.request<{ user: ChatUser }>('/me')).user.id).toBe(user.id);
   await expect(owner.account.unlockSession(user, password)).resolves.toMatchObject({ user: { id: user.id } });
 });
@@ -102,7 +104,7 @@ it('refuses anonymous and password-pending clients even when they know the accou
     await expect(client.account.unlockSession(user, password)).rejects.toMatchObject({ status: 401 });
     expect(client.account.secrets).toBeUndefined();
     expect(client.cookie()).toBe('');
-    expect(client.calls.slice(start)).toEqual([{ path: '/me', method: 'GET', setCookies: 0 }]);
+    expect(client.calls.slice(start)).toEqual([{ path: '/me', method: 'GET', setCookies: [] }]);
   }
 });
 

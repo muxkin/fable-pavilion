@@ -440,8 +440,8 @@ impl CodexServer {
                     .map(|local| local.availability())
                     .unwrap_or_default();
                 return Ok(json!({
-                    "info":codex_backend::info(available, false).unwrap_or_else(|| json!({})),
-                    "status":codex_backend::status(available, false),
+                    "info":codex_backend::info(available, None).unwrap_or_else(|| json!({})),
+                    "status":codex_backend::status(available, None),
                 }));
             }
             "codex/refresh" => {
@@ -500,8 +500,9 @@ impl CodexServer {
                 let id = thread_id(&params["request"])?;
                 let action = serde_json::from_value(params["action"].clone())?;
                 let live = self.live(params, thread).cloned();
+                let local = self.local.clone().context("尚未配置 Codex")?;
                 return self.start_job(id, Duration::from_secs(35), async move {
-                    Local::execute(live.as_deref(), id, action).await
+                    local.execute(thread, live.as_deref(), id, action).await
                 });
             }
             "codex/result" => {

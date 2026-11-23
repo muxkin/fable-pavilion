@@ -1,6 +1,7 @@
 import { tsxComponent } from './tsx-component';
 import { shallowRef, type ShallowRef } from 'vue';
 import { memoizeRender, watchRender, writeRef } from './render-effects';
+import { appPixels } from './shell/app-zoom';
 
 import type { Message } from '../shared/types';
 import './turn-navigation.css';
@@ -30,11 +31,11 @@ export const TurnNavigation = tsxComponent(function TurnNavigation(_props: {
       let frame = 0;
       const update = () => {
         frame = 0;
-        const top = root.getBoundingClientRect().top + 64;
+        const top = root.getBoundingClientRect().top;
         const nodes = [...root.querySelectorAll<HTMLElement>('[data-user-turn]')];
         let current: HTMLElement | undefined = nodes[0];
         for (const node of nodes) {
-          if (node.getBoundingClientRect().top > top) break;
+          if (appPixels(node.getBoundingClientRect().top - top) > 64) break;
           current = node;
         }
         if (root.scrollHeight - root.scrollTop - root.clientHeight < 12) current = nodes.at(-1);

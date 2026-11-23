@@ -63,6 +63,8 @@ export const threadSchema = z
     messages: z.array(message),
     requests: z.array(z.object({ id: z.string(), kind: z.string() }).passthrough()),
     canSend: z.boolean(),
+    canResumeForSend: z.boolean().optional(),
+    textOnlySend: z.boolean().optional(),
     canInterrupt: z.boolean(),
     reason: z.string().nullable(),
   })

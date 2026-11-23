@@ -232,7 +232,7 @@ export default tsxComponent(function MePages(_props: {
               <Row
                 icon="palette"
                 title="外观"
-                detail="主题、图标与行号"
+                detail="主题、缩放、图标与行号"
                 onClick={() => navigate({ page: 'appearance' })}
               />
             </section>

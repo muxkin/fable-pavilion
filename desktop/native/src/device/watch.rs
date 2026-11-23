@@ -55,7 +55,7 @@ impl DeviceSession {
 
     pub(super) async fn publish(&mut self, io: &mut (impl AsyncWrite + Unpin)) -> Result<()> {
         for (backend, connector) in self.backends.codex.all() {
-            let status = connector.status(self.online(backend));
+            let status = connector.status(self.live_transport(backend));
             if self.last_status.get(backend) != Some(&status) {
                 reply(
                     io,

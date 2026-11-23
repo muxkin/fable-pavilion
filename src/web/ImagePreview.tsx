@@ -2,6 +2,7 @@ import { tsxComponent } from './tsx-component';
 import { shallowRef, useId, Teleport } from 'vue';
 import { watchRender, writeRef } from './render-effects';
 import { showBackDialog } from './shell/dialog-history';
+import { appPixels } from './shell/app-zoom';
 
 import { Icon } from './Icon';
 import { copyImage } from './image-clipboard';
@@ -69,7 +70,10 @@ export const ImagePreview = tsxComponent(function ImagePreview(_props: {
     }
     function point(clientX: number, clientY: number) {
       const rect = stage.value!.getBoundingClientRect();
-      return { x: clientX - rect.left - rect.width / 2, y: clientY - rect.top - rect.height / 2 };
+      return {
+        x: appPixels(clientX - rect.left - rect.width / 2),
+        y: appPixels(clientY - rect.top - rect.height / 2),
+      };
     }
     function measure() {
       const [a, b] = [...pointers.current.values()];

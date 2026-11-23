@@ -20,6 +20,7 @@ import {
 } from '../../src/shared/account-crypto.js';
 import { sealTrustedLoginRoot } from '../../src/shared/trusted-device-crypto.js';
 import { createIdentity } from '../../src/shared/secure-channel.js';
+import { SESSION_PERSISTENT_EXPIRES_AT } from '../../src/server/messaging/store-core.js';
 
 const name = 'cloudflare-upgrade-test';
 const directory = mkdtempSync(join(tmpdir(), 'pocket-cf-upgrade-'));
@@ -357,8 +358,6 @@ it('upgrades populated pre-trusted DO databases without replacing identities, va
   // Missing key fails closed for new logins while the original valid session and data remain usable.
   await upgradeWorker(false);
   const existing = session(legacyToken);
-  expect(await existing.request('/me')).toMatchObject({ user: { id: ownerId, username, encrypted: true } });
-  expect(existing.cookie()).toBe(`pocket_im_session=${legacyToken}`);
   expect(await existing.request('/crypto/trusted')).toMatchObject({
     available: true,
     required: true,
@@ -368,6 +367,20 @@ it('upgrades populated pre-trusted DO databases without replacing identities, va
     totpEnabled: false,
     devices: [],
   });
+  expect(await snapshot()).toEqual(expected);
+  expect(await existing.request('/me')).toMatchObject({ user: { id: ownerId, username, encrypted: true } });
+  expect(existing.cookie()).toBe(`pocket_im_session=${legacyToken}`);
+  // A valid legacy session adopts the persistent expiry on activity while keeping its token and owner.
+  const expectedAfterRefresh = {
+    ...expected,
+    session: [
+      {
+        hash: digest(legacyToken).toString('hex'),
+        user_id: ownerId,
+        expires_at: SESSION_PERSISTENT_EXPIRES_AT,
+      },
+    ],
+  };
   await expect(existing.request('/crypto/totp/display', 'POST', {})).rejects.toMatchObject({ status: 503 });
   await expect(
     existing.request('/crypto/trusted/enroll/options', 'POST', {
@@ -384,7 +397,7 @@ it('upgrades populated pre-trusted DO databases without replacing identities, va
   expect(await existing.request('/desktop-devices')).toEqual({
     devices: [{ hostId, name: 'Existing adapter' }],
   });
-  expect(await snapshot()).toEqual(expected);
+  expect(await snapshot()).toEqual(expectedAfterRefresh);
 
   // Adding the service key creates the human's code without registering a passkey or logging them out.
   await upgradeWorker(true);
@@ -520,7 +533,7 @@ it('upgrades populated pre-trusted DO databases without replacing identities, va
   expect(recovered.account.user!.id).toBe(ownerId);
   expect(recovered.account.secrets!.root).toBe(owner.secrets.root);
   expect(await recovered.account.readItem(vaultName)).toEqual(vaultValue);
-  expect(await snapshot()).toEqual(expected);
+  expect(await snapshot()).toEqual(expectedAfterRefresh);
 
   // Rehydrating the upgraded object keeps the original session, seed, credential counters and account bytes.
   const totp = await messaging.exec('SELECT * FROM im_account_totp');
@@ -538,6 +551,6 @@ it('upgrades populated pre-trusted DO databases without replacing identities, va
   expect((await trusted.request<{ code: string }>('/crypto/totp/display', 'POST', {})).code).toMatch(
     /^\d{6}$/,
   );
-  expect(await snapshot()).toEqual(expected);
+  expect(await snapshot()).toEqual(expectedAfterRefresh);
   expect((await unlockAccount(owner.vault, password)).secrets.root).toBe(owner.secrets.root);
 }, 60000);

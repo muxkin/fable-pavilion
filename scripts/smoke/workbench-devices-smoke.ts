@@ -1,6 +1,7 @@
 /** Exercise host routing with two independent simulated desktops sharing the same conversation ID. */
-import { chromium, expect } from '@playwright/test';
-import { rm } from 'node:fs/promises';
+import { chromium, expect, type Page } from '@playwright/test';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
@@ -37,7 +38,8 @@ const browser = await chromium.launch({
     : { channel: 'chrome' }),
   args: [`--unsafely-treat-insecure-origin-as-secure=${config.origin}`],
 });
-const screenshots = process.env.WORKBENCH_SCREENSHOT_DIR;
+const screenshots = process.env.TEST_OUTPUT ?? process.env.WORKBENCH_SCREENSHOT_DIR;
+let mainPage: Page | undefined;
 const workbenchURL = `${config.origin}/?page=workbench`;
 const username = 'workbench-fixture';
 const password = 'workbench-fixture-password';
@@ -49,7 +51,64 @@ async function signup(page: Awaited<ReturnType<typeof browser.newPage>>, name: s
   await page.getByRole('button', { name: '创建账户', exact: true }).click();
   await saveRecoveryCode(page);
 }
+
+async function holdActiveHostDuringPairing(page: Page) {
+  await page.addInitScript(() => {
+    const marker = 'fixture-hold-pairing-host';
+    if (!sessionStorage.getItem(marker) || !new URLSearchParams(location.hash.slice(1)).has('pair')) return;
+    const get = IDBObjectStore.prototype.get;
+    const delivered: Array<() => void> = [];
+    let holding = true;
+    window.addEventListener('fixture-release-pairing-host', () => {
+      sessionStorage.removeItem(marker);
+      holding = false;
+      for (const deliver of delivered.splice(0)) deliver();
+    }, { once: true });
+    IDBObjectStore.prototype.get = function (key) {
+      const request = get.call(this, key);
+      if (this.name !== 'private' || this.transaction.db.name !== 'pocket-device-v2' ||
+          typeof key !== 'string' || !/^account:.*:hosts$/.test(key)) return request;
+      const callers = new Error().stack ?? '';
+      if (!callers.includes('.active (')) {
+        if (!holding && callers.includes('AuthenticatedShell')) {
+          request.addEventListener('success', () => requestAnimationFrame(() => {
+            document.documentElement.dataset.fixturePairingHost = 'restored';
+            IDBObjectStore.prototype.get = get;
+          }), { once: true });
+        }
+        return request;
+      }
+      // Let sign-in and the initial pairing form render while the shell restores the old desktop.
+      if (holding && (!document.querySelector('.app-shell') || !location.hash)) {
+        Object.defineProperty(request, 'result', { value: [] });
+      } else if (holding) {
+        const listen = request.addEventListener.bind(request);
+        request.addEventListener = (
+          type: string,
+          listener: EventListenerOrEventListenerObject | null,
+          options?: AddEventListenerOptions | boolean,
+        ) => {
+          if (!listener) return;
+          if (type !== 'success') return listen(type, listener, options);
+          listen(type, (event) => {
+            if (holding) {
+              document.documentElement.dataset.fixturePairingHost = 'held';
+              delivered.push(() => typeof listener === 'function'
+                ? listener.call(request, event)
+                : listener.handleEvent(event));
+            } else if (typeof listener === 'function') listener.call(request, event);
+            else listener.handleEvent(event);
+          }, options);
+        };
+      }
+      return request;
+    };
+  });
+  await page.evaluate(() => sessionStorage.setItem('fixture-hold-pairing-host', '1'));
+}
+
 try {
+  if (screenshots) await mkdir(screenshots, { recursive: true });
   await registry.start();
   otherHost.start();
   for (const [transport, text] of [
@@ -62,7 +121,7 @@ try {
       text,
     });
   }
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const page = (mainPage = await browser.newPage({ viewport: { width: 1440, height: 900 } }));
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(workbenchURL);
@@ -146,10 +205,29 @@ try {
       .getByRole('navigation', { name: '主要功能' })
       .getByRole('button', { name: '工作台', exact: true })
       .click();
-  async function pair(service: HostService, data: Store, name: string) {
+  async function pair(service: HostService, data: Store, name: string, restore?: HostService) {
     const pair = data.mintPairing();
+    if (restore) await holdActiveHostDuringPairing(page);
     await page.goto(`${config.origin}/#pair=${pair.code}&host=${service.identity.peerId}`);
-    await page.getByRole('button', { name: '连接电脑', exact: true }).click();
+    const connect = page.getByRole('button', { name: '连接电脑', exact: true });
+    if (restore) {
+      const root = page.locator('html');
+      await expect(root).toHaveAttribute('data-fixture-pairing-host', 'held');
+      await expect(connect).toBeVisible();
+      await expect.poll(() => new URL(page.url()).hash).toBe('');
+      const connections = restore.metrics.connections;
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-release-pairing-host')));
+      await expect.poll(() => restore.metrics.connections).toBeGreaterThan(connections);
+      await expect(root).toHaveAttribute('data-fixture-pairing-host', 'restored');
+      await expect(connect).toBeEnabled();
+
+      const replacement = data.mintPairing();
+      await page.goto(`${config.origin}/?page=pair#pair=${replacement.code}&host=${service.identity.peerId}`);
+      await expect.poll(() => new URL(page.url()).hash).toBe('');
+      const formCode = await page.getByLabel('一次性配对码', { exact: true }).inputValue();
+      expect(formCode === replacement.code).toBe(true);
+    }
+    await connect.click();
     await page.getByRole('tab', { name: '最近', exact: true }).waitFor();
     await workbench();
     const card = page
@@ -163,7 +241,7 @@ try {
     await expect(page.getByRole('article', { name, exact: true })).toBeVisible();
   }
   await pair(host, store, '办公电脑');
-  await pair(otherHost, otherStore, '实验室电脑');
+  await pair(otherHost, otherStore, '实验室电脑', host);
   await page.getByRole('button', { name: '添加电脑', exact: true }).click();
   await expect(page.getByRole('heading', { name: '添加电脑', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '下载电脑适配器', exact: true })).toBeVisible();
@@ -179,6 +257,9 @@ try {
   await expect(office).toHaveCount(0);
   await search.clear();
   const recentList = lab.locator('.computer-recent-list');
+  const labConversation = recentList
+    .getByRole('button')
+    .filter({ has: page.getByText('测试会话', { exact: true }) });
   await expect(recentList.getByRole('button')).toHaveCount(13);
   expect(
     await recentList.evaluate((element) => ({
@@ -256,7 +337,7 @@ try {
 
   await workbench();
   await expect(page.locator('.computer-card').first()).toHaveAttribute('aria-label', '办公电脑');
-  await lab.getByRole('button', { name: '测试会话', exact: true }).click();
+  await labConversation.click();
   await expect.poll(() => new URL(page.url()).searchParams.get('host')).toBe(otherHost.identity.peerId);
   await expect.poll(() => new URL(page.url()).searchParams.get('thread')).toBe(THREAD);
   await expect(page.getByText('实验室电脑的回复', { exact: true })).toBeVisible();
@@ -339,7 +420,7 @@ try {
   await workbench();
   await expect(lab.getByText('离线', { exact: true })).toBeVisible();
   await expect(lab.getByRole('button', { name: '打开 Codex', exact: true })).toHaveText('查看历史');
-  await lab.getByRole('button', { name: '测试会话', exact: true }).click();
+  await labConversation.click();
   await expect(page.getByText('实验室电脑的回复', { exact: true })).toBeVisible();
   await expect(page.locator('.composer .send-button')).toBeDisabled();
 
@@ -384,6 +465,15 @@ try {
   console.log(
     'Workbench first login, device-list and pending host retries, desktop consent, authenticated legacy pairing, scoped tools, offline history and mobile grid.',
   );
+} catch (error) {
+  if (mainPage && !mainPage.isClosed()) {
+    const output = screenshots ?? (await mkdtemp(join(tmpdir(), 'pocket-workbench-devices-')).catch(() => undefined));
+    if (output) {
+      await mainPage.screenshot({ path: join(output, 'failure.png') }).catch(() => {});
+      console.error(`Workbench smoke evidence: ${output}`);
+    }
+  }
+  throw error;
 } finally {
   await browser.close();
   otherHost.stop();

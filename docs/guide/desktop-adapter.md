@@ -45,6 +45,8 @@
 安装包默认附带官方 **Codex**、**DSH** 与 **Antigravity** 三款原生 Rust 插件，首次启动时会自动校验并登记到本地私有注册表：
 
 - **Codex**：自动发现本机 Codex 状态目录与桌面端点（默认实例 ID 为 `codex-local`）。可通过 `POCKET_NATIVE_CODEX_HOME`、`CODEX_HOME`、`POCKET_NATIVE_CODEX_SOCKET`、`POCKET_NATIVE_CODEX_APP_TOOLS`、`POCKET_NATIVE_CODEX_CLI` 等环境变量按需覆盖；如需只读模式，可设置 `POCKET_NATIVE_READ_ONLY=1`。
+- 旧版会话同步接口不可用时，支持新桌面工具接口的 **Codex** 可以从工作台向历史会话发送纯文本。附件、运行中追加指令和中断等操作仍取决于工作台显示的会话能力。
+- 在 Linux 和 macOS 上，写入 **Codex 长期目标**需要本机 Codex 启用目标功能，且桌面应用通过共享的本地 App Server 守护进程加载会话。支持共享模式的桌面版本可在启动时设置 `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1`。桌面提供目标快照时，工作台可以只读查看目标内容和状态。
 - **Codex Voice**：在工作台打开 Codex 会话后，可通过标题栏麦克风图标发起实时语音通话（需本机 Codex 账号已开通原生语音功能，且手机端通过 HTTPS 访问）。语音通话基于只读独立分支运行，结束后可查看保存的转写。
 - **Antigravity**：当本机数据目录（默认 `~/.gemini/antigravity`，可用 `POCKET_NATIVE_ANTIGRAVITY_HOME` 覆盖）存在 `daemon` 时，适配器会自动发现并添加 `antigravity-local` 实例；设置 `POCKET_NATIVE_ANTIGRAVITY=0` 可关闭自动发现。
 - **DSH 与多实例配置**：可在网页端「我的 → 设置 → 插件管理」、桌面适配器本机设置页「插件」标签，或状态目录的 `instances.json`（也可通过 `POCKET_ADAPTERS_FILE` 指定路径）管理多个 Codex、DSH、Antigravity 或第三方原生插件实例。完整配置格式及插件在线升级/回滚命令见 [适配器插件与开发](../dev/adapter-plugins.md)。

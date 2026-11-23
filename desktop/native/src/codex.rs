@@ -734,7 +734,7 @@ fn rollout_message(line: &[u8], thread: &str, offset: u64, full: bool) -> Option
         // The corresponding response_item contains another copy of the tool output.
         // Project only the completed item, whose envelope identifies this thread and turn.
         if item["type"] == "FunctionCallOutput"
-            && let Some(input) = crate::codex_live::delegated_input(item)
+            && let Some(input) = crate::codex_live::delegated_input(item, thread)
         {
             let (text, attachments) = crate::files::message_attachment_text(&input);
             return text_message(
@@ -1074,6 +1074,22 @@ mod tests {
         let mut foreign = record;
         foreign["payload"]["thread_id"] = json!("another-thread");
         assert!(rollout(foreign).is_none());
+    }
+
+    #[test]
+    fn desktop_follow_up_displays_literal_input_for_the_same_thread() {
+        let mut record = json!({
+            "type":"event_msg",
+            "payload":{"type":"item_completed","thread_id":"thread","turn_id":"turn",
+                "item":{"type":"FunctionCallOutput","id":"native-item","namespace":"codex_app",
+                    "name":"send_message_to_thread",
+                    "output":"<codex_delegation><source_thread_id>thread</source_thread_id><input>Use &lt;div&gt; &amp; CSS.</input></codex_delegation>"}}
+        });
+        let message = rollout(record.clone()).expect("scoped desktop follow-up");
+        assert_eq!(message["role"], "user");
+        assert_eq!(message["text"], "Use <div> & CSS.");
+        record["payload"]["item"]["output"] = json!("<codex_delegation><source_thread_id>another-thread</source_thread_id><input>Different scope.</input></codex_delegation>");
+        assert_ne!(rollout(record).as_ref().map(|message| &message["role"]), Some(&json!("user")));
     }
 
     #[test]

@@ -285,13 +285,13 @@
     transform: rotate(360deg);
   }
 }
-@media (min-width: 741px) {
+@container app-viewport (min-width: 741px) {
   .settings-hierarchy,
   .account-profile-page {
     --settings-inset: 32px;
   }
 }
-@media (max-width: 359px) {
+@container app-viewport (max-width: 359px) {
   .settings-profile-link {
     padding-left: 8px;
     border-left: 0;

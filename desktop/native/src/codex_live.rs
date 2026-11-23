@@ -14,8 +14,9 @@ mod desktop;
 pub(crate) use desktop::{Desktop, Thread, native_text, native_user_text, ordered, read_frame};
 
 #[cfg(feature = "official-plugins")]
-pub(crate) fn delegated_input(tool: &Value) -> Option<String> {
-    if tool["namespace"] != "codex_app" || tool["name"] != "create_thread" {
+pub(crate) fn delegated_input(tool: &Value, thread: &str) -> Option<String> {
+    let name = tool["name"].as_str()?;
+    if tool["namespace"] != "codex_app" || !matches!(name, "create_thread" | "send_message_to_thread") {
         return None;
     }
     let wrapper = tool["output"]
@@ -23,7 +24,10 @@ pub(crate) fn delegated_input(tool: &Value) -> Option<String> {
         .trim()
         .strip_prefix("<codex_delegation>")?
         .strip_suffix("</codex_delegation>")?;
-    let (_, mut wrapper) = delegation_field(wrapper, "<source_thread_id>", "</source_thread_id>")?;
+    let (source, mut wrapper) = delegation_field(wrapper, "<source_thread_id>", "</source_thread_id>")?;
+    if name == "send_message_to_thread" && source != thread {
+        return None;
+    }
     let has_orbit = wrapper.starts_with("<source_orbit_id>");
     if has_orbit {
         (_, wrapper) = delegation_field(wrapper, "<source_orbit_id>", "</source_orbit_id>")?;
@@ -92,6 +96,9 @@ pub enum Action {
     Permission {
         input: Value,
     },
+    Goal {
+        change: crate::codex_goal::Change,
+    },
     Respond {
         response: requests::Response,
     },
@@ -107,7 +114,7 @@ impl Action {
             Self::Steer { .. } => "steer",
             Self::Interrupt { .. } => "interrupt",
             Self::Settings { .. } => "settings",
-            Self::Permission { .. } => "control",
+            Self::Permission { .. } | Self::Goal { .. } => "control",
             Self::Respond { .. } => "respond",
             Self::Queue { change } => change.name(),
         }
@@ -127,6 +134,11 @@ pub enum Outcome {
 pub struct View {
     pub thread: Value,
     pub messages: Vec<Value>,
+    #[serde(default)]
+    pub(crate) app_tools: bool,
+    #[cfg(feature = "official-plugins")]
+    #[serde(skip)]
+    pub(crate) native_goal: Option<Value>,
     #[cfg(feature = "official-plugins")]
     #[serde(skip)]
     pub expanded: HashMap<String, String>,
@@ -154,6 +166,14 @@ impl View {
         self.thread["synchronized"] == true
             && self.thread["owner"] == true
             && self.thread["runtimeStatus"] != "notLoaded"
+    }
+
+    pub(crate) fn is_ready_to_continue(&self) -> bool {
+        self.is_open()
+            || (self.app_tools
+                && self.thread["synchronized"] == true
+                && self.thread["canResumeForSend"] == true
+                && self.thread["canSend"] == true)
     }
 
     pub(crate) fn mark(&self) -> (Uuid, u64, Option<String>) {

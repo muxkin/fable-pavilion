@@ -1,6 +1,7 @@
 import { createApp, h } from 'vue';
 import { MessagingProvider } from './messaging/context';
 import { AppShell } from './shell/AppShell';
+import { AppZoomReset } from './shell/AppZoomReset';
 import './styles/base.css';
 import './shell/shell.css';
 import './theme/theme.css';
@@ -17,7 +18,7 @@ initializeLocale((locale) => (locale === 'en' ? 'Fable Pavilion' : '子虚亭 ·
 if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 createApp({
-  render: () => h(MessagingProvider, null, { default: () => h(AppShell) }),
+  render: () => h(MessagingProvider, null, { default: () => [h(AppShell), h(AppZoomReset)] }),
 }).mount('#root');
 
 installDomTranslator(document.body);

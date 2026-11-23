@@ -153,6 +153,8 @@ export interface ThreadView extends ThreadSummary {
   queuedMessages?: { id: string; text: string; status: string; reason?: string }[];
   queueFingerprint?: string;
   canSend: boolean;
+  canResumeForSend?: boolean;
+  textOnlySend?: boolean;
   canSteer?: boolean;
   canInterrupt: boolean;
   reason: string | null;

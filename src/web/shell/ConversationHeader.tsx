@@ -11,16 +11,18 @@ export const ConversationHeader = tsxComponent(function ConversationHeader(_prop
   status?: VNodeChild;
   backLabel: string;
   onBack: () => void;
+  leadingAction?: VNodeChild;
   level?: 1 | 2;
   children?: VNodeChild;
 }) {
-  return ({ className, title, subtitle, status, backLabel, onBack, level = 1, children }) => {
+  return ({ className, title, subtitle, status, backLabel, onBack, leadingAction, level = 1, children }) => {
     const Heading = level === 1 ? 'h1' : 'h2';
     return (
       <header class={`conversation-header ${className}`}>
         <button class="icon-button conversation-back" aria-label={backLabel} onClick={onBack}>
           <Icon name="back" />
         </button>
+        {leadingAction}
         <div class="conversation-heading">
           {h(Heading, null, [
             <span class="conversation-title" title={title}>

@@ -32,6 +32,9 @@ import {
   type CodexDesktopFixture,
   type QueueStateControl,
 } from './lib/codex-fixture.js';
+import { createCodexGoalFixture, type CodexGoalFixture } from './lib/codex-goal-fixture.js';
+import { createModernCodexFixture, MODERN_CODEX, type ModernCodexFixture } from './lib/codex-modern-fixture.js';
+import { verifyModernCodexRpc } from './lib/codex-modern-suite.js';
 import {
   testCodexLive,
   verifyCodexBrowserDirect,
@@ -73,6 +76,7 @@ const legacyState = join(directory, 'legacy');
 const codexHome = join(directory, 'codex');
 const projectPath = join(directory, 'project');
 const secondaryHome = join(directory, secondaryId);
+const modernHome = join(directory, MODERN_CODEX.id);
 const secondaryUploads = join(legacyState, 'backends', secondaryId, 'uploads');
 
 const adapter = (...args: string[]) =>
@@ -83,6 +87,8 @@ const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex
 
 let ipc: CodexDesktopFixture | undefined;
 let secondaryIpc: CodexDesktopFixture | undefined;
+let goalFixture: CodexGoalFixture | undefined;
+let modernFixture: ModernCodexFixture | undefined;
 let relay: { listen: () => Promise<unknown>; close: () => Promise<unknown> } | undefined;
 let activeGateway: RunningNativeAdapter | undefined;
 let phase = 'setup';
@@ -639,6 +645,7 @@ try {
 
   const voiceStopped = join(directory, 'voice-stopped');
   const forkCli = await writeCodexForkCliFixture({ directory, threadId: THREAD, projectPath, voiceStopped });
+  if (useIpc && process.platform !== 'win32') goalFixture = await createCodexGoalFixture(codexHome, THREAD);
   ipc = useIpc
     ? await createCodexDesktopFixture({
         directory,
@@ -669,6 +676,16 @@ try {
       : undefined;
   const secondaryPath = join(secondaryUploads, legacyId, legacyName);
   const secondaryBytes = Buffer.from('第二个实例的附件');
+  if (ipc && codexPackage) {
+    const rollout = historyFixture({ codexHome: modernHome } as Parameters<typeof historyFixture>[0]);
+    const db = new DatabaseSync(join(modernHome, 'state_5.sqlite'));
+    try {
+      db.prepare('UPDATE threads SET title = ?, cwd = ? WHERE id = ?').run(MODERN_CODEX.title, directory, THREAD);
+    } finally {
+      db.close();
+    }
+    modernFixture = await createModernCodexFixture(directory, THREAD, rollout);
+  }
 
   const port = await allocateLocalPort();
   const origin = `http://127.0.0.1:${port}`;
@@ -802,6 +819,20 @@ try {
             executable: secondaryIpc ? process.execPath : undefined,
           },
         },
+        ...(modernFixture ? [{
+          id: MODERN_CODEX.id,
+          name: 'Modern Codex fixture',
+          plugin: manifest.name,
+          version: manifest.version,
+          config: {
+            home: modernHome,
+            socket: process.platform === 'win32'
+              ? '\\\\.\\pipe\\agent-space-native-missing-' + crypto.randomUUID()
+              : join(directory, 'missing-follower.sock'),
+            appTools: modernFixture.path,
+            executable: process.execPath,
+          },
+        }] : []),
       ]),
       { mode: 0o600 },
     );
@@ -945,6 +976,8 @@ try {
       fixture: ipc,
       origin,
       hostPeerId: host.peerId,
+      goalControls: !!goalFixture,
+      modern: modernFixture ? { fixture: modernFixture, threadId: THREAD } : undefined,
       projectPdf,
       projectPng,
       pdfBytes,
@@ -1294,9 +1327,11 @@ try {
         forkCli,
         testStorage,
         queue: queueControl,
+        goalFixture,
       });
       if (instanceSuiteOptions && secondaryIpc)
         await verifyLiveCodexInstances(session, ipc, secondaryIpc, instanceSuiteOptions);
+      if (modernFixture) await verifyModernCodexRpc(session, THREAD, modernFixture);
     }
   } finally {
     session.close();
@@ -1356,6 +1391,8 @@ try {
 
   assert.deepEqual(ipc?.errors ?? [], [], 'Primary Codex IPC fixture recorded unexpected errors');
   assert.deepEqual(secondaryIpc?.errors ?? [], [], 'Secondary Codex IPC fixture recorded unexpected errors');
+  assert.deepEqual(goalFixture?.errors ?? [], [], 'Codex App Server goal fixture recorded unexpected errors');
+  assert.deepEqual(modernFixture?.errors ?? [], [], 'Codex app-tools fallback fixture recorded unexpected errors');
   console.log(
     `Native gateway (${cloudflare ? 'Cloudflare' : 'Node'} relay): TLS startup, pairing, history, legacy draft recovery and upload resumption, replay rejection, appearance settings and restart passed${ipc ? ', including native Codex live controls' : ''}${versions ? ' with two isolated instances of the independently installed Codex plugin' : ''}.`,
   );
@@ -1371,6 +1408,8 @@ try {
     () => relay?.close(),
     () => secondaryIpc?.close(),
     () => ipc?.close(),
+    () => goalFixture?.close(),
+    () => modernFixture?.close(),
     () => rm(directory, { recursive: true, force: true }),
   ]);
 }

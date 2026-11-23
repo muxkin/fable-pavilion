@@ -275,7 +275,7 @@ impl DeviceSession {
                 .backends
                 .codex
                 .all()
-                .filter_map(|(id, backend)| backend.info(id, self.online(id)))
+                .filter_map(|(id, backend)| backend.info(id, self.live_transport(id)))
                 .collect();
             backends.extend(self.backends.plugins.infos().await);
             if let Some(terminal_info) = self
@@ -456,12 +456,12 @@ impl DeviceSession {
                 _ => plugin.read(method, &call["params"], &call["query"]).await,
             };
         };
-        let online = self.online(backend);
+        let transport = self.live_transport(backend);
         match method {
-            "status.read" => Ok(Some(connector.status(online))),
+            "status.read" => Ok(Some(connector.status(transport))),
             "session.read" => Ok(Some(json!({
                 "device":{"id":self.device.id,"name":self.device.name},
-                "status":connector.status(online),"backend":connector.info(backend, online),
+                "status":connector.status(transport),"backend":connector.info(backend, transport),
             }))),
             "media.describe" => {
                 let target = &call["params"]["id"];
@@ -593,9 +593,7 @@ impl DeviceSession {
                         body.as_object().is_some_and(|value| value.len() == 1),
                         "设置参数无效"
                     );
-                    Action::Permission {
-                        input: settings::permission_change(&body["control"])?,
-                    }
+                    codex_control(&body["control"])?
                 };
                 self.dispatch(backend, connector, thread, request, action)
                     .map(Some)
@@ -707,7 +705,7 @@ impl DeviceSession {
             return Ok(None);
         };
         let info = if let Some(backend) = self.backends.codex.get(id) {
-            backend.info(id, self.online(id))
+            backend.info(id, self.live_transport(id))
         } else if let Some(plugin) = self.backends.plugins.get(id) {
             Some(plugin.info().await)
         } else if id == crate::terminal::BACKEND_ID {

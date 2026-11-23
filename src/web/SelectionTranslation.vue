@@ -2,6 +2,7 @@
 import { onMounted, onScopeDispose, ref, shallowRef, useId, watch } from 'vue';
 import { SELECTION_TRANSLATION_MAX_LENGTH } from '../shared/selection-translation';
 import { Icon } from './Icon';
+import { appRect, appViewport } from './shell/app-zoom';
 import { showBackDialog } from './shell/dialog-history';
 import {
   defaultTranslationTarget,
@@ -33,8 +34,7 @@ const panel = ref<HTMLDialogElement>();
 const panelBody = ref<HTMLElement>();
 const activeSelection = shallowRef<SelectionAnchor>();
 const titleId = useId();
-const narrow = matchMedia('(max-width: 700px)');
-const sheet = ref(narrow.matches);
+const sheet = ref(appViewport().windowWidth <= 700);
 const original = ref('');
 const target = ref<TranslationTarget>('zh');
 const translation = shallowRef<TranslationState>({ status: 'loading' });
@@ -53,28 +53,20 @@ function sourceOf(node: Node | null) {
   return element?.closest('[data-selection-translation]');
 }
 
-function viewportBounds() {
-  const viewport = window.visualViewport;
-  const left = viewport?.offsetLeft ?? 0;
-  const top = viewport?.offsetTop ?? 0;
-  const width = viewport?.width ?? window.innerWidth;
-  const height = viewport?.height ?? window.innerHeight;
-  return { left, top, width, height, right: left + width, bottom: top + height };
-}
-
-function visibleSelection(range: Range, source: Element, viewport: ReturnType<typeof viewportBounds>) {
+function visibleSelection(range: Range, source: Element, viewport: ReturnType<typeof appViewport>) {
   if (!source.isConnected || !source.contains(range.commonAncestorContainer)) return;
-  const scroll = source.closest('.transcript, .im-transcript')?.getBoundingClientRect();
+  const transcript = source.closest('.transcript, .im-transcript');
+  const scroll = transcript && appRect(transcript.getBoundingClientRect());
   const left = Math.max(viewport.left, scroll?.left ?? viewport.left);
   const top = Math.max(viewport.top, scroll?.top ?? viewport.top);
   const right = Math.min(viewport.right, scroll?.right ?? viewport.right);
   const bottom = Math.min(viewport.bottom, scroll?.bottom ?? viewport.bottom);
-  const lines = [...range.getClientRects()].filter(
+  const lines = Array.from(range.getClientRects(), appRect).filter(
     (line) =>
       line.width > 0 && line.right > left && line.left < right && line.bottom > top && line.top < bottom,
   );
   if (!lines.length) return;
-  const bounds = range.getBoundingClientRect();
+  const bounds = appRect(range.getBoundingClientRect());
   return {
     top: Math.max(top, bounds.top),
     bottom: Math.min(bottom, bounds.bottom),
@@ -96,7 +88,7 @@ function readAnchor(): SelectionAnchor | undefined {
   const text = selection.toString().trim();
   if (!/\p{L}/u.test(text)) return;
   const range = selection.getRangeAt(0);
-  const viewport = viewportBounds();
+  const viewport = appViewport();
   const visible = visibleSelection(range, source, viewport);
   if (!visible) return;
 
@@ -118,9 +110,9 @@ function readAnchor(): SelectionAnchor | undefined {
 function revealSelectionAboveSheet(element: HTMLDialogElement, selected: SelectionAnchor) {
   const scroll = selected.source.closest<HTMLElement>('.transcript, .im-transcript');
   if (!scroll || !scroll.contains(selected.range.commonAncestorContainer)) return;
-  const scrollBounds = scroll.getBoundingClientRect();
-  const selection = selected.range.getBoundingClientRect();
-  const visibleBottom = Math.min(scrollBounds.bottom, element.getBoundingClientRect().top);
+  const scrollBounds = appRect(scroll.getBoundingClientRect());
+  const selection = appRect(selected.range.getBoundingClientRect());
+  const visibleBottom = Math.min(scrollBounds.bottom, appRect(element.getBoundingClientRect()).top);
   if (selection.bottom <= visibleBottom - 14 || visibleBottom <= scrollBounds.top + 32) return;
   const current = scroll.scrollTop;
   const next = current + selection.bottom - visibleBottom + 14;
@@ -147,12 +139,12 @@ function positionPanel() {
   const element = panel.value;
   const selected = activeSelection.value;
   if (!element?.open || !selected) return;
-  const viewport = viewportBounds();
+  const viewport = appViewport();
   const style = element.style;
   if (sheet.value) {
     style.setProperty('--translation-left', `${viewport.left}px`);
     style.setProperty('--translation-width', `${viewport.width}px`);
-    style.setProperty('--translation-bottom', `${window.innerHeight - viewport.bottom}px`);
+    style.setProperty('--translation-bottom', `${viewport.windowHeight - viewport.bottom}px`);
     style.setProperty('--translation-max-height', `${viewport.height * 0.8}px`);
     revealSelectionAboveSheet(element, selected);
     return;
@@ -169,14 +161,13 @@ function positionPanel() {
   style.setProperty('--translation-width', `${Math.min(420, viewport.width - inset * 2)}px`);
   const body = panelBody.value;
   const naturalHeight = element.offsetHeight + (body ? body.scrollHeight - body.clientHeight : 0);
-  const transcriptBottom = selected.source
-    .closest('.transcript, .im-transcript')
-    ?.getBoundingClientRect().bottom;
-  const roomBeforeComposer = (transcriptBottom ?? viewport.bottom) - visible.bottom - gap;
+  const transcript = selected.source.closest('.transcript, .im-transcript');
+  const transcriptBottom = transcript ? appRect(transcript.getBoundingClientRect()).bottom : viewport.bottom;
+  const roomBeforeComposer = transcriptBottom - visible.bottom - gap;
   const placeBelow = below >= naturalHeight && (roomBeforeComposer >= naturalHeight || above < naturalHeight);
   const preferBelow = placeBelow || (above < naturalHeight && below > above);
   style.setProperty('--translation-max-height', `${Math.max(116, preferBelow ? below : above)}px`);
-  const { width, height } = element.getBoundingClientRect();
+  const { width, height } = appRect(element.getBoundingClientRect());
   const line = preferBelow ? visible.last : visible.first;
   const center = (line.left + line.right) / 2;
   const left = clamp(center - width / 2, viewport.left + inset, viewport.right - inset - width);
@@ -232,16 +223,19 @@ function dismissOnEscape(event: KeyboardEvent) {
 const listeners = new AbortController();
 onMounted(() => {
   const options = { signal: listeners.signal };
+  const updateViewport = () => {
+    sheet.value = appViewport().windowWidth <= 700;
+    refreshAnchor();
+  };
   document.addEventListener('selectionchange', refreshAnchor, options);
   document.addEventListener('pointerdown', startPointer, { ...options, capture: true });
   window.addEventListener('pointerup', endPointer, { ...options, capture: true });
   window.addEventListener('pointercancel', endPointer, { ...options, capture: true });
   document.addEventListener('keydown', dismissOnEscape, options);
   document.addEventListener('scroll', refreshAnchor, { ...options, capture: true, passive: true });
-  window.addEventListener('resize', refreshAnchor, options);
+  window.addEventListener('resize', updateViewport, options);
   window.visualViewport?.addEventListener('resize', refreshAnchor, options);
   window.visualViewport?.addEventListener('scroll', refreshAnchor, options);
-  narrow.addEventListener('change', (event) => (sheet.value = event.matches), options);
 });
 onScopeDispose(() => {
   listeners.abort();

@@ -8,6 +8,7 @@ import { exportSessionLog, downloadFile } from './file-client';
 import { ComposerPopover } from './ComposerPopover';
 import { Icon } from './Icon';
 import { ComposerToolEntries } from './ComposerToolPicker';
+import { GoalControls } from './workspace/GoalControls';
 
 export type ControlSection = 'permission' | 'tools' | 'preset' | 'goal' | 'feedback' | 'file';
 const permissionNames: Record<string, string> = {
@@ -40,6 +41,13 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
   backend?: BackendInfo;
   disabled: boolean;
   connected?: boolean;
+  catalog?: ControlCatalog;
+  catalogLoading: boolean;
+  catalogError?: string;
+  reload: () => void;
+  canWriteGoal: boolean;
+  goalOperationError?: string;
+  toolSelectionDisabled?: boolean;
   modeDisabled?: boolean;
   running: boolean;
   plan: boolean;
@@ -48,19 +56,12 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
   onPlugins: () => void;
   onAction: (action: ControlAction) => void;
   onFile: (path: string) => void;
-  refresh?: number;
-  request?: { target: ControlSection; sequence: number };
+  request?: { target: ControlSection; sequence: number; anchor?: HTMLElement };
 }) {
-  const catalogState = shallowRef<ControlCatalog>();
-  const setCatalog = writeRef(catalogState);
   const errorState = shallowRef('');
   const setError = writeRef(errorState);
-  const reloadState = shallowRef(0);
-  const setReload = writeRef(reloadState);
   const sectionState = shallowRef<ControlSection>('tools');
   const setSection = writeRef(sectionState);
-  const objectiveState = shallowRef('');
-  const setObjective = writeRef(objectiveState);
   const feedbackState = shallowRef('');
   const setFeedback = writeRef(feedbackState);
   const queryState = shallowRef('');
@@ -71,7 +72,6 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
   const setSearched = writeRef(searchedState);
   const workingState = shallowRef<'files' | 'export' | null>(null);
   const setWorking = writeRef(workingState);
-  const watchCatalog = watchRender();
   const watchSection = watchRender();
   return ({
     id,
@@ -79,6 +79,13 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
     backend,
     disabled,
     connected = true,
+    catalog,
+    catalogLoading,
+    catalogError,
+    reload,
+    canWriteGoal,
+    goalOperationError,
+    toolSelectionDisabled,
     modeDisabled,
     running,
     plan,
@@ -87,60 +94,24 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
     onPlugins,
     onAction,
     onFile,
-    refresh = 0,
     request,
   }) => {
-    const catalog = catalogState.value;
-    const error = errorState.value;
-    const reload = reloadState.value;
+    const error = errorState.value || catalogError;
     const section = sectionState.value;
-    const objective = objectiveState.value;
     const feedback = feedbackState.value;
     const query = queryState.value;
     const files = filesState.value;
     const searched = searchedState.value;
     const working = workingState.value;
-    const backendCatalogVersion = JSON.stringify([backend?.capabilities, backend?.presentation]);
-    watchCatalog(() => {
-      if (!connected) {
-        setCatalog(undefined);
-        setError('');
-        return;
-      }
-      const controller = new AbortController();
-      remoteFetch(`/api/threads/${encodeURIComponent(id)}/controls`, { signal: controller.signal })
-        .then(async (r) => {
-          const c = await r.json();
-          if (controller.signal.aborted) return;
-          if (!r.ok) throw Error(c.error);
-          setCatalog(c);
-          setError('');
-        })
-        .catch((e) => {
-          if (!controller.signal.aborted) setError(e.message);
-        });
-      return () => controller.abort();
-    }, [
-      id,
-      state?.permission,
-      state?.preset,
-      state?.plan,
-      connected,
-      backend?.id,
-      backend?.connected,
-      backend?.version,
-      backendCatalogVersion,
-      refresh,
-      reload,
-    ]);
     watchSection(() => {
       if (request && request.target !== 'permission') setSection(request.target);
     }, [request]);
     const current = state ?? catalog?.state;
     const locked = disabled || !!working;
     const has = (name: ControlAction['action']) => catalog?.actions.includes(name);
-    const skills = !backend || capabilityEnabled(backend.capabilities.skills);
-    const plugins = capabilityEnabled(backend?.capabilities.plugins);
+    const showGoal = has('goal') || !!catalog?.goal || !!catalog?.goalUnavailableReason;
+    const skills = !toolSelectionDisabled && (!backend || capabilityEnabled(backend.capabilities.skills));
+    const plugins = !toolSelectionDisabled && capabilityEnabled(backend?.capabilities.plugins);
     const showPermission = !!current?.permission || has('permission') || request?.target === 'permission';
     const showTools =
       skills ||
@@ -149,6 +120,7 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
       backend?.presentation?.exportLog ||
       backend?.presentation?.plan === 'settings' ||
       catalog?.actions.some((name) => name !== 'permission') ||
+      showGoal ||
       (request && request.target !== 'permission');
     const permission = catalog?.permissions.find((p) => p.id === current?.permission);
     const permissionName =
@@ -160,7 +132,7 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
     const openSection = (next: ControlSection) => {
       setSection(next);
       setError('');
-      if (next === 'goal') setObjective(catalog?.goal?.objective ?? '');
+      if (next === 'goal' && connected) reload();
     };
     const search = async () => {
       setWorking('files');
@@ -188,7 +160,7 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
           menu
           className="permission-trigger"
           openRequest={request?.target === 'permission' ? request.sequence : 0}
-          onOpen={() => setReload((n) => n + 1)}
+          onOpen={reload}
           trigger={
             <>
               <Icon name="shield" size={17} />
@@ -204,7 +176,7 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
               {error && (
                 <p class="popover-error" role="alert">
                   {error}
-                  <button type="button" onClick={() => setReload((n) => n + 1)}>
+                  <button type="button" onClick={reload}>
                     重试
                   </button>
                 </p>
@@ -255,7 +227,8 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
           label="工具"
           className="composer-tool-trigger"
           openRequest={request && request.target !== 'permission' ? request.sequence : 0}
-          onOpen={() => setReload((n) => n + 1)}
+          openRequestAnchor={request?.anchor}
+          onOpen={reload}
           trigger={
             <>
               <Icon name="plus" size={18} />
@@ -283,6 +256,11 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
               {error && (
                 <p class="popover-error" role="alert">
                   {error}
+                  {catalogError && (
+                    <button type="button" onClick={reload}>
+                      重试
+                    </button>
+                  )}
                 </p>
               )}
               {section === 'tools' && (
@@ -337,7 +315,7 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
                       />
                     </>
                   )}
-                  {has('goal') && (
+                  {showGoal && (
                     <button type="button" class="control-row compact" onClick={() => openSection('goal')}>
                       <Icon name="target" size={19} />
                       <span>目标</span>
@@ -422,51 +400,22 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
                 </>
               )}
               {section === 'goal' && (
-                <div class="control-form">
-                  {catalog?.goal && (
-                    <p class="popover-note">
-                      {catalog.goal.objective} · {catalog.goal.phase}
-                      {catalog.goal.activation === 'disarmed' ? ' · 未自动继续' : ''}
+                <>
+                  {goalOperationError && (
+                    <p class="popover-error" role="alert">
+                      {goalOperationError}
                     </p>
                   )}
-                  <label for={`goal-${id}`}>目标内容</label>
-                  <textarea
-                    id={`goal-${id}`}
-                    aria-label="目标内容"
-                    placeholder="希望这个会话持续完成什么？"
-                    value={objective}
-                    onInput={(e) => setObjective((e.currentTarget as HTMLTextAreaElement).value)}
+                  <GoalControls
+                    goal={catalog?.goal}
+                    writable={canWriteGoal && !!has('goal')}
+                    disabled={locked || catalogLoading || !!catalogError}
+                    loading={connected && catalogLoading}
+                    objectiveMaxLength={catalog?.goalObjectiveMaxLength}
+                    unavailableReason={catalog?.goalUnavailableReason}
+                    onAction={action}
                   />
-                  <button
-                    type="button"
-                    class="primary"
-                    disabled={locked || !objective.trim()}
-                    onClick={() =>
-                      action({
-                        action: 'goal',
-                        operation: catalog?.goal ? 'edit' : 'create',
-                        ref: catalog?.goal?.ref,
-                        objective,
-                      })
-                    }
-                  >
-                    {catalog?.goal ? '保存修改' : '创建目标'}
-                  </button>
-                  {catalog?.goal && (
-                    <div class="control-form-actions">
-                      {(['pause', 'resume', 'complete', 'clear'] as const).map((operation, i) => (
-                        <button
-                          type="button"
-                          key={operation}
-                          disabled={locked}
-                          onClick={() => action({ action: 'goal', operation, ref: catalog.goal!.ref })}
-                        >
-                          {['暂停', '继续', '完成', '清除'][i]}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                </>
               )}
               {section === 'feedback' && (
                 <div class="control-form">

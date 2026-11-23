@@ -14,6 +14,8 @@ use uuid::Uuid;
 #[derive(Clone, Copy)]
 pub enum Tool {
     Open,
+    ReadThread,
+    SendMessage,
     Create,
     Projects,
     Rename,
@@ -26,6 +28,8 @@ impl Tool {
     fn name(self) -> &'static str {
         match self {
             Self::Open => "navigate_to_codex_page",
+            Self::ReadThread => "read_thread",
+            Self::SendMessage => "send_message_to_thread",
             Self::Create => "create_thread",
             Self::Projects => "list_projects",
             Self::Rename => "set_thread_title",
@@ -46,6 +50,10 @@ impl Catalog {
 
     pub fn can_create(&self) -> bool {
         self.has(Tool::Create) && self.has(Tool::Projects)
+    }
+
+    pub(crate) fn can_message(&self) -> bool {
+        self.has(Tool::ReadThread) && self.has(Tool::SendMessage)
     }
 }
 
@@ -137,7 +145,12 @@ pub(crate) async fn invoke(
     tool: Tool,
     arguments: Value,
 ) -> Result<Value> {
-    timeout(Duration::from_secs(12), request(stream, "tools/call", json!({
+    let duration = Duration::from_secs(match tool {
+        Tool::ReadThread => 4,
+        Tool::SendMessage => 20,
+        _ => 12,
+    });
+    timeout(duration, request(stream, "tools/call", json!({
         "arguments":arguments,"callerSource":"codex","callId":format!("pocket-{id}"),"hostId":"local",
         "namespace":"codex_app","threadId":anchor,"tool":tool.name(),"turnId":format!("pocket-control-{id}"),
     }))).await?

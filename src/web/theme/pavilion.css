@@ -162,7 +162,7 @@
     var(--pavilion-scene) right center / cover no-repeat;
 }
 
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   [data-color-mode='dark'] {
     --pavilion-chat-editor-veil: 59%;
   }

@@ -241,11 +241,11 @@
 @media (max-width: 650px) {
   .im-dialog.im-approval-panel {
     width: calc(100% - 16px);
-    max-height: calc(100dvh - 20px);
+    max-height: calc(var(--app-viewport-height, 100dvh) - 20px);
   }
 
   .im-approval-panel .im-dialog-body {
-    max-height: calc(100dvh - 94px);
+    max-height: calc(var(--app-viewport-height, 100dvh) - 94px);
   }
 
   .im-approval-toolbar {

@@ -8,7 +8,7 @@
 
 | 插件标识 | 对应产品 | 说明与配置要点 |
 | --- | --- | --- |
-| `@agent-remote/adapter-codex` | Codex | 默认实例 ID 为 `codex-local`，自动发现本机状态目录与桌面连接；支持多实例配置（分别指定 `home`、`socket`、`appTools`、`cli`）。支持历史、实时控制、模型/权限/技能/插件、审批、提问、计划确认、用量查询及 Codex Voice。 |
+| `@agent-remote/adapter-codex` | Codex | 默认实例 ID 为 `codex-local`，自动发现本机状态目录与桌面连接；支持多实例配置（分别指定 `home`、`socket`、`appTools`、`cli`）。支持历史、实时控制、长期目标、模型/权限/技能/插件、审批、提问、计划确认、用量查询及 Codex Voice。 |
 | `@agent-remote/adapter-dsh` | DSH Web | 连接已运行的 DSH Web 实例（配置 `url` 与访问 token 环境变量引用 `secrets.token`）。支持历史、实时流与思考过程/活动状态、新建（含附件与技能）/改名、项目归属、工具活动摘要与回复复制、审批、同步/补答提问、预设、权限、计划、目标管理、工作区文件引用、技能、反馈与 ZIP 日志导出。 |
 | `@agent-remote/adapter-antigravity` | Antigravity | 本机数据目录（默认 `~/.gemini/antigravity`）含 `daemon` 时自动发现为 `antigravity-local`。支持项目与会话同步、超大历史分页、结构化工具步骤与代码 Diff、实时活动状态与回复复制、新建（含图片附件、技能与已启用插件）/改名/中断/队列/追加、下一轮模型选择、单选/多选/手填提问、单次命令与文件修改审批、图片与引用文件下载、工作区文件引用、脱敏 JSON 日志导出及模型组额度查询。 |
 | `@agent-remote/plugin-terminal` | 终端（默认禁用） | 桌面适配器内置终端插件，默认关闭，可在网页端「我的 → 设置 → 插件管理」或桌面本机设置页「插件」标签开启。Linux/macOS 使用 POSIX PTY，Windows 使用原生 ConPTY（支持 PowerShell 7 / Windows PowerShell / CMD / Git Bash / WSL）。支持多标签会话、lrzsz（ZMODEM `rz`/`sz`）、trzsz（`trz`/`tsz`）、内联图片（Sixel / iTerm2 OSC 1337 / Kitty Graphics）、剪贴板粘贴与拖拽上传图片/文件、OSC 52 剪贴板、OSC 7 工作目录跟踪以及可选的 X11 / Wayland / 本机回环端口转发。 |
@@ -116,6 +116,14 @@ agent-space-native --adapter result <REQUEST_ID>
 | `adapter/media` / `adapter/export` | 宿主 → 插件 | 返回位于实例目录内的 `{ path, name, temporary?: true }`，由网关负责加密流式传输并在标记 `temporary` 时清理。 |
 
 完整的最小可运行原生插件示例见 `desktop/native/examples/native-plugin-fixture.rs`。
+
+### Codex 历史会话发送
+
+原有实时跟随通道不可用时，Codex 插件可通过已验证的桌面工具 `read_thread` 和 `send_message_to_thread` 向本机会话发送纯文本。插件在写入前复核会话标识和状态，历史会话通过 `canResumeForSend` 声明可供发送。工作台沿用稳定请求 ID 记录操作结果。
+
+### Codex 长期目标
+
+工作台沿用 `controls.read` 和 `control.execute`。原生 Codex 插件通过同账号 `CODEX_HOME` 下的 App Server 控制套接字读取 `thread/goal/get`，并使用 `thread/goal/set` 和 `thread/goal/clear` 提交写操作。写入要求实时会话由该 App Server 加载，更新和清除会校验目标引用，重复请求由工作台的操作记录去重。桌面快照包含目标时，控制套接字不可用的实例仍可提供只读目标状态。
 
 ## 五、源码构建与本地验证
 

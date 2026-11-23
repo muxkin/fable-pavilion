@@ -29,6 +29,12 @@ pub(crate) const PACKAGE: &str = "@agent-remote/adapter-codex";
 const READ: Duration = Duration::from_secs(12);
 const VOICE_RPC_TIMEOUT: Duration = Duration::from_secs(6);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum LiveTransport {
+    AppTools,
+    Follower,
+}
+
 #[derive(Clone, Default)]
 pub struct Backend {
     inner: Option<Arc<Hosted>>,
@@ -322,17 +328,17 @@ impl Backend {
         }
     }
 
-    pub fn status(&self, online: bool) -> Value {
-        let mut result = status(self.available(), online);
+    pub(crate) fn status(&self, transport: Option<LiveTransport>) -> Value {
+        let mut result = status(self.available(), transport);
         if self.inner.is_none() {
             result["reason"] = json!("尚未安装 Codex 插件");
         }
         result
     }
 
-    pub(crate) fn info(&self, id: &str, online: bool) -> Option<Value> {
+    pub(crate) fn info(&self, id: &str, transport: Option<LiveTransport>) -> Option<Value> {
         let available = self.available();
-        let mut info = match info(available, online) {
+        let mut info = match info(available, transport) {
             Some(info) => info,
             None if id != ID => json!({
                 "product":"codex","connected":false,"version":null,
@@ -778,10 +784,13 @@ async fn follow(
         .await;
 }
 
-pub(crate) fn status(available: Availability, online: bool) -> Value {
-    let online = online && available.desktop;
-    let connected =
-        online || available.open || available.create || available.rename || available.fork;
+pub(crate) fn status(available: Availability, transport: Option<LiveTransport>) -> Value {
+    let online = available.desktop && transport.is_some();
+    let full_control = online && transport == Some(LiveTransport::Follower);
+    let open = (available.open && (available.ipc_online || full_control))
+        || available.app_tool_messages
+        || (online && transport == Some(LiveTransport::AppTools));
+    let connected = online || open || available.create || available.rename || available.fork;
     let reason = match (connected, available.history) {
         (true, _) => None,
         (_, true) => Some("请先在本机 Codex 打开此会话。仍可查看已有历史。"),
@@ -791,34 +800,35 @@ pub(crate) fn status(available: Availability, online: bool) -> Value {
         "connected":connected,"desktopIpcConnected":available.ipc_online,"desktopVersion":null,"supportedVersion":connected,
         "writesEnabled":connected,"reason":reason,
         "capabilities":{
-            "send":online,"steer":online,"interrupt":online,"modelSettings":online,
-            "questions":online,"approvals":online,"permissionRequests":online,
-            "openThread":available.open,"elicitationForms":online,
-            "newThread":available.create,"queue":online,
+            "send":online,"steer":full_control,"interrupt":full_control,"modelSettings":full_control,
+            "questions":full_control,"approvals":full_control,"permissionRequests":full_control,
+            "openThread":open,"elicitationForms":full_control,
+            "newThread":available.create,"queue":full_control,
             "renameThread":available.rename,"forkThread":available.fork,"forkFromTurn":available.fork_reply,
             "voice":available.voice,"voiceMode":available.voice.then_some("fork"),
         }
     })
 }
 
-pub(crate) fn info(available: Availability, online: bool) -> Option<Value> {
+pub(crate) fn info(available: Availability, transport: Option<LiveTransport>) -> Option<Value> {
     if !available.history {
         return None;
     }
-    let online = online && available.desktop;
-    let status = status(available, online);
+    let status = status(available, transport);
+    let online = status["capabilities"]["send"] == true;
+    let full_control = online && transport == Some(LiveTransport::Follower);
     let mut capabilities = serde_json::Map::new();
     for (name, supported) in [
         ("history", true),
         ("send", online),
-        ("steer", online),
-        ("interrupt", online),
-        ("respond", online),
-        ("settings", online),
-        ("queue", online),
+        ("steer", full_control),
+        ("interrupt", full_control),
+        ("respond", full_control),
+        ("settings", full_control),
+        ("queue", full_control),
         ("create", available.create),
-        ("open", available.open),
-        ("attachments", online),
+        ("open", status["capabilities"]["openThread"] == true),
+        ("attachments", full_control),
         ("skills", true),
         ("plugins", true),
         ("voice", available.voice),
@@ -847,14 +857,42 @@ mod connection_tests {
             ipc_online: true,
             ..Default::default()
         };
-        let backend = info(available, false).unwrap();
+        let backend = info(available, None).unwrap();
         assert_eq!(backend["connected"], true);
         assert_eq!(backend["capabilities"]["send"]["state"], "unavailable");
-        assert_eq!(status(available, false)["writesEnabled"], false);
+        assert_eq!(status(available, None)["writesEnabled"], false);
         let disconnected = Availability {
             ipc_online: false,
             ..available
         };
-        assert_eq!(info(disconnected, false).unwrap()["connected"], false);
+        assert_eq!(info(disconnected, None).unwrap()["connected"], false);
+    }
+
+    #[test]
+    fn app_tools_support_text_without_advertising_follower_controls() {
+        let available = Availability {
+            history: true,
+            desktop: true,
+            app_tool_messages: true,
+            ..Default::default()
+        };
+        let cold = status(available, None);
+        assert_eq!(cold["capabilities"]["openThread"], true);
+        assert_eq!(cold["capabilities"]["send"], false);
+        let app_tools = Some(LiveTransport::AppTools);
+        let live = status(available, app_tools);
+        assert_eq!(live["capabilities"]["send"], true);
+        assert_eq!(live["capabilities"]["steer"], false);
+        assert_eq!(live["capabilities"]["modelSettings"], false);
+        assert_eq!(
+            info(available, app_tools).unwrap()["capabilities"]["attachments"]["state"],
+            "unavailable"
+        );
+        assert_eq!(
+            [LiveTransport::AppTools, LiveTransport::Follower]
+                .into_iter()
+                .max(),
+            Some(LiveTransport::Follower)
+        );
     }
 }

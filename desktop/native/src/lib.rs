@@ -9,6 +9,7 @@ mod conversations;
 #[cfg(feature = "official-plugins")]
 mod codex;
 mod codex_backend;
+mod codex_goal;
 mod codex_live;
 #[cfg(feature = "official-plugins")]
 mod codex_peer;

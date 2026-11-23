@@ -2,6 +2,7 @@ import { tsxComponent } from './tsx-component';
 import { shallowRef, useId, type VNodeChild, Teleport } from 'vue';
 import { watchRender, writeRef } from './render-effects';
 import { showBackDialog } from './shell/dialog-history';
+import { appPixels, appRect, appViewport } from './shell/app-zoom';
 
 import { Icon } from './Icon';
 import { AttachmentIdentity } from './AttachmentIdentity';
@@ -21,7 +22,7 @@ export const AttachmentActions = tsxComponent(function AttachmentActions(_props:
   surface?: 'inline' | 'card' | 'media' | 'compact';
   children?: VNodeChild | ((open: OpenDetails) => VNodeChild);
 }) {
-  const positionState = shallowRef<{ x: number; y: number; bottom: number } | null>(null);
+  const positionState = shallowRef<{ anchor: HTMLElement; point?: { x: number; y: number } } | null>(null);
   const setPosition = writeRef(positionState);
   const copiedState = shallowRef(false);
   const setCopied = writeRef(copiedState);
@@ -54,19 +55,19 @@ export const AttachmentActions = tsxComponent(function AttachmentActions(_props:
       if (!position) return;
       const element = panel.value!;
       const place = () => {
-        const viewport = window.visualViewport;
-        const width = viewport?.width ?? innerWidth;
-        const height = viewport?.height ?? innerHeight;
-        const left = viewport?.offsetLeft ?? 0;
-        const top = viewport?.offsetTop ?? 0;
-        const mobile = matchMedia('(max-width: 600px)').matches;
+        const { width, height, left, top, right, bottom, windowWidth } = appViewport();
+        const anchor = appRect(position.anchor.getBoundingClientRect());
+        const x = position.point ? appPixels(position.point.x) : anchor.left;
+        const y = position.point ? appPixels(position.point.y) : anchor.top;
+        const anchorBottom = position.point ? y : anchor.bottom;
+        const mobile = windowWidth <= 600;
         element.style.width = mobile ? `${width}px` : `${Math.min(368, width - 24)}px`;
         element.style.maxHeight = `${height - (mobile ? 24 : 16)}px`;
-        const box = element.getBoundingClientRect();
-        element.style.left = `${mobile ? left : Math.max(left + 12, Math.min(position.x, left + width - box.width - 12))}px`;
-        const above = position.y - box.height - 8;
-        const y = position.bottom + box.height + 8 <= top + height ? position.bottom + 8 : above;
-        element.style.top = `${mobile ? top + height - box.height : Math.max(top + 8, Math.min(y, top + height - box.height - 8))}px`;
+        const box = appRect(element.getBoundingClientRect());
+        element.style.left = `${mobile ? left : Math.max(left + 12, Math.min(x, right - box.width - 12))}px`;
+        const above = y - box.height - 8;
+        const targetY = anchorBottom + box.height + 8 <= bottom ? anchorBottom + 8 : above;
+        element.style.top = `${mobile ? bottom - box.height : Math.max(top + 8, Math.min(targetY, bottom - box.height - 8))}px`;
       };
       const closeDialog = showBackDialog(element);
       place();
@@ -86,10 +87,9 @@ export const AttachmentActions = tsxComponent(function AttachmentActions(_props:
     }, [position]);
     function show(anchor: HTMLElement, point?: { x: number; y: number }) {
       returnFocus.current = anchor;
-      const rect = anchor.getBoundingClientRect();
       setCopied(false);
       setError('');
-      setPosition(point ? { ...point, bottom: point.y } : { x: rect.left, y: rect.top, bottom: rect.bottom });
+      setPosition({ anchor, point });
     }
     const close = () => setPosition(null);
     return (

@@ -2,7 +2,7 @@
   --voice-muted: #a4abc6;
   color-scheme: dark;
   width: min(460px, calc(100% - 36px));
-  height: min(790px, calc(100dvh - 36px));
+  height: min(790px, calc(var(--app-viewport-height, 100dvh) - 36px));
   max-width: none;
   max-height: none;
   margin: auto;
@@ -314,7 +314,7 @@
 @media (max-width: 560px) {
   .codex-voice {
     width: 100%;
-    height: 100dvh;
+    height: var(--app-viewport-height, 100dvh);
     margin: 0;
     border: 0;
     border-radius: 0;

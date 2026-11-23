@@ -1,9 +1,10 @@
 import { tsxComponent } from './tsx-component';
-import { defineAsyncComponent, onScopeDispose, shallowRef } from 'vue';
+import { defineAsyncComponent, onScopeDispose, shallowRef, watch } from 'vue';
 import { watchRender, writeRef, useExternalSnapshot } from './render-effects';
 import { UsagePanel } from './UsagePanel';
 import { uploadItems, type UploadItem } from './UploadProgress';
 import { ConversationHeader } from './shell/ConversationHeader';
+import { appPixels } from './shell/app-zoom';
 import { NetworkConnection } from './NetworkConnection';
 import { ConversationControls, type ControlSection } from './ConversationControls';
 import type { ControlAction } from '../shared/controls';
@@ -48,7 +49,6 @@ import {
   HISTORY_PAGES_PER_LOAD,
   HISTORY_TOP_THRESHOLD,
   HISTORY_VISIBLE_TARGET,
-  OPEN_FOR_SEND_TIMEOUT,
   RECENT_REFRESH_INTERVAL,
   TRANSCRIPT_BOTTOM_TOLERANCE,
   antigravityImages,
@@ -63,10 +63,26 @@ import { PairingView } from './workspace/PairingView';
 import { OutgoingMessageCard } from './workspace/OutgoingMessageCard';
 import { ThreadActionSheet, type WorkspaceThreadAction } from './workspace/ThreadActionSheet';
 import { SessionToolsSheet } from './workspace/SessionToolsSheet';
+import { useWorkbenchSidebar, WorkbenchSidebarToggle } from './workspace/WorkbenchSidebarToggle';
+import { ConversationGoalSummary } from './workspace/GoalControls';
+import { useConversationControlCatalog } from './workspace/conversation-control-catalog';
+import { canResumeThread, canSendOpenedThread, openForSend, openedThreadBlocked } from './workspace/open-for-send';
 
 const CodexVoice = defineAsyncComponent(() => import('./CodexVoice'));
 const subscribeConnection = (notify: () => void) => deviceSession.onChange(notify);
 const connectionSnapshot = () => deviceSession.online;
+const textOnlySendHint =
+  '当前仅可发送文本。带附件或使用所选技能、插件或模型的消息，请在电脑上的 Codex 发送。';
+
+function requiresFullSend(draft: ChatDraft) {
+  return !!(draft.uploads.length || draft.skills.length || draft.plugins.length || draft.model);
+}
+
+function onlySendsText(view: ThreadView | null, threadId: string) {
+  return (
+    (view?.id === threadId && view.synchronized && view.textOnlySend === true) || canResumeThread(view, threadId)
+  );
+}
 
 export default tsxComponent(function AgentWorkspace(_props: {
   route: AppRoute;
@@ -79,6 +95,8 @@ export default tsxComponent(function AgentWorkspace(_props: {
     _props.onBusy(false);
     _props.onUpdateBlocked(false);
   });
+  const sidebar = useWorkbenchSidebar();
+  const readControlCatalog = useConversationControlCatalog();
   const backendState = shallowRef<BackendInfo>();
   const setBackend = writeRef(backendState);
   const pairedState = shallowRef(false);
@@ -129,8 +147,10 @@ export default tsxComponent(function AgentWorkspace(_props: {
     target: ControlSection;
     sequence: number;
     threadId: string;
+    anchor?: HTMLElement;
   }>();
   const setControlRequest = writeRef(controlRequestState);
+  const goalOperationId = shallowRef<string>();
   const settingsDirtyState = shallowRef(false);
   const setSettingsDirty = writeRef(settingsDirtyState);
   const projectsState = shallowRef<{ projects: ProjectSummary[]; total: number; ungrouped: number }>({
@@ -178,11 +198,14 @@ export default tsxComponent(function AgentWorkspace(_props: {
   const setError = writeRef(errorState);
   const threadErrorState = shallowRef('');
   const setThreadError = writeRef(threadErrorState);
-  const openingForSendState = shallowRef<string>();
+  const openingForSendState = shallowRef<AbortController>();
+  const waitingForOpenedThread = shallowRef(false);
   const sendPreparationError = shallowRef('');
-  onScopeDispose(() => {
+  function cancelOpeningForSend() {
+    openingForSendState.value?.abort();
     openingForSendState.value = undefined;
-  });
+  }
+  onScopeDispose(cancelOpeningForSend);
   const busyState = shallowRef(false);
   const setBusy = writeRef(busyState);
   const operationsState = shallowRef<Operation[]>([]);
@@ -339,7 +362,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
     watchRoute(() => {
       creationRequest.current = undefined;
       voiceState.value = undefined;
-      openingForSendState.value = undefined;
+      cancelOpeningForSend();
       sendPreparationError.value = '';
     }, [route.thread, route.host, backendId, active]);
     // The URL is the selection authority; previous cached metadata must never win a click.
@@ -353,7 +376,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
       setControlRequest(undefined);
       setToolsOpen(false);
       setThreadAction(undefined);
-    }, [selected?.id]);
+    }, [selected?.id, deviceId, backendId]);
     function setSelected(thread: ThreadSummary | null, replace = false) {
       creationRequest.current = undefined;
       updateSelected(thread);
@@ -423,6 +446,8 @@ export default tsxComponent(function AgentWorkspace(_props: {
     const hostId = hostIdState.value;
     const drafts = readChatDrafts(deviceId, selected?.id ?? null);
     const messageModel = drafts.draft.model;
+    const textOnlySend = !!selected && onlySendsText(view, selected.id);
+    const unsupportedSendDraft = textOnlySend && requiresFullSend(drafts.draft);
 
     const { text: draft, uploads, skills: selectedSkills, plugins: selectedPlugins } = drafts.draft;
     function setSelectedSkills(value: SkillChoice[] | ((old: SkillChoice[]) => SkillChoice[])) {
@@ -455,8 +480,33 @@ export default tsxComponent(function AgentWorkspace(_props: {
     const error = errorState.value;
     const threadError = threadErrorState.value;
     const openingForSend = !!openingForSendState.value;
+    const openingActivity = openingForSend
+      ? (waitingForOpenedThread.value ? '正在等待会话同步…' : '正在打开会话…')
+      : undefined;
     const busy = busyState.value || openingForSend;
     const operations = operationsState.value;
+    const latestOperation = operations[0];
+    const controlCatalog = readControlCatalog({
+      backendId,
+      backend,
+      deviceId,
+      threadId: view?.id,
+      connected: active && stream,
+      state: view?.controls,
+      refresh: latestOperation
+        ? `${latestOperation.id}:${latestOperation.state}:${latestOperation.updatedAt}`
+        : '',
+      turnId: view?.activeTurnId,
+    });
+    const requestControl = (target: ControlSection, anchor?: HTMLElement) => {
+      if (!view) return;
+      setControlRequest((previous) => ({
+        threadId: view.id,
+        target,
+        anchor,
+        sequence: (previous?.sequence ?? 0) + 1,
+      }));
+    };
     const historyCursor = historyCursorState.value;
     const historyLoading = historyLoadingState.value;
     const subscriptionAttempt = subscriptionAttemptState.value;
@@ -624,13 +674,15 @@ export default tsxComponent(function AgentWorkspace(_props: {
       const update = () => {
         setStatus(deviceSession.backendStatus(backendId) ?? null);
         if (!deviceSession.online) {
-          openingForSendState.value = undefined;
+          cancelOpeningForSend();
           setView((old) =>
             old
               ? {
                   ...old,
                   synchronized: false,
                   boundedQuestionAvailable: false,
+                  canResumeForSend: false,
+                  textOnlySend: false,
                   canSend: false,
                   canInterrupt: false,
                   reason: null,
@@ -766,7 +818,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
         const anchor = previous.anchor;
         if (anchor && transcript.contains(anchor.element)) {
           const offset = anchor.element.getBoundingClientRect().top - transcript.getBoundingClientRect().top;
-          transcript.scrollTop += offset - anchor.offset;
+          transcript.scrollTop += appPixels(offset) - anchor.offset;
         } else {
           transcript.scrollTop = previous.top + transcript.scrollHeight - previous.height;
         }
@@ -846,6 +898,17 @@ export default tsxComponent(function AgentWorkspace(_props: {
       const isSend = kind === 'send' || kind === 'steer' || kind === 'queue';
       if (isSend && dispatchingDraft.current) return;
       const submitted = retryDraft ?? drafts.draft;
+      const latest = receivedViewState.value;
+      if (kind === 'send' && onlySendsText(latest, selected.id)) {
+        if (!canSendOpenedThread(latest, selected.id) || statusState.value?.writesEnabled !== true) {
+          sendPreparationError.value = latest?.reason || openedThreadBlocked;
+          return;
+        }
+        if (requiresFullSend(submitted)) {
+          sendPreparationError.value = textOnlySendHint;
+          return;
+        }
+      }
       if (kind === 'steer' && antigravity && submitted.uploads.length) {
         setError('Antigravity 追加指令仅支持文本。请等待当前任务结束后发送照片。');
         return;
@@ -861,6 +924,8 @@ export default tsxComponent(function AgentWorkspace(_props: {
       setBusy(true);
       setError('');
       const requestId = crypto.randomUUID();
+      if (kind === 'control' && settings && 'control' in settings && settings.control.action === 'goal')
+        goalOperationId.value = requestId;
       const body =
         kind === 'queue'
           ? { requestId, text: submitted.text, expectedQueueFingerprint: view?.queueFingerprint }
@@ -1058,7 +1123,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                   if (element.classList.contains('older')) continue;
                   const bounds = element.getBoundingClientRect();
                   if (bounds.bottom <= top || bounds.top >= bottom) continue;
-                  anchor = { element, offset: bounds.top - top };
+                  anchor = { element, offset: appPixels(bounds.top - top) };
                   break;
                 }
               }
@@ -1082,6 +1147,11 @@ export default tsxComponent(function AgentWorkspace(_props: {
       }
     }
     const currentOperations = operations.filter((operation) => operation.threadId === selected?.id);
+    const goalOperation = currentOperations.find((operation) => operation.id === goalOperationId.value);
+    const goalOperationError =
+      goalOperation && ['rejected', 'failed', 'uncertain'].includes(goalOperation.state)
+        ? goalOperation.error || '无法确认目标操作结果'
+        : undefined;
     const virtualCreation =
       selected?.id === 'new'
         ? currentOperations.find(
@@ -1111,11 +1181,13 @@ export default tsxComponent(function AgentWorkspace(_props: {
     const threadActionOperation = currentOperations.find(
       (operation) => operation.id === threadAction?.requestId,
     );
-    const needsOpen = !!view && (!view.owner || view.runtimeStatus === 'notLoaded');
+    const needsOpen = !!view && !textOnlySend && (!view.owner || view.runtimeStatus === 'notLoaded');
     const visibleOperations = currentOperations.filter((operation) => operation.kind !== 'open');
-    const pending = [drafts.outgoing?.operation, ...visibleOperations].some(
-      (x) => x && ['received', 'dispatching', 'uncertain'].includes(x.state),
-    );
+    const blocksSend = (operation?: Operation) =>
+      !!operation &&
+      operation.kind !== 'open' &&
+      ['received', 'dispatching', 'uncertain'].includes(operation.state);
+    const pending = [drafts.outgoing?.operation, ...currentOperations].some(blocksSend);
     function boundedAntigravityQuestion(current: ThreadView | null) {
       const currentBackend = backendState.value;
       if (
@@ -1151,7 +1223,11 @@ export default tsxComponent(function AgentWorkspace(_props: {
       visibleOperations.find((x) => ['received', 'dispatching', 'uncertain'].includes(x.state)) ??
       visibleOperations[0];
     const canCompose =
-      stream && !!view?.synchronized && (view.canSend || (view.canInterrupt && view.pendingRequests === 0));
+      stream &&
+      !!view?.synchronized &&
+      (textOnlySend
+        ? !!selected && canSendOpenedThread(view, selected.id) && status?.writesEnabled === true
+        : view.canSend || (view.canInterrupt && view.pendingRequests === 0));
     const canOpenForSend =
       stream && needsOpen && !canCompose && !!status?.writesEnabled && !!status.capabilities.openThread;
     async function sendDraft() {
@@ -1162,50 +1238,70 @@ export default tsxComponent(function AgentWorkspace(_props: {
         return;
       }
       const threadId = selected.id;
+      const submitted = drafts.draft;
+      const draftUnchanged = () => drafts.readCurrent()?.draft === submitted;
+      if (!draftUnchanged()) return;
       const requestId = crypto.randomUUID();
-      openingForSendState.value = requestId;
-      const host = deviceSession.host?.hostId;
+      const attempt = new AbortController();
+      waitingForOpenedThread.value = false;
+      openingForSendState.value = attempt;
+      const host = deviceSession.host;
       const current = () =>
-        openingForSendState.value === requestId &&
+        openingForSendState.value === attempt &&
+        _props.active !== false &&
+        _props.route.page === 'workbench' &&
+        _props.route.thread === threadId &&
+        _props.route.host === route.host &&
+        (_props.route.backend ?? DEFAULT_BACKEND) === backendId &&
         selectedId.current === threadId &&
-        deviceSession.host?.hostId === host &&
+        deviceIdState.value === deviceId &&
+        deviceSession.host?.hostId === host?.hostId &&
+        deviceSession.host?.deviceId === host?.deviceId &&
         deviceSession.online;
-      const path = `/operations/${requestId}`;
-      const deadline = Date.now() + OPEN_FOR_SEND_TIMEOUT;
       let readyToSend = false;
-      let failure = '暂时无法打开会话，消息未发送。请重试。';
       try {
-        let operation = await api<Operation>(`/threads/${encodeURIComponent(threadId)}/open`, {
-          method: 'POST',
-          body: JSON.stringify({ requestId }),
+        const result = await openForSend({
+          threadId,
+          requestId,
+          signal: attempt.signal,
+          current: () => current() && draftUnchanged(),
+          open: () =>
+            api<Operation>(`/threads/${encodeURIComponent(threadId)}/open`, {
+              method: 'POST',
+              body: JSON.stringify({ requestId }),
+            }),
+          lookup: () => api<Operation>(`/operations/${requestId}`),
+          observed: () => operationSnapshots.current.get(requestId),
+          view: () => receivedViewState.value,
+          subscribe: (check) =>
+            watch([receivedViewState, operationsState, () => drafts.readCurrent()?.draft], check, {
+              flush: 'sync',
+            }),
+          awaitingSync: () => {
+            waitingForOpenedThread.value = true;
+          },
         });
-        while (current() && Date.now() < deadline) {
-          const observed = operationSnapshots.current.get(requestId);
-          if (observed && observed.updatedAt >= operation.updatedAt) operation = observed;
-          if (operation.state === 'failed' || operation.state === 'rejected') break;
-          const settled = operation.state === 'completed' || operation.state === 'uncertain';
-          const latest = receivedViewState.value;
-          if (
-            settled &&
-            latest?.id === threadId &&
-            latest.synchronized &&
-            latest.owner &&
-            latest.runtimeStatus !== 'notLoaded'
-          ) {
-            readyToSend = latest.canSend && !latest.activeTurnId && latest.pendingRequests === 0;
-            if (!readyToSend) failure = '消息未发送。请查看当前会话状态，草稿已保留。';
-            break;
-          }
-          if (operation.state === 'uncertain') break;
-          await new Promise((resolve) => setTimeout(resolve, 750));
-          if (current() && !settled && operationSnapshots.current.get(requestId) === observed)
-            operation = await api<Operation>(path).catch(() => operation);
+        if (!current()) return;
+        if (!draftUnchanged()) {
+          sendPreparationError.value = '草稿已更改，消息未发送。请确认后再发送。';
+        } else if (result.state === 'blocked') {
+          sendPreparationError.value = result.message;
+        } else if (result.state === 'ready') {
+          const outgoing = drafts.readCurrent()?.outgoing?.operation;
+          readyToSend =
+            statusState.value?.writesEnabled === true &&
+            canSendOpenedThread(receivedViewState.value, threadId) &&
+            !busyState.value &&
+            !uploadingState.value &&
+            !dispatchingDraft.current &&
+            !blocksSend(outgoing) &&
+            outgoing?.state !== 'failed' &&
+            outgoing?.state !== 'rejected' &&
+            !operationsState.value.some((op) => op.threadId === threadId && blocksSend(op));
+          if (!readyToSend) sendPreparationError.value = openedThreadBlocked;
         }
-      } catch {
-        // Opening the desktop has no effect on the unsent draft.
       } finally {
-        if (!readyToSend && current()) sendPreparationError.value = failure;
-        if (openingForSendState.value === requestId) openingForSendState.value = undefined;
+        if (openingForSendState.value === attempt) cancelOpeningForSend();
       }
       // Use the normal send journal only after the desktop is ready.
       if (readyToSend) await act('send');
@@ -1279,9 +1375,15 @@ export default tsxComponent(function AgentWorkspace(_props: {
     const canEdit =
       canCompose ||
       canOpenForSend ||
+      (textOnlySend && stream) ||
       (!!view &&
         ((!view.synchronized && !view.reason && status?.writesEnabled !== false) ||
           (!!outgoingOperation && view.owner && !!status?.writesEnabled)));
+    const composerStatus =
+      openingActivity ||
+      sendPreparationError.value ||
+      (textOnlySend && !canCompose && view?.reason) ||
+      (unsupportedSendDraft && textOnlySendHint);
     const composerDelivery = delivery?.id === outgoingOperation?.id ? undefined : delivery;
     const draftHasContent = !!(
       draft.trim() ||
@@ -1378,9 +1480,11 @@ export default tsxComponent(function AgentWorkspace(_props: {
       route,
       usesMobileHistory() ? previousHistoryRoute() : undefined,
     );
+    const sidebarCollapsed = !!selected && sidebar.collapsed.value;
     return (
-      <div class={`app ${selected ? 'has-thread' : ''}`}>
+      <div class={['app', { 'has-thread': selected, 'workbench-sidebar-collapsed': sidebarCollapsed }]}>
         <ThreadNavigation
+          panelId={sidebar.id}
           backend={backend}
           agentName={agentName}
           onWorkbench={() => backTo({ page: 'workbench' }, navigate)}
@@ -1436,6 +1540,15 @@ export default tsxComponent(function AgentWorkspace(_props: {
             title={selected?.title || '选择一个会话'}
             backLabel={conversationBack.thread ? '返回上一会话' : '返回会话列表'}
             onBack={() => backTo(conversationBack, navigate)}
+            leadingAction={
+              selected && (
+                <WorkbenchSidebarToggle
+                  sidebarId={sidebar.id}
+                  collapsed={sidebarCollapsed}
+                  onToggle={sidebar.toggle}
+                />
+              )
+            }
             subtitle={
               <>
                 <Icon name="monitor" size={14} />
@@ -1499,6 +1612,12 @@ export default tsxComponent(function AgentWorkspace(_props: {
               </>
             )}
           </ConversationHeader>
+          {codex && controlCatalog.catalog?.goal && (
+            <ConversationGoalSummary
+              goal={controlCatalog.catalog.goal}
+              onOpen={(anchor) => requestControl('goal', anchor)}
+            />
+          )}
           {voiceOpen && voice && (
             <CodexVoice
               hostId={voice.hostId}
@@ -1633,6 +1752,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                         canCompose &&
                         !busy &&
                         !pending &&
+                        !(textOnlySend && requiresFullSend(outgoing.draft)) &&
                         (outgoing.operation.kind !== 'queue' || !!view?.queueFingerprint) &&
                         (!view?.activeTurnId ||
                           (!outgoing.draft.skills.length && !outgoing.draft.plugins.length))
@@ -1764,13 +1884,12 @@ export default tsxComponent(function AgentWorkspace(_props: {
                 )}
                 <ChatComposer
                   activity={
-                    operationActivity(outgoingOperation) ??
-                    (openingForSend ? '正在发送…' : operationActivity(composerDelivery))
+                    openingActivity ?? operationActivity(outgoingOperation) ?? operationActivity(composerDelivery)
                   }
                   feedback={
                     <>
-                      {sendPreparationError.value && (
-                        <p class="hint" role="status">{sendPreparationError.value}</p>
+                      {composerStatus && (
+                        <p class="hint" role="status">{composerStatus}</p>
                       )}
                       <OperationFeedback
                         operation={composerDelivery}
@@ -1785,6 +1904,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                           (draft.trim() || uploads.length) &&
                           canCompose &&
                           (!view?.activeTurnId || canSteer) &&
+                          !unsupportedSendDraft &&
                           !busy &&
                           !pending
                             ? () => void sendDraft()
@@ -1813,7 +1933,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                   uploadItems={uploadThread === selected.id ? uploadJobs : []}
                   onDismissUploads={() => setUploadJobs([])}
                   uploadDisabled={busy || uploading || pending || !(canCompose || canOpenForSend)}
-                  onUpload={canAttach ? uploadFiles : undefined}
+                  onUpload={canAttach && !textOnlySend ? uploadFiles : undefined}
                   imageUploadTypes={imagesOnly ? antigravityImages : undefined}
                   running={!!view?.activeTurnId}
                   canSteer={canSteer}
@@ -1828,6 +1948,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                         pending ||
                         !stream ||
                         !(canCompose || canOpenForSend) ||
+                        unsupportedSendDraft ||
                         (!!uploads.length && (!canAttach || textOnlyAppend)) ||
                         (!!selectedSkills.length && !canSelectSkills) ||
                         (!!selectedPlugins.length && !canSelectPlugins) ||
@@ -1851,6 +1972,18 @@ export default tsxComponent(function AgentWorkspace(_props: {
                   showQueueButton={antigravity}
                   onSubmit={() => {
                     if (view?.activeTurnId && (selectedSkills.length || selectedPlugins.length)) return;
+                    const catalog = controlCatalog.catalog;
+                    if (
+                      codex &&
+                      draft.trim() === '/goal' &&
+                      !uploads.length &&
+                      !selectedSkills.length &&
+                      !selectedPlugins.length &&
+                      (catalog?.actions.includes('goal') || catalog?.goal || catalog?.goalUnavailableReason)
+                    ) {
+                      requestControl('goal');
+                      return;
+                    }
                     if (
                       presentation?.nativeCommands &&
                       /^\/(permission|goal|plan|compact|feedback|export|model|file)(?:\s|$)/.test(
@@ -1861,13 +1994,11 @@ export default tsxComponent(function AgentWorkspace(_props: {
                       const command = draft.trim().split(/\s/)[0].slice(1);
                       if (command === 'model') setConfigOpen(true);
                       else
-                        setControlRequest((previous) => ({
-                          threadId: view!.id,
-                          target: ['permission', 'goal', 'feedback', 'file'].includes(command)
+                        requestControl(
+                          ['permission', 'goal', 'feedback', 'file'].includes(command)
                             ? (command as ControlSection)
                             : 'tools',
-                          sequence: (previous?.sequence ?? 0) + 1,
-                        }));
+                        );
                       return;
                     }
                     void sendDraft();
@@ -1879,7 +2010,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                       {view && (
                         <>
                           <ConversationControls
-                            key={view.id}
+                            key={JSON.stringify([deviceId, backendId, view.id])}
                             id={view.id}
                             state={view.controls}
                             backend={backend}
@@ -1887,11 +2018,15 @@ export default tsxComponent(function AgentWorkspace(_props: {
                             running={!!view.activeTurnId}
                             disabled={busy || pending || !stream}
                             connected={stream}
+                            canWriteGoal={status?.writesEnabled !== false}
+                            goalOperationError={goalOperationError}
+                            toolSelectionDisabled={textOnlySend}
+                            {...controlCatalog}
                             modeDisabled={
-                              presentation?.plan === 'settings' &&
-                              ((!view.canSend && !view.canInterrupt) || !view.model || !view.reasoningEffort)
+                              textOnlySend ||
+                              (presentation?.plan === 'settings' &&
+                                ((!view.canSend && !view.canInterrupt) || !view.model || !view.reasoningEffort))
                             }
-                            refresh={operations[0]?.updatedAt ?? 0}
                             request={controlRequest?.threadId === view.id ? controlRequest : undefined}
                             onAction={(control) => void act('control', { control })}
                             onMode={(mode) =>
@@ -1913,7 +2048,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                               type="button"
                               class="plan-chip"
                               aria-label="取消计划模式"
-                              disabled={busy || pending || !stream || (!view.canSend && !view.canInterrupt)}
+                              disabled={busy || pending || !stream || textOnlySend || (!view.canSend && !view.canInterrupt)}
                               onClick={() =>
                                 void (controlPlan
                                   ? act('control', { control: { action: 'plan', enabled: false } })
@@ -1942,7 +2077,8 @@ export default tsxComponent(function AgentWorkspace(_props: {
                                 <button
                                   type="button"
                                   class="composer-model"
-                                  title={tooltip}
+                                  title={textOnlySend ? '请在电脑上的 Codex 修改模型设置' : tooltip}
+                                  disabled={textOnlySend}
                                   aria-label={messageModelPicker ? '选择下一条消息的模型' : '模型设置'}
                                   onClick={() => setConfigOpen(true)}
                                 >
@@ -1994,7 +2130,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                       <ModelSettings
                         key={backendId + ':' + view.id}
                         view={view}
-                        disabled={busy || pending || !stream || (!view.canSend && !view.canInterrupt)}
+                        disabled={busy || pending || !stream || textOnlySend || (!view.canSend && !view.canInterrupt)}
                         onSave={(settings) => act('settings', settings)}
                         onDirtyChange={setSettingsDirty}
                         response={operations.find((o) => o.kind === 'settings')}

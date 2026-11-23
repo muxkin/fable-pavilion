@@ -1,10 +1,12 @@
+import { appViewport } from './app-zoom';
+
 const dialogs = new Map<string, HTMLDialogElement>();
 let traversing = false;
 let pendingNavigation: (() => void) | undefined;
 let trimScheduled = false;
 
 export const usesMobileHistory = () =>
-  matchMedia('(max-width: 700px), (hover: none) and (pointer: coarse)').matches;
+  appViewport().windowWidth <= 700 || matchMedia('(hover: none) and (pointer: coarse)').matches;
 
 function historyDialogs(): string[] {
   return history.state?.pocketDialogs ?? [];

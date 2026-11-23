@@ -41,7 +41,11 @@ try {
   await expect(navButtons).toHaveCount(modules.length);
   for (const [index, label] of modules.entries())
     await expect(navButtons.nth(index)).toHaveAccessibleName(label);
-  await page.locator('.computer-card').getByRole('button', { name: '测试会话', exact: true }).click();
+  await page
+    .locator('.computer-card .computer-recent-list')
+    .getByRole('button')
+    .filter({ has: page.getByText('测试会话', { exact: true }) })
+    .click();
   await expect(draft).toBeEnabled();
   const id = conversation();
   const threadURL = page.url();

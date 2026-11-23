@@ -339,7 +339,7 @@ dialog {
 }
 .theme-editor {
   width: min(460px, calc(100% - 24px));
-  max-height: calc(100dvh - 32px);
+  max-height: calc(var(--app-viewport-height, 100dvh) - 32px);
   border: 1px solid var(--line);
   border-radius: 20px;
   padding: 24px;

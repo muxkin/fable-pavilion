@@ -414,20 +414,23 @@ pub(super) fn project<'a>(id: Uuid, state: &'a Value, revision: u64, epoch: Uuid
                 let mut content = Text::User(input, params);
                 let mut native_id = None;
                 let trigger = &params["turnTrigger"];
+                let app_continuation = matches!(
+                    trigger.as_str(),
+                    Some("app_tool_create_thread" | "app_tool_send_message")
+                );
                 let (present, internal) = content.properties();
-                if (!present || internal)
-                    && (trigger.is_null() || trigger == "app_tool_create_thread")
-                {
+                if (!present || internal) && (trigger.is_null() || app_continuation) {
+                    let thread = id.to_string();
                     let delegated = items
                         .iter()
                         .filter(|item| item["type"] == "functionCallOutput")
                         .find_map(|item| {
-                            delegated_input(item).map(|text| (text, item["id"].as_str()))
+                            delegated_input(item, &thread).map(|text| (text, item["id"].as_str()))
                         })
                         .or_else(|| {
-                            (trigger == "app_tool_create_thread")
+                            app_continuation
                                 .then(|| {
-                                    delegated_input(&params["toolOutput"]).map(|text| (text, None))
+                                    delegated_input(&params["toolOutput"], &thread).map(|text| (text, None))
                                 })
                                 .flatten()
                         });
@@ -584,6 +587,11 @@ pub(super) fn project<'a>(id: Uuid, state: &'a Value, revision: u64, epoch: Uuid
     } else {
         Some("桌面正在等待交互，请在 Codex 中处理")
     };
+    let native_goal = state.get("threadGoal");
+    let mut controls = settings::permission(&state["latestThreadSettings"]);
+    if let Some(revision) = native_goal.and_then(|goal| crate::codex_goal::snapshot_revision(goal, id)) {
+        controls["goalRevision"] = json!(revision);
+    }
     View {
         thread: json!({
             "id": id, "title": state["title"].as_str().unwrap_or("未命名会话"), "cwd": state["cwd"].as_str().unwrap_or(""),
@@ -592,11 +600,13 @@ pub(super) fn project<'a>(id: Uuid, state: &'a Value, revision: u64, epoch: Uuid
             "model": state["latestModel"], "reasoningEffort": state["latestReasoningEffort"],
             "serviceTier": state["latestThreadSettings"]["serviceTier"], "mode": state["latestCollaborationMode"]["mode"].as_str().unwrap_or("default"),
             "pendingRequests": pending.len(), "requests": requests,
-            "controls":settings::permission(&state["latestThreadSettings"]),
+            "controls":controls,
             "canSend": runtime == "idle" && active_turn.is_none() && pending.is_empty(), "canInterrupt": active.is_some(),
             "reason": reason,
         }),
         messages,
+        app_tools: false,
+        native_goal: native_goal.cloned(),
         expanded,
         activities,
         pending,

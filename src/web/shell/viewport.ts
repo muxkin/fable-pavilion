@@ -1,4 +1,5 @@
 import { onMounted, onScopeDispose } from 'vue';
+import { appViewport, installAppZoom } from './app-zoom';
 
 /** Fit the app to the visible area, including mobile browser chrome and the keyboard. */
 export function useAppViewport() {
@@ -13,36 +14,31 @@ export function useAppViewport() {
     const preventWheelZoom = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) event.preventDefault();
     };
-    const preventKeyZoom = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && ['+', '-', '=', '0'].includes(event.key))
-        event.preventDefault();
-    };
     document.addEventListener('touchmove', preventPinch, { passive: false });
     document.addEventListener('gesturestart', preventGesture, { passive: false });
     document.addEventListener('gesturechange', preventGesture, { passive: false });
     document.addEventListener('wheel', preventWheelZoom, { passive: false });
-    document.addEventListener('keydown', preventKeyZoom);
     let frame = 0;
     const update = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         // Browser-level accessibility overrides must not corrupt the layout geometry.
         if (viewport && Math.abs(viewport.scale - 1) > 0.01) return;
-        const height = viewport?.height ?? window.innerHeight;
+        const { height, top } = appViewport();
         document.documentElement.style.setProperty('--app-visible-height', `${height}px`);
-        document.documentElement.style.setProperty('--app-visible-top', `${viewport?.offsetTop ?? 0}px`);
+        document.documentElement.style.setProperty('--app-visible-top', `${top}px`);
       });
     };
-    update();
     window.addEventListener('resize', update);
     viewport?.addEventListener('resize', update);
     viewport?.addEventListener('scroll', update);
+    const stopZoom = installAppZoom();
     cleanup = () => {
       document.removeEventListener('touchmove', preventPinch);
       document.removeEventListener('gesturestart', preventGesture);
       document.removeEventListener('gesturechange', preventGesture);
       document.removeEventListener('wheel', preventWheelZoom);
-      document.removeEventListener('keydown', preventKeyZoom);
+      stopZoom();
       cancelAnimationFrame(frame);
       window.removeEventListener('resize', update);
       viewport?.removeEventListener('resize', update);

@@ -1,6 +1,7 @@
 import { tsxComponent } from './tsx-component';
 import { useId, shallowRef, type VNodeChild } from 'vue';
 import { watchRender } from './render-effects';
+import { appRect, appViewport } from './shell/app-zoom';
 
 /** A light-dismiss surface anchored to the composer, without a modal backdrop. */
 export const ComposerPopover = tsxComponent(function ComposerPopover(initialProps: {
@@ -13,6 +14,7 @@ export const ComposerPopover = tsxComponent(function ComposerPopover(initialProp
   menu?: boolean;
   maxWidth?: number;
   openRequest?: number;
+  openRequestAnchor?: HTMLElement;
   onOpen?: () => void;
   children: (close: (restoreFocus?: boolean) => void) => VNodeChild;
 }) {
@@ -21,6 +23,7 @@ export const ComposerPopover = tsxComponent(function ComposerPopover(initialProp
   const id = useId();
   const panel = shallowRef<HTMLDivElement | null>(null);
   const button = shallowRef<HTMLButtonElement | null>(null);
+  let externalAnchor: HTMLElement | undefined;
   const onOpenRef = { current: onOpen };
   const watchAttribute = watchRender();
   const watchOpenRequest = watchRender();
@@ -34,13 +37,15 @@ export const ComposerPopover = tsxComponent(function ComposerPopover(initialProp
     menu = false,
     maxWidth = menu ? 304 : 344,
     openRequest = 0,
+    openRequestAnchor,
     onOpen,
     children,
   }) => {
     onOpenRef.current = onOpen;
     const close = (restoreFocus = true) => {
+      const focusTarget = externalAnchor?.isConnected ? externalAnchor : button.value;
       panel.value?.hidePopover();
-      if (restoreFocus) button.value?.focus({ preventScroll: true });
+      if (restoreFocus) focusTarget?.focus({ preventScroll: true });
     };
     watchAttribute(() => {
       const el = panel.value;
@@ -49,15 +54,18 @@ export const ComposerPopover = tsxComponent(function ComposerPopover(initialProp
       if (!el || !anchor || !composer) return;
       const viewport = window.visualViewport;
       const position = () => {
-        const box = composer.getBoundingClientRect();
-        const triggerBox = anchor.getBoundingClientRect();
-        const left = viewport?.offsetLeft ?? 0;
-        const top = viewport?.offsetTop ?? 0;
-        const width = Math.min(maxWidth, (viewport?.width ?? innerWidth) - 24);
+        const box = appRect(composer.getBoundingClientRect());
+        const source = externalAnchor?.isConnected ? externalAnchor : undefined;
+        const triggerBox = appRect((source ?? anchor).getBoundingClientRect());
+        const bounds = appViewport();
+        const width = Math.min(maxWidth, bounds.width - 24);
+        const targetLeft = source ? triggerBox.right - width : triggerBox.left;
         el.style.width = `${width}px`;
-        el.style.left = `${Math.max(left + 12, Math.min(triggerBox.left, left + (viewport?.width ?? innerWidth) - width - 12))}px`;
-        el.style.bottom = `${innerHeight - box.top + 8}px`;
-        el.style.maxHeight = `${Math.max(80, box.top - top - 20)}px`;
+        el.style.left = `${Math.max(bounds.left + 12, Math.min(targetLeft, bounds.right - width - 12))}px`;
+        el.style.top = source ? `${triggerBox.bottom + 8}px` : 'auto';
+        el.style.bottom = source ? 'auto' : `${bounds.windowHeight - box.top + 8}px`;
+        const availableHeight = source ? bounds.bottom - triggerBox.bottom : box.top - bounds.top;
+        el.style.maxHeight = `${Math.max(80, availableHeight - 20)}px`;
       };
       let frame = 0;
       const reposition = () => {
@@ -81,12 +89,17 @@ export const ComposerPopover = tsxComponent(function ComposerPopover(initialProp
         if ((event as ToggleEvent).newState === 'open') {
           position();
           onOpenRef.current?.();
-        } else stopTracking();
+        } else {
+          externalAnchor?.setAttribute('aria-expanded', 'false');
+          externalAnchor = undefined;
+          stopTracking();
+        }
       };
       const toggle = () => {
         const open = el.matches(':popover-open');
         anchor.setAttribute('aria-expanded', String(open));
         if (open) {
+          externalAnchor?.setAttribute('aria-expanded', 'true');
           observer.observe(composer);
           window.addEventListener('resize', reposition);
           window.addEventListener('scroll', reposition, true);
@@ -101,13 +114,18 @@ export const ComposerPopover = tsxComponent(function ComposerPopover(initialProp
       el.addEventListener('beforetoggle', before);
       el.addEventListener('toggle', toggle);
       return () => {
+        externalAnchor?.setAttribute('aria-expanded', 'false');
         stopTracking();
         el.removeEventListener('beforetoggle', before);
         el.removeEventListener('toggle', toggle);
       };
     }, [maxWidth, hidden]);
     watchOpenRequest(() => {
-      if (openRequest) panel.value?.showPopover();
+      const el = panel.value;
+      if (!openRequest || !el) return;
+      if (el.matches(':popover-open') && externalAnchor !== openRequestAnchor) el.hidePopover();
+      externalAnchor = openRequestAnchor;
+      el.showPopover();
     }, [openRequest, hidden]);
     if (hidden) return null;
     return (

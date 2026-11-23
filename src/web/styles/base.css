@@ -97,7 +97,7 @@ h2 {
   background: var(--surface);
 }
 .pair-wrap {
-  min-height: 100dvh;
+  min-height: var(--app-viewport-height, 100dvh);
   display: grid;
   place-items: center;
   padding: 28px;
@@ -127,7 +127,7 @@ h2 {
   overflow-wrap: anywhere;
 }
 .app {
-  height: 100dvh;
+  height: var(--app-viewport-height, 100dvh);
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
   max-width: 1440px;
@@ -432,18 +432,18 @@ h2 {
 .composer .error {
   margin-bottom: 10px;
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .app {
     display: block;
     border: 0;
   }
   .sidebar {
-    height: 100dvh;
+    height: var(--app-viewport-height, 100dvh);
     border: 0;
   }
   .chat {
     display: none;
-    height: 100dvh;
+    height: var(--app-viewport-height, 100dvh);
   }
   .has-thread .sidebar {
     display: none;
@@ -919,8 +919,8 @@ h2 {
   color: inherit;
   width: min(600px, calc(100% - 24px));
   max-width: none;
-  height: min(760px, calc(100dvh - 24px));
-  max-height: calc(100dvh - 24px);
+  height: min(760px, calc(var(--app-viewport-height, 100dvh) - 24px));
+  max-height: calc(var(--app-viewport-height, 100dvh) - 24px);
   margin: auto;
   box-shadow: 0 24px 80px var(--shadow);
 }
@@ -1084,11 +1084,11 @@ h2 {
   overflow-wrap: anywhere;
   margin: 10px 0;
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .question-dialog {
     width: 100%;
-    height: 94dvh;
-    max-height: 94dvh;
+    height: calc(var(--app-viewport-height, 100dvh) * 0.94);
+    max-height: calc(var(--app-viewport-height, 100dvh) * 0.94);
     margin: auto 0 0;
     border-radius: 18px 18px 0 0;
   }
@@ -1511,7 +1511,7 @@ textarea:focus {
   color: var(--ink);
   background: var(--surface);
   width: min(560px, calc(100% - 32px));
-  max-height: 88dvh;
+  max-height: calc(var(--app-viewport-height, 100dvh) * 0.88);
 }
 .thread-tools[open] {
   display: flex;
@@ -1642,7 +1642,7 @@ textarea:focus {
 .media [role='alert'] button {
   justify-self: start;
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .chat-head {
     padding: 10px 12px;
     min-height: 74px;
@@ -1685,21 +1685,21 @@ textarea:focus {
   }
   .question-dialog {
     width: 100%;
-    height: 84dvh;
-    max-height: 94dvh;
+    height: calc(var(--app-viewport-height, 100dvh) * 0.84);
+    max-height: calc(var(--app-viewport-height, 100dvh) * 0.94);
     margin: auto 0 0;
     border-radius: 22px 22px 0 0;
   }
   .thread-tools {
     width: 100%;
-    max-height: 90dvh;
+    max-height: calc(var(--app-viewport-height, 100dvh) * 0.90);
     margin: auto 0 0;
     border-radius: 22px 22px 0 0;
   }
 }
 @media (max-height: 560px) {
   .question-dialog {
-    height: 94dvh;
+    height: calc(var(--app-viewport-height, 100dvh) * 0.94);
   }
   .question-dialog-head {
     padding: 10px 16px;
@@ -1929,7 +1929,7 @@ textarea:focus {
   box-shadow: 0 -8px 16px var(--surface);
   min-height: 44px;
 }
-@media (max-width: 760px) {
+@container app-viewport (max-width: 760px) {
   .thread-tools {
     max-width: 100%;
   }

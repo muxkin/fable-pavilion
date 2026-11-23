@@ -29,6 +29,8 @@ pub(crate) struct Availability {
     pub desktop: bool,
     #[serde(default)]
     pub ipc_online: bool,
+    #[serde(default)]
+    pub app_tool_messages: bool,
     pub open: bool,
     pub create: bool,
     #[serde(default)]
@@ -115,15 +117,18 @@ impl Local {
             .as_ref()
             .map(|desktop| desktop.tools.catalog())
             .unwrap_or_default();
+        let ipc_online = self.ipc_online.load(Ordering::Relaxed);
         Availability {
             history: true,
             desktop: self.desktop.is_some(),
-            ipc_online: self.ipc_online.load(Ordering::Relaxed),
+            ipc_online,
+            app_tool_messages: catalog.can_message(),
             open: catalog.has(Tool::Open),
             create: catalog.can_create(),
             create_attachments: catalog.can_create(),
             create_tools: catalog.can_create()
                 && catalog.has(Tool::Open)
+                && ipc_online
                 && self
                     .desktop
                     .as_ref()
@@ -232,13 +237,21 @@ impl Local {
                 Ok(Some(json!({name:catalog.list(skills)})))
             }
             "controls.read" => {
-                params["id"].as_str().context("会话 ID 无效")?;
-                let view = live.and_then(|live| live.view.borrow().clone());
+                let id = params["id"].as_str().context("会话 ID 无效")?;
+                let view = live
+                    .and_then(|live| live.view.borrow().clone())
+                    .filter(|view| !view.app_tools);
                 let state = view.as_ref().map_or_else(
                     || settings::permission(&Value::Null),
                     |view| view.thread["controls"].clone(),
                 );
-                Ok(Some(settings::controls(state, view.is_some())))
+                let mut controls = settings::controls(state, view.is_some());
+                if let (Some(desktop), Some(view), Ok(thread)) =
+                    (&self.desktop, view.as_ref(), Uuid::parse_str(id))
+                {
+                    desktop.goals.enrich(&mut controls, thread, view).await;
+                }
+                Ok(Some(controls))
             }
             "creation.projects" => {
                 let desktop = self.desktop.as_ref().context("尚未连接 Codex")?;
@@ -358,11 +371,31 @@ impl Local {
             .await
     }
 
-    pub(crate) async fn execute(live: Option<&Thread>, request: Uuid, action: Action) -> Outcome {
-        match live {
-            Some(live) => live.execute(action, request).await,
-            None => Outcome::Rejected("请先打开会话".into()),
+    pub(crate) async fn execute(
+        &self,
+        thread: Uuid,
+        live: Option<&Thread>,
+        request: Uuid,
+        action: Action,
+    ) -> Outcome {
+        let Some(live) = live else {
+            return Outcome::Rejected("请先打开会话".into());
+        };
+        if let Action::Goal { change } = action {
+            let Some(desktop) = &self.desktop else {
+                return Outcome::Rejected("尚未连接 Codex".into());
+            };
+            if !live
+                .view
+                .borrow()
+                .as_ref()
+                .is_some_and(|view| view.is_open())
+            {
+                return Outcome::Rejected("请先打开 Codex 会话".into());
+            }
+            return desktop.goals.change(thread, change).await;
         }
+        live.execute(action, request).await
     }
 }
 

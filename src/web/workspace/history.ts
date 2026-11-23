@@ -5,7 +5,6 @@ export const HISTORY_TOP_THRESHOLD = 160;
 export const TRANSCRIPT_BOTTOM_TOLERANCE = 2;
 export const HISTORY_PAGES_PER_LOAD = 8;
 export const HISTORY_VISIBLE_TARGET = 40;
-export const OPEN_FOR_SEND_TIMEOUT = 30_000;
 export const RECENT_REFRESH_INTERVAL = 10_000;
 export const antigravityImages = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 

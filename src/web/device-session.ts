@@ -890,6 +890,8 @@ export class DeviceSession {
             ...cached.view,
             synchronized: false,
             boundedQuestionAvailable: false,
+            canResumeForSend: false,
+            textOnlySend: false,
             canSend: false,
             canInterrupt: false,
             reason: null,

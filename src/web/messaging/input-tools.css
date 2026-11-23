@@ -89,7 +89,7 @@
 .im-more-items button:focus-visible {
   background: var(--soft);
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .app-shell .im-compose-wrap .composer-box {
     display: block;
     padding: 6px 8px;
@@ -127,7 +127,7 @@
   display: flex;
   flex-direction: column;
   width: min(392px, calc(100% - 40px));
-  max-height: min(440px, calc(100dvh - 210px));
+  max-height: min(440px, calc(var(--app-viewport-height, 100dvh) - 210px));
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   border-radius: 18px;
@@ -471,12 +471,12 @@
     transform: scaleY(1);
   }
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .im-input-tray {
     position: relative;
     inset: auto;
     width: 100%;
-    max-height: min(330px, 44dvh);
+    max-height: min(330px, calc(var(--app-viewport-height, 100dvh) * 0.44));
     margin-top: 8px;
     border-radius: 14px;
     box-shadow: none;

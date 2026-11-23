@@ -10,6 +10,7 @@ import { messaging, useMessaging } from './messaging/context';
 import { deviceSession } from './device-session';
 import { Icon } from './Icon';
 import { Dialog } from './shell/Dialog';
+import { appRect, appViewport } from './shell/app-zoom';
 import './usage.css';
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -192,16 +193,18 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
     }, [active]);
 
     const position = () => {
-      const box = trigger.value?.getBoundingClientRect();
+      const button = trigger.value;
       const panel = popover.value;
-      if (!box || !panel) return;
+      if (!button || !panel) return;
+      const box = appRect(button.getBoundingClientRect());
+      const viewport = appViewport();
       panel.style.top = `${box.bottom + 8}px`;
-      panel.style.right = `${Math.max(12, window.innerWidth - box.right)}px`;
+      panel.style.right = `${Math.max(12, viewport.windowWidth - box.right)}px`;
     };
     watchResize(() => {
       if (!desktopOpen) return;
       const closeAtMobile = () => {
-        if (window.matchMedia('(max-width: 640px)').matches) popover.value?.hidePopover();
+        if (appViewport().windowWidth <= 640) popover.value?.hidePopover();
         else position();
       };
       window.addEventListener('resize', closeAtMobile);
@@ -481,7 +484,7 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
           data-low={displayedPercent !== undefined && displayedPercent <= 15}
           data-empty={state !== 'loading' && !displayedPercent}
           onClick={(event) => {
-            if (window.matchMedia('(max-width: 640px)').matches) {
+            if (appViewport().windowWidth <= 640) {
               event.preventDefault();
               setMobileOpen(true);
             } else position();

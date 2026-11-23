@@ -580,7 +580,7 @@ button {
 }
 .settings-sheet,
 .picker-sheet {
-  height: min(710px, 87dvh);
+  height: min(710px, calc(var(--app-viewport-height, 100dvh) * 0.87));
 }
 .thread-tools.settings-sheet .tools-body,
 .thread-tools.picker-sheet .tools-body {
@@ -892,7 +892,7 @@ button {
 .picker-selected .skill-chip {
   flex-shrink: 0;
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .app {
     border: 0;
   }
@@ -922,7 +922,7 @@ button {
     border-radius: 22px 22px 0 0;
   }
 }
-@media (max-width: 375px) {
+@container app-viewport (max-width: 375px) {
   .composer {
     padding-inline: 10px;
   }
@@ -953,8 +953,8 @@ button {
 @media (max-height: 560px) {
   .settings-sheet,
   .picker-sheet {
-    height: 94dvh;
-    max-height: 94dvh;
+    height: calc(var(--app-viewport-height, 100dvh) * 0.94);
+    max-height: calc(var(--app-viewport-height, 100dvh) * 0.94);
   }
   .thread-tools .question-dialog-head {
     padding: 16px 16px 8px;
@@ -1031,10 +1031,10 @@ button {
 
 /* Creation uses the chat composer; only project/title metadata belong to the sheet. */
 .new-conversation-sheet {
-  height: min(440px, 88dvh);
+  height: min(440px, calc(var(--app-viewport-height, 100dvh) * 0.88));
 }
 .new-conversation-sheet:has(.optional-title[open]) {
-  height: min(500px, 88dvh);
+  height: min(500px, calc(var(--app-viewport-height, 100dvh) * 0.88));
 }
 .new-conversation-sheet .tools-body {
   display: flex;
@@ -1098,8 +1098,8 @@ button {
 }
 @media (max-height: 520px) {
   .new-conversation-sheet {
-    height: 94dvh;
-    max-height: 94dvh;
+    height: calc(var(--app-viewport-height, 100dvh) * 0.94);
+    max-height: calc(var(--app-viewport-height, 100dvh) * 0.94);
   }
   .new-conversation-sheet .question-dialog-head {
     padding-top: 12px;
@@ -1157,7 +1157,7 @@ button {
 .question-detail {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 50vh;
+  max-height: calc(var(--app-viewport-height, 100dvh) * 0.50);
   overflow: auto;
   font: inherit;
 }
@@ -1219,7 +1219,7 @@ button {
   position: fixed;
   inset: auto;
   margin: 0;
-  max-width: calc(100vw - 24px);
+  max-width: calc(var(--app-viewport-width, 100vw) - 24px);
   padding: 7px;
   border: 1px solid var(--line);
   border-radius: 15px;
@@ -1437,7 +1437,7 @@ button {
   margin-left: 8px;
   text-decoration: underline;
 }
-@media (max-width: 480px) {
+@container app-viewport (max-width: 480px) {
   .composer-control-trigger {
     padding: 6px;
     gap: 4px;
@@ -1517,6 +1517,15 @@ button {
 @container chat-composer (max-width: 460px) {
   .composer-actions .composer-model > svg:first-child {
     display: none;
+  }
+}
+@container chat-composer (max-width: 250px) {
+  .composer-actions {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .composer-actions :is(.composer-model-group, .composer-model.is-readonly) {
+    flex-basis: 44px;
   }
 }
 
@@ -1715,7 +1724,7 @@ body {
   bottom: calc(82px + env(safe-area-inset-bottom));
   z-index: 1;
 }
-@media (max-width: 600px) {
+@container app-viewport (max-width: 600px) {
   .app-shell :is(input, textarea, select) {
     font-size: max(16px, 1em);
   }
@@ -2150,7 +2159,7 @@ body {
     opacity: 1;
   }
 }
-@media (max-width: 600px) {
+@container app-viewport (max-width: 600px) {
   .upload-chip {
     width: 100%;
   }

@@ -46,7 +46,7 @@
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: clamp(220px, 30vh, 300px);
+  min-height: clamp(220px, calc(var(--app-viewport-height, 100dvh) * 0.30), 300px);
   padding: 42px 30px;
   color: var(--ink);
   background:
@@ -90,7 +90,7 @@
 .login-invitation-scanner .qr-scanner-video {
   grid-column: 1 / -1;
   grid-row: 2;
-  height: clamp(220px, 30vh, 300px);
+  height: clamp(220px, calc(var(--app-viewport-height, 100dvh) * 0.30), 300px);
   border: 1px solid var(--line);
 }
 .login-invitation-scanner .im-import-sticker,
@@ -333,8 +333,8 @@
   font-weight: 600;
 }
 .login-invitation-dialog.im-dialog {
-  width: min(520px, calc(100vw - 32px));
-  max-height: min(94dvh, 960px);
+  width: min(520px, calc(var(--app-viewport-width, 100vw) - 32px));
+  max-height: min(calc(var(--app-viewport-height, 100dvh) * 0.94), 960px);
   border-radius: 22px;
 }
 .login-invitation-dialog.im-dialog > header {
@@ -375,8 +375,8 @@
   .login-invitation-dialog.im-dialog {
     width: 100%;
     max-width: none;
-    max-height: 100dvh;
-    height: 100dvh;
+    max-height: var(--app-viewport-height, 100dvh);
+    height: var(--app-viewport-height, 100dvh);
     margin: 0;
     border: 0;
     border-radius: 0;

@@ -612,6 +612,13 @@
   overflow: hidden;
 }
 
+.term-pane-screen {
+  inline-size: 100%;
+  block-size: 100%;
+  /* xterm compares client coordinates with cell metrics in its own CSS pixels. */
+  zoom: calc(1 / var(--app-zoom, 1));
+}
+
 .term-pane-host .xterm {
   height: 100%;
 }
@@ -671,6 +678,7 @@
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
   display: grid;
   gap: 2px;
+  overflow: auto;
 }
 
 /* Collapsible Right Side Panel */

@@ -1,6 +1,6 @@
 use crate::{
     appearance,
-    codex_backend::{Backend, Group, ID as CODEX, Live, VoiceSession},
+    codex_backend::{Backend, Group, ID as CODEX, Live, LiveTransport, VoiceSession},
     codex_live::Action,
     codex_service::voice_sdp,
     conversations,
@@ -158,7 +158,7 @@ impl DeviceSession {
             db,
             peer,
             device,
-            last_status: HashMap::from([(CODEX.into(), backends.codex.main().status(false))]),
+            last_status: HashMap::from([(CODEX.into(), backends.codex.main().status(None))]),
             backends,
             watches: HashMap::new(),
             plugin_watches: HashMap::new(),
@@ -465,10 +465,19 @@ impl DeviceSession {
         Ok(())
     }
 
-    fn online(&self, backend: &str) -> bool {
-        self.watches.iter().any(|((id, _), watch)| {
-            id == backend && watch.live.as_ref().and_then(Live::view).is_some()
-        })
+    fn live_transport(&self, backend: &str) -> Option<LiveTransport> {
+        self.watches
+            .iter()
+            .filter(|((id, _), _)| id == backend)
+            .filter_map(|(_, watch)| watch.live.as_ref().and_then(Live::view))
+            .map(|view| {
+                if view.app_tools {
+                    LiveTransport::AppTools
+                } else {
+                    LiveTransport::Follower
+                }
+            })
+            .max()
     }
 
     fn terminal_attach(&mut self, request: &Value) -> Result<(Value, Vec<u8>)> {

@@ -15,6 +15,7 @@ import {
 } from './palette';
 import { appearanceSnapshot, subscribeAppearance, updateAppearance } from './store';
 import { localeMode, resolvedLocale, setLocaleMode, t, type LocaleMode } from '../../shared/i18n';
+import { useAppZoom } from '../shell/app-zoom';
 
 const snapshot = shallowRef(appearanceSnapshot());
 onScopeDispose(
@@ -25,6 +26,11 @@ onScopeDispose(
 
 const settings = computed(() => snapshot.value.settings);
 const resolved = computed(() => snapshot.value.resolved);
+const { scale: zoomScale, change: changeZoom } = useAppZoom();
+const zoomPercent = computed(() => {
+  const percent = zoomScale.value * 100;
+  return `${percent >= 1 ? Math.round(percent) : Number(percent.toPrecision(2))}%`;
+});
 const themes = computed(() => [...presets, ...settings.value.customThemes]);
 const customThemeIds = computed(() => new Set(settings.value.customThemes.map((theme) => theme.id)));
 const displayModes = computed(
@@ -240,6 +246,39 @@ async function importFile(event: Event) {
     </fieldset>
     <fieldset class="source-display-settings">
       <legend>{{ t('界面与文本', 'Display & Text') }}</legend>
+      <div class="appearance-zoom-row">
+        <span id="appearance-interface-zoom">{{ t('界面缩放', 'Interface zoom') }}</span>
+        <div class="appearance-zoom-controls" role="group" aria-labelledby="appearance-interface-zoom">
+          <button
+            type="button"
+            :aria-label="t('缩小界面', 'Zoom out')"
+            :title="t('缩小界面', 'Zoom out')"
+            @click="changeZoom('out')"
+          >
+            <SvgIcon name="minus" :size="16" />
+          </button>
+          <button
+            type="button"
+            class="appearance-zoom-value"
+            :aria-label="
+              t(`重置界面缩放，当前 ${zoomPercent}`, `Reset interface zoom, currently ${zoomPercent}`)
+            "
+            :title="t('重置为 100%', 'Reset to 100%')"
+            @click="changeZoom('reset')"
+          >
+            {{ zoomPercent }}
+          </button>
+          <button
+            type="button"
+            :aria-label="t('放大界面', 'Zoom in')"
+            :title="t('放大界面', 'Zoom in')"
+            @click="changeZoom('in')"
+          >
+            <SvgIcon name="plus" :size="16" />
+          </button>
+        </div>
+        <span class="sr-only" role="status">{{ t(`界面缩放 ${zoomPercent}`, `Interface zoom ${zoomPercent}`) }}</span>
+      </div>
       <label>
         <span>{{ t('亭台背景画', 'Pavilion backdrop artwork') }}</span>
         <input type="checkbox" role="switch" :checked="settings.backdrop" @change="selectBackdrop" />
@@ -362,6 +401,54 @@ async function importFile(event: Event) {
 </template>
 
 <style scoped>
+.source-display-settings {
+  min-inline-size: 0;
+}
+
+.appearance-zoom-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  min-block-size: 52px;
+  padding-block: 4px;
+  border-block-end: 1px solid var(--line);
+}
+
+.appearance-zoom-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 44fr) minmax(0, 56fr) minmax(0, 44fr);
+  inline-size: min(146px, 100%);
+  min-block-size: 46px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-subtle);
+}
+
+.appearance-zoom-controls button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 7px;
+}
+
+.appearance-zoom-controls button:hover:not(:disabled) {
+  background: var(--soft);
+}
+
+.appearance-zoom-controls button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.appearance-zoom-controls .appearance-zoom-value {
+  border-inline: 1px solid var(--line);
+  border-radius: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
 .theme-grid {
   align-items: start;
   gap: clamp(8px, 2.5vw, 16px);

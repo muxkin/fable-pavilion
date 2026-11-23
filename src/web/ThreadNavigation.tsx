@@ -7,6 +7,7 @@ import { Icon } from './Icon';
 import type { BackendInfo } from '../shared/backends';
 import { backendAppearanceDefaults } from '../shared/backend-appearance';
 import { BackendIcon } from './BackendIcon';
+import { appPixels, appViewport } from './shell/app-zoom';
 import './thread-navigation.css';
 type Page = { threads: ThreadSummary[]; nextCursor: string | null };
 type ProjectOrder = 'default' | 'activity' | 'name';
@@ -22,6 +23,7 @@ function savedProjectOrder(): ProjectOrder {
 }
 
 export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
+  panelId: string;
   projects: { projects: ProjectSummary[]; total: number; ungrouped: number };
   threads: ThreadSummary[];
   cursor: string | null;
@@ -78,6 +80,7 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
   const watchRecentActivity = watchRender();
   const watchContextMenu = watchRender();
   return ({
+    panelId,
     projects,
     threads,
     cursor,
@@ -122,8 +125,15 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
       const menuWidth = 200;
       const estimatedHeight = thread ? 280 : 140;
       const margin = 8;
-      const x = Math.max(margin, Math.min(event.clientX, window.innerWidth - menuWidth - margin));
-      const y = Math.max(margin, Math.min(event.clientY, window.innerHeight - estimatedHeight - margin));
+      const viewport = appViewport();
+      const x = Math.max(
+        viewport.left + margin,
+        Math.min(appPixels(event.clientX), viewport.right - menuWidth - margin),
+      );
+      const y = Math.max(
+        viewport.top + margin,
+        Math.min(appPixels(event.clientY), viewport.bottom - estimatedHeight - margin),
+      );
       menuState.value = { x, y, thread };
     }
     watchContextMenu(() => {
@@ -323,7 +333,7 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
       groups.sort((a, b) => latest(b) - latest(a) || projectNames.compare(a.name, b.name));
     groups.push({ id: 'none', name: '未分类', count: projects.ungrouped });
     return (
-      <aside class="sidebar">
+      <aside id={panelId} class="sidebar">
         <header class="sidebar-head">
           <div class="workspace-heading">
             {onWorkbench && (

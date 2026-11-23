@@ -97,6 +97,9 @@ it('shows only the controls offered by the current backend', async () => {
         render: () => (
           <ConversationControls
             id="thread"
+            catalogLoading={false}
+            reload={() => {}}
+            canWriteGoal={false}
             backend={
               {
                 capabilities: {

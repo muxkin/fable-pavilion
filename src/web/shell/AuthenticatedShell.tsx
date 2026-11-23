@@ -87,6 +87,7 @@ export default tsxComponent(function AuthenticatedShell() {
   onScopeDispose(() => stopKeybookSync?.());
   const adminAuthRequest = shallowRef(takeAdminAuthParams());
   const routeState = shallowRef(readRoute(new URL(location.href)));
+  const pairingLinkRevision = shallowRef(0);
   seedMobileHistory(routeState.value);
   const loginInvitation = shallowRef(takeLoginInvitation(routeState.value));
   const setRoute = writeRef(routeState);
@@ -282,6 +283,7 @@ export default tsxComponent(function AuthenticatedShell() {
           return;
         }
         if (!location.hash && routeURL(next) === routeURL(routeState.value)) return;
+        if (next.page === 'pair' && location.hash) pairingLinkRevision.value++;
         loginInvitation.value = takeLoginInvitation(next);
         if (next.page === 'workbench' && !isWorkbenchHome(next)) workbenchRoute.current = next;
         setRoute(next);
@@ -516,7 +518,9 @@ export default tsxComponent(function AuthenticatedShell() {
                                       />
                                     ) : (
                                       <AgentWorkspace
-                                        key={`${hostId || 'unpaired'}:${backendId}`}
+                                        key={workspaceRoute.page === 'pair'
+                                          ? `pair:${pairingLinkRevision.value}`
+                                          : `${hostId || 'unpaired'}:${backendId}`}
                                         active={showWorkspace}
                                         route={workspaceRoute}
                                         navigate={navigate}

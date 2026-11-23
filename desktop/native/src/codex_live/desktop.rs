@@ -25,6 +25,8 @@ use uuid::Uuid;
 mod follow_frame;
 #[path = "desktop_projection.rs"]
 mod projection;
+#[path = "desktop_tools.rs"]
+mod desktop_tools;
 #[cfg(test)]
 #[path = "desktop_tests.rs"]
 mod tests;
@@ -43,6 +45,7 @@ pub struct Desktop {
     threads: Arc<Mutex<HashMap<Uuid, Weak<Thread>>>>,
     pub tools: AppTools,
     pub reply_fork: crate::reply_fork::ReplyFork,
+    pub(crate) goals: crate::codex_goal::Goals,
     pub(crate) usage: crate::usage::Usage,
 }
 
@@ -51,6 +54,7 @@ impl Desktop {
         let tools = AppTools::new(endpoint.clone());
         Self {
             usage: crate::usage::Usage::new(tools.clone()),
+            goals: crate::codex_goal::Goals::new(history.home().to_owned()),
             reply_fork: crate::reply_fork::ReplyFork::new(endpoint.executable(), cli),
             tools,
             endpoint,
@@ -91,6 +95,7 @@ impl Desktop {
         let (state, view) = watch::channel(None);
         let task = tokio::spawn(run_thread(
             self.endpoint.clone(),
+            self.tools.clone(),
             self.history.clone(),
             id,
             inputs,
@@ -329,7 +334,7 @@ impl Action {
                     Outcome::Uncertain
                 }
             }
-            Self::Send { .. } | Self::FirstSend { .. } => Outcome::Uncertain,
+            Self::Send { .. } | Self::FirstSend { .. } | Self::Goal { .. } => Outcome::Uncertain,
             Self::Steer { expected, .. } => Outcome::Accepted(expected.clone()),
             Self::Interrupt { expected } => Outcome::Interrupted(
                 response["result"]["interruptedTurnId"]
@@ -366,13 +371,17 @@ struct Command {
 
 async fn run_thread(
     endpoint: Endpoint,
+    tools: AppTools,
     history: History,
     id: Uuid,
     mut commands: mpsc::Receiver<Command>,
     updates: watch::Sender<Option<Arc<View>>>,
 ) {
     loop {
-        let result = follow(&endpoint, &history, id, &mut commands, &updates).await;
+        let result = match endpoint.open().await {
+            Ok(stream) => follow(stream, &history, id, &mut commands, &updates).await,
+            Err(_) => desktop_tools::run(&endpoint, &tools, &history, id, &mut commands, &updates).await,
+        };
         updates.send_replace(None);
         if result.is_ok() {
             return;
@@ -392,13 +401,13 @@ async fn run_thread(
 }
 
 async fn follow(
-    endpoint: &Endpoint,
+    stream: Stream,
     history: &History,
     id: Uuid,
     commands: &mut mpsc::Receiver<Command>,
     updates: &watch::Sender<Option<Arc<View>>>,
 ) -> Result<()> {
-    let mut wire = Wire::new(endpoint.open().await?);
+    let mut wire = Wire::new(stream);
     let initial = wire
         .call(
             "initialize",

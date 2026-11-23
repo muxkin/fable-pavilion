@@ -1,8 +1,9 @@
-import { onScopeDispose, shallowRef } from 'vue';
+import { onScopeDispose, shallowRef, type CSSProperties } from 'vue';
 import { tsxComponent } from '../tsx-component';
 import { watchRender } from '../render-effects';
 import { deviceSession } from '../device-session';
 import type { AppRoute } from '../shell/routes';
+import { appPixels, appViewport, useAppZoom } from '../shell/app-zoom';
 import { Icon } from '../Icon';
 import {
   TERMINAL_BACKEND_ID,
@@ -78,7 +79,8 @@ export default tsxComponent(function TerminalWorkspace(_props: {
   const toast = shallowRef('');
   const newTabX11 = shallowRef(false);
   const newTabWayland = shallowRef(false);
-  const contextMenu = shallowRef<{ x: number; y: number; paneId: string } | null>(null);
+  const contextMenu = shallowRef<{ paneId: string; style: CSSProperties } | null>(null);
+  const { scale: appZoomScale } = useAppZoom();
 
   let uploadTargetDir: string | undefined;
   let pendingTransferFileResolve: ((files: File[]) => void) | null = null;
@@ -88,6 +90,7 @@ export default tsxComponent(function TerminalWorkspace(_props: {
   const watchInit = watchRender();
   const watchResizeArea = watchRender();
   const watchPrefs = watchRender();
+  const watchZoom = watchRender();
 
   function notify(message: string) {
     toast.value = message;
@@ -629,6 +632,9 @@ export default tsxComponent(function TerminalWorkspace(_props: {
         }
       }
     }, [prefs.value]);
+    watchZoom(() => {
+      contextMenu.value = null;
+    }, [appZoomScale.value]);
 
     const theme = TERMINAL_THEMES[prefs.value.theme] ?? TERMINAL_THEMES['pavilion-night'];
     const themeVars = `--t-chrome:${theme.chromeBg};--t-panel:${theme.panelBg};--t-canvas:${theme.canvasBg};--t-border:${theme.border};--t-ink:${theme.ink};--t-muted:${theme.muted};--t-accent:${theme.accent}`;
@@ -1013,9 +1019,18 @@ export default tsxComponent(function TerminalWorkspace(_props: {
                           e.preventDefault();
                           activeTab.activePaneId = pane.session.id;
                           touchTabs();
-                          const x = Math.min(e.clientX, window.innerWidth - 224);
-                          const y = Math.min(e.clientY, window.innerHeight - 310);
-                          contextMenu.value = { x: Math.max(8, x), y: Math.max(8, y), paneId: pane.session.id };
+                          const { left, top, right, bottom } = appViewport();
+                          const x = Math.max(left + 8, Math.min(appPixels(e.clientX), right - 224));
+                          const y = Math.max(top + 8, Math.min(appPixels(e.clientY), bottom - 310));
+                          contextMenu.value = {
+                            paneId: pane.session.id,
+                            style: {
+                              left: `${x}px`,
+                              top: `${y}px`,
+                              maxWidth: `${right - x - 8}px`,
+                              maxHeight: `${bottom - y - 8}px`,
+                            },
+                          };
                         }}
                       >
                         {isSplit && (
@@ -1309,7 +1324,7 @@ export default tsxComponent(function TerminalWorkspace(_props: {
         {contextMenu.value && ctxPane && (
           <div
             class="term-context-menu"
-            style={`left:${contextMenu.value.x}px;top:${contextMenu.value.y}px`}
+            style={contextMenu.value.style}
             role="menu"
             onClick={(e) => e.stopPropagation()}
           >

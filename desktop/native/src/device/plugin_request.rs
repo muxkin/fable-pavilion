@@ -252,6 +252,25 @@ pub(super) fn thread_id(value: &Value) -> Result<Uuid> {
     Ok(Uuid::parse_str(value.as_str().context("会话 ID 无效")?)?)
 }
 
+pub(super) fn codex_control(control: &Value) -> Result<Action> {
+    if control["action"] != "goal" {
+        return Ok(Action::Permission {
+            input: settings::permission_change(control)?,
+        });
+    }
+    let Control::Goal {
+        operation,
+        reference,
+        objective,
+    } = serde_json::from_value(control.clone())?
+    else {
+        anyhow::bail!("Codex 目标参数无效");
+    };
+    Ok(Action::Goal {
+        change: crate::codex_goal::Change::new(operation, reference, objective)?,
+    })
+}
+
 pub(super) fn codex_draft_id(value: &Value) -> Result<Option<Uuid>> {
     value
         .as_str()

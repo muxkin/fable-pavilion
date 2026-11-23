@@ -4,7 +4,9 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { ImageAddon } from '@xterm/addon-image';
+import { watch } from 'vue';
 import type { TerminalSessionSummary } from '../../shared/plugins';
+import { useAppZoom } from '../shell/app-zoom';
 import { ZmodemFilter, type TerminalTransferProgress } from './zmodem';
 import { TrzszFilter } from './trzsz';
 import { TerminalSequenceFilter, type TerminalCapturedImage } from './kitty-graphics';
@@ -45,16 +47,16 @@ export function createTerminalPane(opts: {
 }): TerminalPaneRuntime {
   const { session } = opts;
   const prefs = opts.getPrefs();
+  const { scale } = useAppZoom();
   const preset = TERMINAL_THEMES[prefs.theme] ?? TERMINAL_THEMES['pavilion-night'];
 
   const container = document.createElement('div');
-  container.style.width = '100%';
-  container.style.height = '100%';
+  container.className = 'term-pane-screen';
 
   const term = new Terminal({
     cursorBlink: prefs.cursorBlink,
     cursorStyle: prefs.cursorStyle,
-    fontSize: prefs.fontSize,
+    fontSize: prefs.fontSize * scale.value,
     lineHeight: prefs.lineHeight,
     fontFamily: prefs.fontFamily,
     allowProposedApi: true,
@@ -78,6 +80,26 @@ export function createTerminalPane(opts: {
   term.loadAddon(unicode11);
   term.loadAddon(imageAddon);
   term.unicode.activeVersion = '11';
+
+  function fitVisible() {
+    if (!container.offsetWidth || !container.offsetHeight) return;
+    try {
+      fit.fit();
+    } catch {
+      /* Ignore resize while temporarily hidden. */
+    }
+  }
+
+  let zoomFrame = 0;
+  const stopZoomWatch = watch(
+    scale,
+    (next) => {
+      term.options.fontSize = opts.getPrefs().fontSize * next;
+      cancelAnimationFrame(zoomFrame);
+      zoomFrame = requestAnimationFrame(fitVisible);
+    },
+    { flush: 'post' },
+  );
 
   const send = (bytes: Uint8Array) => opts.sendBytes(session.id, bytes);
   const zmodem = new ZmodemFilter({
@@ -132,15 +154,11 @@ export function createTerminalPane(opts: {
       const nextPreset = TERMINAL_THEMES[next.theme] ?? TERMINAL_THEMES['pavilion-night'];
       term.options.theme = nextPreset.xterm;
       term.options.fontFamily = next.fontFamily;
-      term.options.fontSize = next.fontSize;
+      term.options.fontSize = next.fontSize * scale.value;
       term.options.lineHeight = next.lineHeight;
       term.options.cursorStyle = next.cursorStyle;
       term.options.cursorBlink = next.cursorBlink;
-      try {
-        fit.fit();
-      } catch {
-        /* Ignore resize while detached. */
-      }
+      fitVisible();
     },
     exportTranscript() {
       const buf = term.buffer.active;
@@ -153,6 +171,8 @@ export function createTerminalPane(opts: {
       return `${lines.join('\n')}\n`;
     },
     dispose() {
+      stopZoomWatch();
+      cancelAnimationFrame(zoomFrame);
       zmodem.cancel();
       trzsz.cancel();
       term.dispose();

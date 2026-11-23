@@ -213,6 +213,7 @@ export async function createCodexDesktopFixture(options: CodexDesktopFixtureOpti
   let addAsyncQuestion = () => {};
   let responseCount = 0;
   let browserSends = 0;
+  let threadGoal: unknown;
   const applyQueue = (rows: any[]) => {
     queue.globalFixture['queued-follow-ups'][threadId] = rows;
     writeFileSync(queue.globalPath, JSON.stringify(queue.globalFixture));
@@ -308,6 +309,7 @@ export async function createCodexDesktopFixture(options: CodexDesktopFixtureOpti
               cwd: projectPath,
               turns,
               requests: pending,
+              threadGoal,
             },
           },
         },
@@ -589,6 +591,10 @@ export async function createCodexDesktopFixture(options: CodexDesktopFixtureOpti
     },
     setRequest: (reqId: string | number, method: string, params: Record<string, unknown>) => {
       pending = [{ id: reqId, method, params }];
+      publish();
+    },
+    setGoalSnapshot: (goal: unknown) => {
+      threadGoal = goal;
       publish();
     },
     asyncQuestion: () => addAsyncQuestion(),

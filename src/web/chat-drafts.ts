@@ -97,6 +97,10 @@ export function useChatDrafts() {
     return {
       draft: slot?.draft ?? empty,
       outgoing: slot?.outgoing,
+      readCurrent: () => {
+        const latest = currentDrafts.value;
+        return thread && latest.device === device ? latest.drafts[thread] : undefined;
+      },
       update,
       submit: (operation: Operation, draft: ChatDraft, retry: boolean) =>
         updateSlot(

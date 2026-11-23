@@ -252,7 +252,7 @@ impl Store {
 
     pub fn observe_operations(&mut self, backend: &str, thread: &str, view: &View) -> Result<()> {
         let tx = self.db.transaction()?;
-        if view.is_open() {
+        if view.is_ready_to_continue() {
             tx.execute(
                 "UPDATE operations SET state='completed',error=NULL,updated=?1
                  WHERE backend_id=?2 AND thread_id=?3 AND kind='open'

@@ -25,6 +25,7 @@ export const controlAction = z.discriminatedUnion('action', [
 export type ControlAction = z.infer<typeof controlAction>;
 export interface ControlState {
   permission: string | null;
+  goalRevision?: number;
   permissionRevision?: string;
   permissionDescription?: string;
   preset?: string | null;
@@ -37,10 +38,16 @@ export interface ControlCatalog {
   presets: { id: string; name: string; description?: string }[];
   actions: ControlAction['action'][];
   state: ControlState;
-  goal?: {
-    ref: { id: string; revision: number };
-    objective: string;
-    phase: string;
-    activation?: string;
-  } | null;
+  goal?: GoalState | null;
+  goalObjectiveMaxLength?: number;
+  goalUnavailableReason?: string;
+}
+export interface GoalState {
+  ref: { id: string; revision: number };
+  objective: string;
+  phase: string;
+  activation?: string;
+  tokenBudget?: number | null;
+  tokensUsed?: number;
+  timeUsedSeconds?: number;
 }

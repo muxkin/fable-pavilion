@@ -116,7 +116,7 @@ export default tsxComponent(function ChatView(initialProps: { id: string; naviga
   const initialized = { current: !!initialHistory };
   const uploadAbort: { current: AbortController | null } = { current: null };
   const readAccess = memoizeRender();
-  const composerLayout = useExternalSnapshot(subscribeComposerLayout, () => mobileComposer.matches);
+  const composerLayout = useExternalSnapshot(subscribeComposerLayout, mobileComposer);
   const afterRender = watchRender();
   const watchVisible = watchRender();
   const watchBefore = watchRender();

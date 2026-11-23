@@ -222,15 +222,24 @@ impl Change {
         live: Option<Arc<Thread>>,
         request: Uuid,
     ) -> Outcome {
-        let ready = |view: &Option<Arc<crate::codex_live::View>>| {
-            view.as_ref().is_some_and(|view| view.is_open())
-        };
         if matches!(self, Self::Open) {
             let Some(live) = &live else {
                 return Outcome::Rejected("请先在工作台选择会话".into());
             };
-            if ready(&live.view.borrow()) {
+            if live
+                .view
+                .borrow()
+                .as_ref()
+                .is_some_and(|view| view.is_ready_to_continue())
+            {
                 return Outcome::Completed(None);
+            }
+            if !desktop.ipc_available().await {
+                return if desktop.tools.refresh().await.can_message() {
+                    wait_for_open(live).await
+                } else {
+                    Outcome::Rejected("本机 Codex 桌面未提供可用的会话连接".into())
+                };
             }
         }
         let lookup = history.clone();
@@ -411,14 +420,7 @@ impl Change {
         };
         let reply = app_tools::call(&mut stream, &anchor, request, tool, arguments).await;
         if matches!(tool, Tool::Open) {
-            let mut receiver = live.expect("open requires a subscription").view.clone();
-            if timeout(Duration::from_secs(12), receiver.wait_for(ready))
-                .await
-                .is_ok_and(|result| result.is_ok())
-            {
-                return Outcome::Completed(None);
-            }
-            return Outcome::Uncertain;
+            return wait_for_open(&live.expect("open requires a subscription")).await;
         }
         let Ok(reply) = reply else {
             return Outcome::Uncertain;
@@ -436,6 +438,19 @@ impl Change {
             Some(result) if local => Outcome::Completed(Some(result)),
             _ => Outcome::Uncertain,
         }
+    }
+}
+
+#[cfg(feature = "official-plugins")]
+async fn wait_for_open(live: &Thread) -> Outcome {
+    let mut receiver = live.view.clone();
+    let ready = |view: &Option<Arc<crate::codex_live::View>>| {
+        view.as_ref().is_some_and(|view| view.is_ready_to_continue())
+    };
+    match timeout(Duration::from_secs(12), receiver.wait_for(ready)).await {
+        Ok(Ok(_)) => Outcome::Completed(None),
+        Ok(Err(_)) => Outcome::Rejected("本机 Codex 会话连接已断开".into()),
+        Err(_) => Outcome::Uncertain,
     }
 }
 

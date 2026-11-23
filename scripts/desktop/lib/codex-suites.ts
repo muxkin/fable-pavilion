@@ -6,12 +6,17 @@ import { join } from 'node:path';
 import { nodeSession } from '../../../src/client/node-session.js';
 import { platformRuntime } from '../../../src/server/platform.js';
 import type { CodexVoiceEvent } from '../../../src/shared/codex-voice.js';
+import type { ControlCatalog } from '../../../src/shared/controls.js';
 import { DeviceLink } from '../../../src/shared/device-link.js';
 import { BLOCK_SIZE, decryptBlock, encryptBlock, type FileManifest } from '../../../src/shared/files.js';
 import { apiCall } from '../../../src/shared/rpc.js';
 import type { Identity } from '../../../src/shared/secure-channel.js';
 import { uploadToStorage } from '../../../src/web/storage-upload.js';
 import { registerWorkbenchFixture } from '../../lib/messaging-smoke.js';
+import type { CodexGoalFixture } from './codex-goal-fixture.js';
+import { verifyCodexGoalLifecycle, verifyCodexGoalUi } from './codex-goal-suite.js';
+import type { ModernCodexFixture } from './codex-modern-fixture.js';
+import { verifyModernCodexBrowser } from './codex-modern-suite.js';
 import {
   CODEX_SMOKE_IDS,
   type CodexDesktopFixture,
@@ -130,6 +135,7 @@ export interface CodexLiveOptions {
   forkCli?: string;
   testStorage: boolean;
   queue: QueueStateControl;
+  goalFixture?: CodexGoalFixture;
 }
 
 export async function testCodexLive(
@@ -138,8 +144,7 @@ export async function testCodexLive(
   phone: Identity,
   options: CodexLiveOptions,
 ) {
-  const { origin, hostPeerId, stateDir, directory, threadId, legacyId, codexPackage, forkCli, testStorage, queue } =
-    options;
+  const { origin, hostPeerId, stateDir, directory, threadId, legacyId, codexPackage, forkCli, testStorage, queue, goalFixture } = options;
   const { FORK, FORK_REPLY, CREATED } = CODEX_SMOKE_IDS;
   let view: any;
   let update: any;
@@ -169,6 +174,10 @@ export async function testCodexLive(
     await wait(() => view?.runtimeStatus === 'notLoaded');
     assert.equal(view.canSend, false);
     assert.equal(ipc.actions.filter((name) => name === 'navigate_to_codex_page').length, 0);
+    if (goalFixture) {
+      const catalog = await session.rpc<ControlCatalog>(apiCall(`/threads/${threadId}/controls`));
+      assert(!catalog.actions.includes('goal'), 'Codex advertised goal writes on a history-only conversation');
+    }
     const submit = async (suffix: string, input = {}, anchor = threadId, expectedState = 'completed') => {
       const requestId = crypto.randomUUID();
       const request = apiCall(`/threads/${anchor}/${suffix}`, 'POST', { requestId, ...input });
@@ -257,6 +266,9 @@ export async function testCodexLive(
       },
     ]);
     assert(!JSON.stringify(usage).includes('private-id'));
+
+    step = 'managing the Codex goal';
+    if (goalFixture) await verifyCodexGoalLifecycle(session, threadId, goalFixture, ipc);
 
     step = 'managing conversations and settings';
     assert.deepEqual(await session.rpc(apiCall('/threads/new/projects')), {
@@ -634,6 +646,8 @@ export interface CodexBrowserDirectOptions {
   fixture: CodexDesktopFixture;
   origin: string;
   hostPeerId: string;
+  goalControls: boolean;
+  modern?: { fixture: ModernCodexFixture; threadId: string };
   projectPdf: string;
   projectPng: string;
   pdfBytes: Buffer;
@@ -641,7 +655,7 @@ export interface CodexBrowserDirectOptions {
 }
 
 export async function verifyCodexBrowserDirect(options: CodexBrowserDirectOptions) {
-  const { code, executablePath, fixture, origin, hostPeerId, projectPdf, projectPng, pdfBytes, viewed } = options;
+  const { code, executablePath, fixture, origin, hostPeerId, goalControls, projectPdf, projectPng, pdfBytes, viewed } = options;
   const { browserReadOnlyPrompt } = CODEX_SMOKE_IDS;
   const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 
@@ -840,6 +854,7 @@ export async function verifyCodexBrowserDirect(options: CodexBrowserDirectOption
         (window as any).__nativeQa.peers.some((p: RTCPeerConnection) => p.connectionState === 'connected'),
       );
     await expect.poll(connected, { timeout: 20000 }).toBe(true);
+    if (goalControls) await verifyCodexGoalUi(page);
     const size = 5 * 1024 * 1024;
     await page.getByLabel('添加附件', { exact: true }).setInputFiles({
       name: 'native-direct.bin',
@@ -851,9 +866,10 @@ export async function verifyCodexBrowserDirect(options: CodexBrowserDirectOption
       .toBeGreaterThan(size);
     await expect(page.locator('.upload-chip')).toContainText('native-direct.bin', { timeout: 25000 });
     assert.equal(await page.evaluate(() => (window as any).__nativeQa.relay), 0);
-    assert.deepEqual(errors, []);
     if (process.env.POCKET_NATIVE_TEST_BROWSER_SCREENSHOT)
       await page.screenshot({ path: process.env.POCKET_NATIVE_TEST_BROWSER_SCREENSHOT });
+    if (options.modern) await verifyModernCodexBrowser(page, { origin, hostPeerId, ...options.modern });
+    assert.deepEqual(errors, []);
     console.log(
       'Chromium confirmed a desktop approval response and uploaded 5 MiB through WebRTC without relay bulk payload.',
     );
