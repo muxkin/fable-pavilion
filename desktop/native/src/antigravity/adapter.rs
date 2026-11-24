@@ -291,8 +291,11 @@ impl Adapter for Backend {
                 text,
                 files,
             } => {
-                if !files.is_empty() || !valid_text(text.trim()) {
-                    return Delivery::Rejected("Antigravity 追加指令仅支持文本");
+                let text = text.trim();
+                if (!text.is_empty() && !valid_text(text))
+                    || (text.is_empty() && files.is_empty())
+                {
+                    return Delivery::Rejected("请输入追加指令或添加附件");
                 }
                 let Ok(view) = self.snapshot(thread).await else {
                     return Delivery::Rejected("Antigravity 会话尚未同步");
@@ -303,19 +306,28 @@ impl Adapter for Backend {
                 {
                     return Delivery::Rejected("Antigravity 当前任务已变化或正在等待确认");
                 }
-                delivery(
-                    self.dispatch(
-                        "SendUserCascadeMessage",
-                        json!({
-                            "cascadeId":thread,
-                            "items":[{"text":text.trim()}],
-                            "clientMessageId":request,
-                            "deliveryStrategy":NEXT_INVOCATION,
-                        }),
-                    )
-                    .await,
-                    Delivery::Accepted(None),
-                )
+                let Ok(staged) = media::stage_uploads(&files).await else {
+                    return Delivery::Rejected("Antigravity 附件无效、已变化或超过限制");
+                };
+                let Ok(prompt) = crate::files::attachment_prompt(text, &staged.files, false) else {
+                    return Delivery::Rejected("Antigravity 附件路径无效");
+                };
+                let mut items = Vec::new();
+                if !prompt.is_empty() {
+                    items.push(json!({"text": prompt}));
+                }
+                let mut body = json!({
+                    "cascadeId": thread,
+                    "items": items,
+                    "clientMessageId": request,
+                    "deliveryStrategy": NEXT_INVOCATION,
+                });
+                if !staged.media.is_empty() {
+                    body["media"] = json!(staged.media);
+                }
+                let result = self.dispatch("SendUserCascadeMessage", body).await;
+                drop(staged);
+                delivery(result, Delivery::Accepted(None))
             }
             Write::Interrupt { expected } => {
                 let Ok(view) = self.snapshot(thread).await else {

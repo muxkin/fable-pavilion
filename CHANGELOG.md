@@ -1,5 +1,13 @@
 # 更新记录
 
+## 1.0.7 — 2026-11-24
+
+- **Antigravity 运行中带图/附件追加**：解除任务运行期间对图片与附件的发送拦截（不再提示「请等待当前任务结束后发送已添加的照片」），支持直接携带图片或附件向当前执行中的 Antigravity 会话追加指令。
+
+## Rust 桌面适配器 1.0.7 — 2026-11-24
+
+- **Antigravity 追加指令支持媒体与文件附件**：`Write::Steer` 接入与普通发送一致的媒体暂存与附件提示拼装逻辑，通过原生 `SendUserCascadeMessage`（`NEXT_INVOCATION`）携带 `media` 交付给正在运行的会话。
+
 ## 1.0.6 — 2026-11-24
 
 - **Codex 模型与推理强度选择修复**：修复新版 Codex 桌面下连接共享 App Server 导致的 `This model isn't available` 报错与模型目录被覆盖问题；普通发消息、运行中追加与模型/推理强度切换统一改走 Codex 桌面官方 `send_message_to_thread` 接口，恢复现代 Codex 桌面的模型设置能力。

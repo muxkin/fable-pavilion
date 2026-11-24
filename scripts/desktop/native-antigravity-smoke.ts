@@ -697,6 +697,7 @@ try {
     async () => (await operation(staleSteerId)).state === 'rejected',
     'Stale append operation was not rejected',
   );
+  assert.equal(fixture.calls.steer, 0, 'Stale append reached the Antigravity RPC');
   const photoSteerId = randomUUID();
   await session.rpc(
     scoped(`/threads/${threadId}/steer`, 'POST', {
@@ -707,10 +708,10 @@ try {
     }),
   );
   await waitFor(
-    async () => (await operation(photoSteerId)).state === 'rejected',
-    'Append with an uploaded photo was not rejected',
+    async () => (await operation(photoSteerId)).turnId === turn,
+    'Append with an uploaded photo was not correlated to the current execution',
   );
-  assert.equal(fixture.calls.steer, 0, 'Stale append reached the Antigravity RPC');
+  assert.equal(fixture.calls.steer, 1, 'Photo append did not reach the Antigravity RPC');
   const steerId = randomUUID();
   await session.rpc(steer(steerId, turn));
   await waitFor(
@@ -718,7 +719,7 @@ try {
     'Native appended message was not correlated to the current execution',
   );
   await session.rpc(steer(steerId, turn));
-  assert.equal(fixture.calls.steer, 1, 'Duplicate append reached the Antigravity RPC');
+  assert.equal(fixture.calls.steer, 2, 'Duplicate append reached the Antigravity RPC');
 
   phase = 'native queue add and stable-ID removal';
   const queueId = randomUUID();

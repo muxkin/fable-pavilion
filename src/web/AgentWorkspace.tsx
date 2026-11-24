@@ -424,7 +424,6 @@ export default tsxComponent(function AgentWorkspace(_props: {
     selectedId.current = selected?.id ?? null;
     const receivedView = receivedViewState.value;
     const view = receivedView?.id === selected?.id ? receivedView : null;
-    const textOnlyAppend = antigravity && !!view?.activeTurnId;
     const currentModel =
       view?.modelName ?? (/^MODEL_PLACEHOLDER_/.test(view?.model ?? '') ? 'Antigravity 模型' : view?.model);
     const stream = connection.value;
@@ -952,10 +951,6 @@ export default tsxComponent(function AgentWorkspace(_props: {
           sendPreparationError.value = allowsFiles ? fileReferenceExtrasHint : textOnlySendHint;
           return;
         }
-      }
-      if (kind === 'steer' && antigravity && submitted.uploads.length) {
-        setError('Antigravity 追加指令仅支持文本。请等待当前任务结束后发送照片。');
-        return;
       }
       if (isSend && submitted.model && (kind !== 'send' || !canSelectMessageModel)) {
         setError(
@@ -1916,9 +1911,6 @@ export default tsxComponent(function AgentWorkspace(_props: {
                 {(!!selectedSkills.length || !!selectedPlugins.length) && !!view?.activeTurnId && (
                   <p class="hint">已选插件和技能将在下一轮使用，请等当前任务结束后发送。</p>
                 )}
-                {textOnlyAppend && !!uploads.length && (
-                  <p class="hint">请等待当前任务结束后发送已添加的照片。</p>
-                )}
                 <ChatComposer
                   activity={
                     openingActivity ?? operationActivity(outgoingOperation) ?? operationActivity(composerDelivery)
@@ -1987,7 +1979,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                         !stream ||
                         !(canCompose || canOpenForSend) ||
                         unsupportedSendDraft ||
-                        (!!uploads.length && (!canAttachToThread || textOnlyAppend)) ||
+                        (!!uploads.length && !canAttachToThread) ||
                         (!!selectedSkills.length && !canSelectSkills) ||
                         (!!selectedPlugins.length && !canSelectPlugins) ||
                         (!draft.trim() && !uploads.length) ||

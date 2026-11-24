@@ -500,20 +500,6 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
         assert.equal(typeof body.clientMessageId, 'string');
         assert(Array.isArray(body.items) && (typeof body.items[0]?.text === 'string' || body.media?.length));
         const text = body.items[0]?.text;
-        if (body.deliveryStrategy === nextInvocation) {
-          assert.equal(conversation.running, true, 'Append reached a conversation without an active turn');
-          const executionId = conversation.steps.at(-1)?.metadata as { executionId?: string };
-          assert(executionId?.executionId);
-          assert.deepEqual(Object.keys(body).sort(), ['cascadeId', 'clientMessageId', 'deliveryStrategy', 'items']);
-          assert.deepEqual(body.items, [{ text }]);
-          calls.steer++;
-          conversation.steps.push({
-            type: 'CORTEX_STEP_TYPE_USER_INPUT',
-            metadata: { executionId: executionId.executionId },
-            userInput: { items: body.items, clientMessageId: body.clientMessageId },
-          });
-          return {};
-        }
         const media = [];
         if (body.media?.length) {
           assert.equal(body.media.length, 1);
@@ -531,6 +517,27 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
             await rm(image.uri);
           }
           media.push({ mimeType: image.mimeType, displayName: image.displayName, uri: path });
+        }
+        if (body.deliveryStrategy === nextInvocation) {
+          assert.equal(conversation.running, true, 'Append reached a conversation without an active turn');
+          const executionId = conversation.steps.at(-1)?.metadata as { executionId?: string };
+          assert(executionId?.executionId);
+          const expectedKeys = ['cascadeId', 'clientMessageId', 'deliveryStrategy', 'items'];
+          if (media.length) expectedKeys.push('media');
+          assert.deepEqual(Object.keys(body).sort(), expectedKeys.sort());
+          if (typeof text === 'string') assert.deepEqual(body.items, [{ text }]);
+          else assert.deepEqual(body.items, []);
+          calls.steer++;
+          conversation.steps.push({
+            type: 'CORTEX_STEP_TYPE_USER_INPUT',
+            metadata: { executionId: executionId.executionId },
+            userInput: {
+              items: body.items,
+              ...(media.length ? { media } : {}),
+              clientMessageId: body.clientMessageId,
+            },
+          });
+          return {};
         }
         if (body.deliveryStrategy === whenIdle) {
           assert(conversation.running, 'Queue did not reach the active native conversation');
