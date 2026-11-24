@@ -275,6 +275,12 @@ fn read_view(
     if thread.get("mode").is_none_or(Value::is_null) {
         thread["mode"] = json!("default");
     }
+    if thread.get("model").is_none() {
+        thread["model"] = Value::Null;
+    }
+    if thread.get("reasoningEffort").is_none() {
+        thread["reasoningEffort"] = Value::Null;
+    }
     let controls = if app_server {
         let defaults = history.thread_session_defaults(id);
         let controls = pending_controls.cloned().unwrap_or_else(|| {

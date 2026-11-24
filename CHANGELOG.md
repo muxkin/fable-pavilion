@@ -3,10 +3,13 @@
 ## 1.0.7 — 2026-11-24
 
 - **Antigravity 运行中带图/附件追加**：解除任务运行期间对图片与附件的发送拦截（不再提示「请等待当前任务结束后发送已添加的照片」），支持直接携带图片或附件向当前执行中的 Antigravity 会话追加指令。
+- **Codex 会话权限/模型回显与保存修复**：修复 Codex 历史视图未暴露 `sandbox_policy`/`approval_mode`/`model`/`reasoning_effort` 导致权限一直回退为「权限」、模型按钮一直回退为「选择模型」及保存模型设置报 400 的问题；补齐 `ModelSettings` 缺省 `expectedModel: null` 序列化。
+- **失败提示可关闭且自动清理陈旧报错**：为发送/设置失败横幅增加手动关闭按钮，并在会话已有更新消息后自动隐藏历史失败提示。
 
 ## Rust 桌面适配器 1.0.7 — 2026-11-24
 
 - **Antigravity 追加指令支持媒体与文件附件**：`Write::Steer` 接入与普通发送一致的媒体暂存与附件提示拼装逻辑，通过原生 `SendUserCascadeMessage`（`NEXT_INVOCATION`）携带 `media` 交付给正在运行的会话。
+- **Codex SQLite 视图补全会话默认配置列**：在 `codex.rs` 的 `TEMP VIEW threads` 中按表结构安全暴露 `sandbox_policy`、`approval_mode`、`model`、`reasoning_effort`，使 `thread_session_defaults` 真实生效并覆盖单测。
 
 ## 1.0.6 — 2026-11-24
 

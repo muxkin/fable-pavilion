@@ -47,7 +47,7 @@ export function settingsUpdate(view: ThreadView, mode: 'default' | 'plan'): Mode
     effort: view.reasoningEffort ?? '',
     serviceTier: view.serviceTier ?? 'default',
     mode,
-    expectedModel: view.model,
+    expectedModel: view.model ?? null,
     expectedEffort: view.reasoningEffort ?? null,
     expectedServiceTier: view.serviceTier ?? null,
     expectedMode: view.mode === 'plan' ? 'plan' : 'default',

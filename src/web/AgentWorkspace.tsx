@@ -148,6 +148,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
   }>();
   const setControlRequest = writeRef(controlRequestState);
   const goalOperationId = shallowRef<string>();
+  const dismissedDeliveryIds = shallowRef<Set<string>>(new Set());
   const settingsDirtyState = shallowRef(false);
   const setSettingsDirty = writeRef(settingsDirtyState);
   const projectsState = shallowRef<{ projects: ProjectSummary[]; total: number; ungrouped: number }>({
@@ -1412,7 +1413,14 @@ export default tsxComponent(function AgentWorkspace(_props: {
       sendPreparationError.value ||
       (textOnlySend && !canCompose && view?.reason) ||
       (unsupportedSendDraft && (fileReferences ? fileReferenceExtrasHint : textOnlySendHint));
-    const composerDelivery = delivery?.id === outgoingOperation?.id ? undefined : delivery;
+    const latestMessageAt = messages.reduce((max, m) => Math.max(max, m.createdAt ?? 0), 0);
+    const staleFailedDelivery =
+      !!delivery &&
+      (delivery.state === 'rejected' || delivery.state === 'failed') &&
+      (dismissedDeliveryIds.value.has(delivery.id) ||
+        latestMessageAt > delivery.updatedAt + 5_000);
+    const composerDelivery =
+      delivery?.id === outgoingOperation?.id || staleFailedDelivery ? undefined : delivery;
     const draftHasContent = !!(
       draft.trim() ||
       uploads.length ||
@@ -1937,6 +1945,15 @@ export default tsxComponent(function AgentWorkspace(_props: {
                           !busy &&
                           !pending
                             ? () => void sendDraft()
+                            : undefined
+                        }
+                        onDismiss={
+                          composerDelivery
+                            ? () => {
+                                const next = new Set(dismissedDeliveryIds.value);
+                                next.add(composerDelivery.id);
+                                dismissedDeliveryIds.value = next;
+                              }
                             : undefined
                         }
                       />

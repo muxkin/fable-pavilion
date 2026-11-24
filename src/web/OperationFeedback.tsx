@@ -30,13 +30,14 @@ export const OperationFeedback = tsxComponent(function OperationFeedback(_props:
   operation?: Operation;
   onCheck?: () => Promise<void>;
   onRetry?: () => void;
+  onDismiss?: () => void;
 }) {
   const checkingState = shallowRef(false);
   const setChecking = writeRef(checkingState);
   const checkErrorState = shallowRef('');
   const setCheckError = writeRef(checkErrorState);
   const watchCheckError = watchRender();
-  return ({ operation, onCheck, onRetry }) => {
+  return ({ operation, onCheck, onRetry, onDismiss }) => {
     const checking = checkingState.value;
     const checkError = checkErrorState.value;
     const id = operation?.id,
@@ -93,6 +94,11 @@ export const OperationFeedback = tsxComponent(function OperationFeedback(_props:
         {state === 'rejected' && onRetry && (
           <button type="button" onClick={onRetry}>
             发送草稿
+          </button>
+        )}
+        {failed && onDismiss && (
+          <button type="button" class="delivery-dismiss" aria-label="关闭提示" onClick={onDismiss}>
+            <Icon name="close" size={14} />
           </button>
         )}
       </div>

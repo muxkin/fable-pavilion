@@ -1187,6 +1187,8 @@ button {
 .delivery-feedback.failed { background: var(--danger-soft); color: var(--danger); }
 .delivery-feedback.failed small { color: inherit; }
 .delivery-feedback > button { flex-shrink: 0; font: inherit; color: inherit; padding: 8px 9px; border-radius: 9px; min-height: 36px; background: var(--surface); }
+.delivery-feedback > button.delivery-dismiss { width: 28px; height: 28px; min-height: 28px; padding: 0; display: grid; place-items: center; background: transparent; opacity: .72; }
+.delivery-feedback > button.delivery-dismiss:hover { opacity: 1; background: rgba(0, 0, 0, .06); }
 @media (prefers-reduced-motion: reduce) { .sending-spinner { animation: none; } }
 .composer-box { container: chat-composer / inline-size; }
 .composer-control-trigger {

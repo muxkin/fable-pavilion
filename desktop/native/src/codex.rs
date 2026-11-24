@@ -172,11 +172,35 @@ fn configure_history(db: &Connection) -> Result<()> {
     } else {
         "SELECT NULL AS id, NULL AS name, 0 AS position WHERE 0".into()
     };
+    let sandbox_policy = if threads.contains("sandbox_policy") {
+        "sandbox_policy"
+    } else {
+        "NULL"
+    };
+    let approval_mode = if threads.contains("approval_mode") {
+        "approval_mode"
+    } else {
+        "NULL"
+    };
+    let model = if threads.contains("model") {
+        "model"
+    } else {
+        "NULL"
+    };
+    let reasoning_effort = if threads.contains("reasoning_effort") {
+        "reasoning_effort"
+    } else {
+        "NULL"
+    };
     db.execute_batch(&format!(
         "CREATE TEMP VIEW threads AS
            SELECT id, title, cwd, archived, rollout_path,
                   {name} AS name, {project} AS project_id, {updated} AS updated_at_ms,
-                  {visible} AS is_visible FROM main.threads;
+                  {visible} AS is_visible,
+                  {sandbox_policy} AS sandbox_policy,
+                  {approval_mode} AS approval_mode,
+                  {model} AS model,
+                  {reasoning_effort} AS reasoning_effort FROM main.threads;
          CREATE TEMP VIEW projects AS {projects};"
     ))?;
     Ok(())
@@ -1214,5 +1238,42 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn thread_session_defaults_reads_sandbox_model_and_effort_from_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Connection::open(dir.path().join("state_5.sqlite")).unwrap();
+        let thread = Uuid::new_v4();
+        db.execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                cwd TEXT,
+                archived INTEGER DEFAULT 0,
+                rollout_path TEXT,
+                updated_at_ms INTEGER,
+                sandbox_policy TEXT,
+                approval_mode TEXT,
+                model TEXT,
+                reasoning_effort TEXT
+            );",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO threads (id, title, cwd, archived, rollout_path, updated_at_ms, sandbox_policy, approval_mode, model, reasoning_effort)
+             VALUES (?1, 't', '/tmp', 0, 'sessions/a.jsonl', 1000, '{\"type\":\"disabled\"}', 'never', 'gpt-6.2-astra', 'ultra')",
+            [thread.to_string()],
+        )
+        .unwrap();
+        drop(db);
+        let history = History::open(dir.path()).unwrap();
+        let defaults = history
+            .thread_session_defaults(thread)
+            .expect("session defaults from threads view");
+        assert_eq!(defaults["sandbox"]["type"], "disabled");
+        assert_eq!(defaults["approvalPolicy"], "never");
+        assert_eq!(defaults["model"], "gpt-6.2-astra");
+        assert_eq!(defaults["reasoningEffort"], "ultra");
     }
 }
