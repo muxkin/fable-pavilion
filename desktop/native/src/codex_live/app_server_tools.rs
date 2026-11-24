@@ -398,20 +398,22 @@ mod tests {
             os::unix::{fs as unix_fs, fs::PermissionsExt},
             sync::{Arc, Mutex},
         };
-        use tempfile::tempdir;
         use tokio::net::UnixListener;
         use tokio_tungstenite::{accept_async, tungstenite::Message};
 
-        let dir = tempdir().unwrap();
-        let home = dir.path().join("codex-home");
+        let dir = tempfile::Builder::new()
+            .prefix("c-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let home = dir.path().join("h");
         let control = home.join("app-server-control");
         fs::create_dir_all(&control).unwrap();
         fs::set_permissions(&control, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let daemon_dir = dir.path().join("daemon");
+        let daemon_dir = dir.path().join("d");
         fs::create_dir_all(&daemon_dir).unwrap();
         fs::set_permissions(&daemon_dir, fs::Permissions::from_mode(0o700)).unwrap();
-        let target = daemon_dir.join("daemon.sock");
+        let target = daemon_dir.join("d.sock");
         let listener = UnixListener::bind(&target).unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
         unix_fs::symlink(&target, control.join("app-server-control.sock")).unwrap();

@@ -154,12 +154,14 @@ mod tests {
         fs,
         os::unix::{fs as unix_fs, fs::PermissionsExt, net::UnixListener},
     };
-    use tempfile::tempdir;
 
     #[test]
     fn accepts_direct_and_secure_symlinked_control_sockets() {
-        let dir = tempdir().unwrap();
-        let home = dir.path().join("home");
+        let dir = tempfile::Builder::new()
+            .prefix("c-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let home = dir.path().join("h");
         let control = home.join("app-server-control");
         fs::create_dir_all(&control).unwrap();
         fs::set_permissions(&control, fs::Permissions::from_mode(0o700)).unwrap();
