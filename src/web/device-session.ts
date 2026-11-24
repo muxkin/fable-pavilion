@@ -30,9 +30,25 @@ export interface DeviceNetworkStatus {
 }
 
 type ModelCatalog = { models: ModelChoice[]; source?: string };
+type WarmHostSession = {
+  key: string;
+  host: PairedHost;
+  identity: Identity;
+  sessionId: string;
+  links: Map<string, DeviceLink>;
+  pc?: RTCPeerConnection;
+  candidates: RTCIceCandidateInit[];
+  statuses: Map<string, GatewayStatus>;
+  networkTraffic: LinkTraffic;
+  cleanup: () => void;
+};
 
 const WORKBENCH_RECENT_LIMIT = 24;
+const WARM_HOST_LIMIT = 3;
 const RELAY_STAGE_TIMEOUT = 10_000;
+const DIRECT_NEGOTIATION_TIMEOUT = 25_000;
+const DIRECT_DISCONNECTED_GRACE = 10_000;
+const DIRECT_RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 45_000, 60_000];
 const HIGH_LATENCY_MS = 500;
 const CONTROL_UNAVAILABLE_MS = 8000;
 const relaySignals = new Map<string, DiagnosticSignal>([
@@ -73,6 +89,8 @@ export class DeviceSession {
   private identity?: Identity;
   private sessionId = browserId();
   private links = new Map<string, DeviceLink>();
+  private linkUnsubscribes = new Map<string, () => void>();
+  private warm = new Map<string, WarmHostSession>();
   private linkTraffic = new WeakMap<DeviceLink, { totals?: LinkTraffic }>();
   private networkTraffic: LinkTraffic = { sentBytes: 0, receivedBytes: 0 };
   private opening = new Map<string, Promise<DeviceLink>>();
@@ -82,6 +100,8 @@ export class DeviceSession {
   private catalogRequests = new Map<string, Promise<ModelCatalog>>();
   private retry?: ReturnType<typeof setTimeout>;
   private peerRetry?: ReturnType<typeof setTimeout>;
+  private peerDisconnectTimer?: ReturnType<typeof setTimeout>;
+  private peerFailures = 0;
   private watchRetries = new Map<string, ReturnType<typeof setTimeout>>();
   private waking = false;
   private attempt = 0;
@@ -277,6 +297,7 @@ export class DeviceSession {
       void this.measureNetwork();
       // A surviving socket does not imply the phone received every foreground/background update.
       await this.resume();
+      this.peerFailures = 0;
       if (!this.direct) this.schedulePeer();
     })()
       .catch(() => {})
@@ -362,16 +383,160 @@ export class DeviceSession {
     void navigator.storage?.persist?.().catch(() => false);
     return this.host;
   }
+  private hostSessionKey(host: Pick<PairedHost, 'hostId' | 'ticket' | 'phoneId'>) {
+    return `${host.hostId}:${host.ticket}:${host.phoneId}`;
+  }
+  private closeWarmHost(entry: WarmHostSession) {
+    entry.cleanup();
+    entry.pc?.close();
+    for (const link of entry.links.values()) link.close();
+    entry.links.clear();
+  }
+  private clearWarmHosts() {
+    for (const entry of this.warm.values()) this.closeWarmHost(entry);
+    this.warm.clear();
+  }
+  private parkActiveHost() {
+    if (!this.running || !this.host || !this.identity) return;
+    const liveLinks = new Map<string, DeviceLink>();
+    for (const [key, link] of this.links) {
+      if (!link.closed) liveLinks.set(key, link);
+    }
+    if (!liveLinks.size) return;
+    const control = liveLinks.get('direct:control') ?? liveLinks.get('relay:control');
+    if (control && !control.closed) {
+      for (const watchKey of this.watchers.keys()) {
+        const [backendId, threadId] = JSON.parse(watchKey) as [string, string];
+        void control.request('unwatch', { threadId, backendId }).catch(() => {});
+      }
+    }
+    for (const unsubscribe of this.linkUnsubscribes.values()) unsubscribe();
+    this.linkUnsubscribes.clear();
+    const key = this.hostSessionKey(this.host);
+    const existing = this.warm.get(key);
+    if (existing) this.closeWarmHost(existing);
+    const unsubscribes: (() => void)[] = [];
+    const entry: WarmHostSession = {
+      key,
+      host: this.host,
+      identity: this.identity,
+      sessionId: this.sessionId,
+      links: liveLinks,
+      pc: this.pc,
+      candidates: this.candidates,
+      statuses: new Map(this.statuses),
+      networkTraffic: this.networkTraffic,
+      cleanup: () => {
+        for (const fn of unsubscribes.splice(0)) fn();
+      },
+    };
+    for (const [laneKey, link] of liveLinks) {
+      const traffic = this.linkTraffic.get(link);
+      if (traffic) traffic.totals = undefined;
+      unsubscribes.push(
+        link.onClose(() => {
+          entry.links.delete(laneKey);
+          if (laneKey === 'relay:control' && !entry.links.has('direct:control')) {
+            if (this.warm.get(key) === entry) {
+              this.warm.delete(key);
+              this.closeWarmHost(entry);
+            }
+          }
+        }),
+      );
+    }
+    this.warm.set(key, entry);
+    while (this.warm.size > WARM_HOST_LIMIT) {
+      const oldest = this.warm.values().next().value;
+      if (!oldest) break;
+      this.warm.delete(oldest.key);
+      this.closeWarmHost(oldest);
+    }
+    // Detach parked transport references so resetActiveState does not close them.
+    this.links = new Map();
+    this.pc = undefined;
+    this.candidates = [];
+    this.networkTraffic = { sentBytes: 0, receivedBytes: 0 };
+  }
+  private resetActiveState() {
+    this.running = false;
+    this.generation++;
+    this.linkLifetime.abort();
+    this.linkLifetime = new AbortController();
+    this.connecting = undefined;
+    this.offlineSince = undefined;
+    this.catalogRequests.clear();
+    this.networkTraffic = { sentBytes: 0, receivedBytes: 0 };
+    this.opening.clear();
+    for (const timer of this.watchRetries.values()) clearTimeout(timer);
+    this.watchRetries.clear();
+    clearTimeout(this.retry);
+    clearTimeout(this.peerRetry);
+    clearTimeout(this.peerDisconnectTimer);
+    this.peerFailures = 0;
+    for (const unsubscribe of this.linkUnsubscribes.values()) unsubscribe();
+    this.linkUnsubscribes.clear();
+    this.closePeer();
+    for (const link of this.links.values()) link.close();
+    this.links.clear();
+    this.watchers.clear();
+    this.usageWatchers.clear();
+    this.views.clear();
+    this.status = undefined;
+    this.statuses.clear();
+    this.sessionId = browserId();
+  }
   async select(host: PairedHost, persist = true) {
-    this.disconnect();
+    if (
+      this.running &&
+      this.host?.hostId === host.hostId &&
+      this.host.ticket === host.ticket &&
+      this.host.phoneId === host.phoneId
+    ) {
+      this.host = host;
+      if (persist) await this.cache.saveHost(host, false);
+      this.changed();
+      if (!this.online) await this.connect();
+      return;
+    }
+    this.parkActiveHost();
+    this.resetActiveState();
     const generation = this.generation;
     const identity = host.identity ?? (await this.cache.identity());
     if (generation !== this.generation) return;
+    const warmKey = this.hostSessionKey(host);
+    const warm = this.warm.get(warmKey);
+    if (warm) this.warm.delete(warmKey);
     this.host = host;
-    this.identity = identity;
+    this.identity = warm?.identity ?? identity;
     if (persist) await this.cache.saveHost(host, false);
-    if (generation !== this.generation) return;
+    if (generation !== this.generation) {
+      if (warm) this.closeWarmHost(warm);
+      return;
+    }
     this.running = true;
+    if (warm) {
+      warm.cleanup();
+      this.sessionId = warm.sessionId;
+      this.pc = warm.pc;
+      this.candidates = warm.candidates;
+      this.statuses = warm.statuses;
+      this.status = this.statuses.get(this.backendId);
+      this.networkTraffic = warm.networkTraffic;
+      for (const [laneKey, link] of warm.links) {
+        if (link.closed) continue;
+        const [path, lane] = laneKey.split(':') as ['relay' | 'direct', Lane];
+        this.attach(link, path, lane);
+      }
+      this.changed();
+      if (!this.online) {
+        await this.connect();
+      } else {
+        if (!this.direct && !this.pc) this.schedulePeer();
+        void this.measureNetwork();
+      }
+      return;
+    }
     this.changed();
     await this.connect();
   }
@@ -418,23 +583,30 @@ export class DeviceSession {
     emit();
     if (!current()) return;
     const active = this.host?.hostId === host.hostId && this.host.ticket === host.ticket && this.running;
+    const warmEntry = !active ? this.warm.get(this.hostSessionKey(host)) : undefined;
+    const warmLink = warmEntry
+      ? (warmEntry.links.get('direct:control') ?? warmEntry.links.get('relay:control'))
+      : undefined;
+    const reuseWarm = !!warmLink && !warmLink.closed;
     let link: DeviceLink | undefined;
     const closeProbe = () => {
-      if (!active) link?.close();
+      if (!active && !reuseWarm) link?.close();
     };
     try {
       if (active && !this.online) await this.connect();
       if (!current()) return;
       link = active
         ? this.link()
-        : await this.openRelay(
-            host.hostId,
-            host.ticket,
-            'control',
-            { type: 'authenticate', protocol: 2, sessionId: browserId() },
-            identity,
-            signal,
-          );
+        : reuseWarm
+          ? warmLink
+          : await this.openRelay(
+              host.hostId,
+              host.ticket,
+              'control',
+              { type: 'authenticate', protocol: 2, sessionId: browserId() },
+              identity,
+              signal,
+            );
       if (!current()) return;
       signal.addEventListener('abort', closeProbe, { once: true });
       online = true;
@@ -684,8 +856,12 @@ export class DeviceSession {
   private attach(link: DeviceLink, path: 'relay' | 'direct', lane: Lane) {
     const generation = this.generation;
     const key = `${path}:${lane}`;
-    this.links.get(key)?.close();
+    const previous = this.links.get(key);
+    this.linkUnsubscribes.get(key)?.();
+    this.linkUnsubscribes.delete(key);
+    if (previous && previous !== link) previous.close();
     this.links.set(key, link);
+    if (path === 'direct' && lane === 'control') this.peerFailures = 0;
     const traffic = this.linkTraffic.get(link);
     if (traffic) traffic.totals = this.networkTraffic;
     void link.ready.then((ready) => {
@@ -694,10 +870,11 @@ export class DeviceSession {
       if (this.backendId === DEFAULT_BACKEND) this.status = ready.status;
       this.changed();
     });
-    link.onClose(() => {
+    const unsubClose = link.onClose(() => {
       if (traffic) traffic.totals = undefined;
       if (generation !== this.generation || this.links.get(key) !== link) return;
       this.links.delete(key);
+      this.linkUnsubscribes.delete(key);
       this.changed();
       if (lane === 'control') {
         void this.resume();
@@ -705,7 +882,7 @@ export class DeviceSession {
         else void this.connect();
       }
     });
-    link.onEvent((event, bytes) => {
+    const unsubEvent = link.onEvent((event, bytes) => {
       if (generation !== this.generation || this.links.get(key) !== link) return;
       if (event.type === 'terminal-output' || event.type === 'terminal-exit') {
         for (const listener of this.terminalListeners) listener(event, bytes);
@@ -733,6 +910,10 @@ export class DeviceSession {
           this.metrics.resyncs++;
           void this.resume();
         });
+    });
+    this.linkUnsubscribes.set(key, () => {
+      unsubClose();
+      unsubEvent();
     });
     if (lane === 'control') void this.resume();
     this.changed();
@@ -781,6 +962,11 @@ export class DeviceSession {
       if (!this.online) await this.connect();
       return this.link('control').rpc<T>(call);
     }
+    const warmEntry = this.warm.get(this.hostSessionKey(host));
+    const warmLink = warmEntry
+      ? (warmEntry.links.get('direct:control') ?? warmEntry.links.get('relay:control'))
+      : undefined;
+    if (warmLink && !warmLink.closed) return warmLink.rpc<T>(call);
     const identity = host.identity ?? (await this.cache.identity(this.cache.scope));
     const link = await this.openRelay(
       host.hostId,
@@ -830,8 +1016,21 @@ export class DeviceSession {
   }
   private async receive(event: Record<string, any>) {
     if (event.type === 'candidate') {
-      if (this.pc?.remoteDescription) await this.pc.addIceCandidate(event.candidate);
-      else this.candidates.push(event.candidate);
+      if (!event.candidate) {
+        if (this.pc?.remoteDescription) {
+          try {
+            await this.pc.addIceCandidate(null);
+          } catch {}
+        }
+        return;
+      }
+      if (this.pc?.remoteDescription) {
+        try {
+          await this.pc.addIceCandidate(event.candidate);
+        } catch {}
+      } else {
+        this.candidates.push(event.candidate);
+      }
     } else if (event.type === 'direct-closed') {
       this.closePeer();
       this.schedulePeer();
@@ -1019,12 +1218,19 @@ export class DeviceSession {
       document.removeEventListener('visibilitychange', sync);
     };
   }
-  private schedulePeer() {
+  private schedulePeer(delay = 300) {
     clearTimeout(this.peerRetry);
     if (!this.running || this.direct || this.pc || !this.online) return;
-    this.peerRetry = setTimeout(() => void this.startPeer(), 500);
+    this.peerRetry = setTimeout(() => void this.startPeer(), delay);
+  }
+  private nextPeerRetryDelay() {
+    const index = Math.min(this.peerFailures, DIRECT_RETRY_DELAYS_MS.length - 1);
+    this.peerFailures++;
+    return DIRECT_RETRY_DELAYS_MS[index];
   }
   private closePeer() {
+    clearTimeout(this.peerDisconnectTimer);
+    this.peerDisconnectTimer = undefined;
     this.pc?.close();
     this.pc = undefined;
     this.candidates = [];
@@ -1042,13 +1248,16 @@ export class DeviceSession {
     try {
       pc = this.pc = new RTCPeerConnection({
         iceServers: ready.p2p.stunUrls.length ? [{ urls: ready.p2p.stunUrls }] : [],
+        iceCandidatePoolSize: 2,
       });
     } catch {
       this.metrics.fallback = '当前浏览器无法建立直连';
       return;
     }
     let offered = false;
-    const pending: RTCIceCandidateInit[] = [];
+    const pending: (RTCIceCandidateInit | null)[] = [];
+    const sendCandidate = (candidate: RTCIceCandidateInit | null) =>
+      relay.request('candidate', { candidate }).catch(() => {});
     const recordIceFailure = () =>
       recordDiagnostic({
         code: 'direct-negotiation-failed',
@@ -1060,20 +1269,33 @@ export class DeviceSession {
         recordIceFailure();
         this.closePeer();
         this.metrics.fallback = '直连超时，使用加密中继';
-        this.peerRetry = setTimeout(() => this.schedulePeer(), 15000);
+        this.schedulePeer(this.nextPeerRetryDelay());
       }
-    }, 15000);
+    }, DIRECT_NEGOTIATION_TIMEOUT);
     pc.onicecandidate = (e) => {
-      if (!e.candidate) return;
-      if (offered) void relay.request('candidate', { candidate: e.candidate.toJSON() }).catch(() => {});
-      else pending.push(e.candidate.toJSON());
+      const candidate = e.candidate ? e.candidate.toJSON() : null;
+      if (offered) void sendCandidate(candidate);
+      else pending.push(candidate);
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed' && this.pc === pc) {
+      if (this.pc !== pc) return;
+      if (pc.connectionState === 'connected') {
+        clearTimeout(this.peerDisconnectTimer);
+        this.peerDisconnectTimer = undefined;
+      } else if (pc.connectionState === 'disconnected') {
+        clearTimeout(this.peerDisconnectTimer);
+        this.peerDisconnectTimer = setTimeout(() => {
+          if (this.pc === pc && pc.connectionState !== 'connected') {
+            clearTimeout(timer);
+            this.closePeer();
+            this.schedulePeer(this.nextPeerRetryDelay());
+          }
+        }, DIRECT_DISCONNECTED_GRACE);
+      } else if (pc.connectionState === 'failed') {
         clearTimeout(timer);
         recordIceFailure();
         this.closePeer();
-        this.peerRetry = setTimeout(() => this.schedulePeer(), 5000);
+        this.schedulePeer(this.nextPeerRetryDelay());
       }
     };
     for (const lane of ['control', 'bulk'] as const) {
@@ -1123,15 +1345,22 @@ export class DeviceSession {
     try {
       await pc.setLocalDescription(await pc.createOffer());
       const { value } = await relay.request('offer', { sdp: pc.localDescription!.sdp });
+      if (this.pc !== pc) return;
       offered = true;
       await pc.setRemoteDescription({ type: 'answer', sdp: value.sdp });
-      for (const candidate of this.candidates.splice(0)) await pc.addIceCandidate(candidate);
-      for (const candidate of pending) await relay.request('candidate', { candidate });
+      const remoteQueued = this.candidates.splice(0);
+      const localQueued = pending.splice(0);
+      void Promise.allSettled(localQueued.map((candidate) => sendCandidate(candidate)));
+      for (const candidate of remoteQueued) {
+        try {
+          await pc.addIceCandidate(candidate);
+        } catch {}
+      }
     } catch {
       clearTimeout(timer);
       if (this.pc === pc) {
         this.closePeer();
-        this.peerRetry = setTimeout(() => this.schedulePeer(), 15000);
+        this.schedulePeer(this.nextPeerRetryDelay());
       }
     }
   }
@@ -1297,6 +1526,12 @@ export class DeviceSession {
     }
     if (scope !== this.cache.scope) return;
     const { hostId, deviceId } = host;
+    const warmKey = this.hostSessionKey(host);
+    const warm = this.warm.get(warmKey);
+    if (warm) {
+      this.warm.delete(warmKey);
+      this.closeWarmHost(warm);
+    }
     if (this.host?.hostId === hostId) {
       this.disconnect();
       this.host = undefined;
@@ -1315,28 +1550,8 @@ export class DeviceSession {
     this.changed();
   }
   disconnect() {
-    this.running = false;
-    this.generation++;
-    this.linkLifetime.abort();
-    this.linkLifetime = new AbortController();
-    this.connecting = undefined;
-    this.offlineSince = undefined;
-    this.catalogRequests.clear();
-    this.networkTraffic = { sentBytes: 0, receivedBytes: 0 };
-    this.opening.clear();
-    for (const timer of this.watchRetries.values()) clearTimeout(timer);
-    this.watchRetries.clear();
-    clearTimeout(this.retry);
-    clearTimeout(this.peerRetry);
-    this.closePeer();
-    for (const link of this.links.values()) link.close();
-    this.links.clear();
-    this.watchers.clear();
-    this.usageWatchers.clear();
-    this.views.clear();
-    this.status = undefined;
-    this.statuses.clear();
-    this.sessionId = browserId();
+    this.clearWarmHosts();
+    this.resetActiveState();
     this.changed();
   }
 }

@@ -34,23 +34,23 @@ export async function verifyAntigravityPermissions({ rpc, scoped, fixture }: Per
       `Antigravity permission ${value} did not become ${state}`);
   };
   const original = await read();
-  const inherit = 'antigravity:inherit';
   const review = 'antigravity:request-review';
+  const turbo = 'antigravity:turbo';
   assert.deepEqual(original.actions, ['permission']);
-  assert.equal(original.state.permission, inherit);
-  assert.equal(original.permissions.find((preset) => preset.id === inherit)?.description, '项目预设：逐次审批');
+  assert.equal(original.state.permission, review);
+  assert(!original.permissions.some((preset) => preset.id === 'antigravity:inherit'));
   assert.equal(original.state.permissionRevision?.length, 64);
-  await send(review, original, 'rejected', switchId);
+  await send(turbo, original, 'rejected', switchId);
   assert.equal(fixture.calls.permissionUpdates.length, 0, 'Cross-conversation revision reached the daemon');
-  await send(review, original, 'completed');
+  await send(turbo, original, 'completed');
   const changed = await read();
-  assert.equal(changed.state.permission, review);
+  assert.equal(changed.state.permission, turbo);
   assert.notEqual(changed.state.permissionRevision, original.state.permissionRevision);
-  assert.equal((await read(switchId)).state.permission, inherit);
-  await send('antigravity:turbo', original, 'rejected');
+  assert.equal((await read(switchId)).state.permission, review);
+  await send(review, original, 'rejected');
   fixture.setPermissionCapabilities({ adminLocked: true });
   assert.deepEqual((await read()).actions, []);
-  await send(inherit, changed, 'rejected');
+  await send(review, changed, 'rejected');
   fixture.setPermissionCapabilities({ sandbox: false });
   const noSandbox = await read();
   assert(!noSandbox.permissions.some((preset) => preset.id === 'antigravity:auto' || preset.id === 'antigravity:default'));
@@ -59,13 +59,13 @@ export async function verifyAntigravityPermissions({ rpc, scoped, fixture }: Per
   const unsupported = await read();
   assert.deepEqual(unsupported.actions, []);
   assert(unsupported.permissionUnavailableReason);
-  await send(inherit, changed, 'rejected');
+  await send(review, changed, 'rejected');
   fixture.setPermissionCapabilities({});
-  await send(inherit, await read(), 'completed');
-  assert.equal((await read()).state.permission, inherit);
+  await send(review, await read(), 'completed');
+  assert.equal((await read()).state.permission, review);
   assert.deepEqual(fixture.calls.permissionUpdates, [
+    { threadId, preset: 'AGENT_PERMISSION_PRESET_TURBO' },
     { threadId, preset: 'AGENT_PERMISSION_PRESET_REQUEST_REVIEW' },
-    { threadId, preset: 'AGENT_PERMISSION_PRESET_UNSPECIFIED' },
   ]);
   const result = await rpc<{ thread: { title: string } }>(scoped(`/threads/${threadId}`));
   assert.equal(result.thread.title, initialTitle);

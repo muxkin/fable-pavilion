@@ -75,6 +75,10 @@ fn resolve_socket_path(home: &Path) -> Result<std::path::PathBuf> {
 
 #[cfg(unix)]
 impl AppServer {
+    pub(crate) fn available(home: &Path) -> bool {
+        resolve_socket_path(home).is_ok()
+    }
+
     pub(crate) async fn connect(home: &Path) -> Result<Self> {
         let uid = rustix::process::geteuid().as_raw();
         let socket = resolve_socket_path(home)?;
@@ -138,6 +142,10 @@ impl AppServer {
 
 #[cfg(not(unix))]
 impl AppServer {
+    pub(crate) fn available(_home: &Path) -> bool {
+        false
+    }
+
     pub(crate) async fn connect(_home: &Path) -> Result<Self> {
         anyhow::bail!("此平台未提供共享 Codex App Server Socket")
     }

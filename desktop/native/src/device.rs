@@ -59,10 +59,12 @@ pub struct DeviceSession {
     terminal_tasks: HashMap<String, tokio::task::JoinHandle<()>>,
     terminal_tx: mpsc::UnboundedSender<(Value, Vec<u8>)>,
     terminal_rx: Option<mpsc::UnboundedReceiver<(Value, Vec<u8>)>>,
+    direct_tx: mpsc::UnboundedSender<Value>,
+    direct_rx: Option<mpsc::UnboundedReceiver<Value>>,
     last_status: HashMap<String, Value>,
     bulk: bool,
     signaling: Option<Uuid>,
-    connection: Option<Arc<dyn webrtc::peer_connection::PeerConnection>>,
+    connection: Option<crate::direct::DirectConnection>,
     voice: Option<DeviceVoice>,
     activity: Option<Arc<crate::update::Client>>,
     uploads: HashMap<Uuid, (Arc<crate::update::Client>, Instant)>,
@@ -154,6 +156,7 @@ impl DeviceSession {
         signaling: Option<Uuid>,
     ) -> Self {
         let (terminal_tx, terminal_rx) = mpsc::unbounded_channel();
+        let (direct_tx, direct_rx) = mpsc::unbounded_channel();
         Self {
             db,
             peer,
@@ -165,6 +168,8 @@ impl DeviceSession {
             terminal_tasks: HashMap::new(),
             terminal_tx,
             terminal_rx: Some(terminal_rx),
+            direct_tx,
+            direct_rx: Some(direct_rx),
             bulk,
             signaling,
             connection: None,
@@ -188,8 +193,16 @@ impl DeviceSession {
             .terminal_rx
             .take()
             .expect("terminal receiver available once");
+        let mut direct_rx = self
+            .direct_rx
+            .take()
+            .expect("direct signal receiver available once");
         loop {
             tokio::select! {
+                Some(event) = direct_rx.recv(), if self.signaling.is_some() => {
+                    self.ensure_device()?;
+                    reply(io, event).await?;
+                }
                 Some((event, payload)) = terminal_rx.recv(), if !self.bulk => {
                     self.ensure_device()?;
                     reply_packet(io, event, &payload).await?;
@@ -322,7 +335,7 @@ impl DeviceSession {
                         Some("offer") if bytes.is_empty() && self.signaling.is_some() => self.offer(&request).await.map(Some),
                         Some("candidate") if bytes.is_empty() && self.signaling.is_some() => {
                             match &self.connection {
-                                Some(connection) => crate::direct::candidate(connection.as_ref(), request["candidate"].clone()).await.map(|()| Some(json!({"ok":true}))),
+                                Some(connection) => crate::direct::candidate(connection.peer(), request["candidate"].clone()).await.map(|()| Some(json!({"ok":true}))),
                                 None => Ok(None),
                             }
                         }
@@ -438,7 +451,7 @@ impl DeviceSession {
         let session = self.signaling.context("此通道不能协商直连")?;
         let sdp = request["sdp"].as_str().context("WebRTC offer 无效")?;
         if let Some(previous) = self.connection.take() {
-            let _ = previous.close().await;
+            previous.close().await;
         }
         let (connection, answer) = direct
             .answer(
@@ -448,6 +461,7 @@ impl DeviceSession {
                 self.device.ticket.clone(),
                 session,
                 self.backends.clone(),
+                self.direct_tx.clone(),
             )
             .await?;
         self.connection = Some(connection);

@@ -2065,6 +2065,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                               textOnlySend ||
                               (presentation?.plan === 'settings' &&
                                 (!canChangeModel ||
+                                  status?.capabilities.queue !== true ||
                                   (!view.canSend && !view.canInterrupt) ||
                                   !view.model ||
                                   !view.reasoningEffort))
@@ -2095,7 +2096,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                                 pending ||
                                 !stream ||
                                 textOnlySend ||
-                                (!controlPlan && !canChangeModel) ||
+                                (!controlPlan && (!canChangeModel || status?.capabilities.queue !== true)) ||
                                 (!view.canSend && !view.canInterrupt)
                               }
                               onClick={() =>

@@ -366,7 +366,7 @@ export default tsxComponent(function AuthenticatedShell() {
           workspaceHostError.value = message;
       };
       const timer = setTimeout(() => reportFailure('打开这台电脑超时，可重试。'), 10000);
-      void deviceSession.select(requestedPair, false)
+      void deviceSession.select(requestedPair, true)
         .catch(() => reportFailure('无法打开这台电脑，可重试。'))
         .finally(() => clearTimeout(timer));
       return () => {

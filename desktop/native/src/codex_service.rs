@@ -149,17 +149,9 @@ impl Local {
 
     pub(crate) async fn refresh(&self) -> Availability {
         if let Some(desktop) = &self.desktop {
-            let app_server = async {
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    crate::codex_goal::AppServer::connect(self.history.home()),
-                )
-                .await
-                .is_ok_and(|result| result.is_ok())
-            };
-            let (ipc_online, app_server_online, _, _) = tokio::join!(
+            let app_server_online = crate::codex_goal::AppServer::available(self.history.home());
+            let (ipc_online, _, _) = tokio::join!(
                 desktop.ipc_available(),
-                app_server,
                 desktop.tools.refresh(),
                 desktop.reply_fork.probe()
             );

@@ -520,6 +520,34 @@ impl History {
         )?)
     }
 
+    pub(crate) fn thread_session_defaults(&self, thread: Uuid) -> Option<Value> {
+        let db = self.database().ok()?;
+        let (sandbox_raw, approval, model, effort): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = db
+            .query_row(
+                &format!(
+                    "SELECT sandbox_policy,approval_mode,model,reasoning_effort FROM threads WHERE id=?1 AND {VISIBLE}"
+                ),
+                [thread.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .ok()?;
+        let sandbox = sandbox_raw
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .unwrap_or(Value::Null);
+        Some(json!({
+            "sandbox": sandbox,
+            "approvalPolicy": approval,
+            "model": model,
+            "reasoningEffort": effort,
+        }))
+    }
+
     pub fn open_rollout(&self, path: &Path) -> Result<File> {
         use crate::history_media::HistoryUnavailable;
 

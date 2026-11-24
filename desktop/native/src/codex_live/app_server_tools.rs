@@ -10,6 +10,11 @@ use std::{path::Path, time::Duration};
 use tokio::time::timeout;
 use uuid::Uuid;
 
+pub(super) fn available(home: &Path) -> bool {
+    AppServer::available(home)
+}
+
+#[cfg(test)]
 #[derive(Clone, Eq, PartialEq)]
 pub(super) struct SessionInfo {
     pub controls: Value,
@@ -21,14 +26,35 @@ pub(super) struct SessionInfo {
     pub loaded: bool,
 }
 
-fn permission_from_resume(result: &Value) -> Value {
+fn sandbox_kind(sandbox: &Value) -> Option<&'static str> {
+    match sandbox["type"].as_str()? {
+        "readOnly" | "read-only" => Some("readOnly"),
+        "workspaceWrite" | "workspace-write" => Some("workspaceWrite"),
+        "dangerFullAccess" | "danger-full-access" | "disabled" => Some("dangerFullAccess"),
+        "managed" => {
+            let has_write = sandbox["file_system"]["entries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|entry| entry["access"] == "write");
+            Some(if has_write {
+                "workspaceWrite"
+            } else {
+                "readOnly"
+            })
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn permission_from_resume(result: &Value) -> Value {
     let sandbox = &result["sandbox"];
-    let sandbox_type = sandbox["type"].as_str();
+    let normalized = sandbox_kind(sandbox);
     let policy = result["approvalPolicy"].as_str();
-    let profile = match (sandbox_type, policy) {
-        (Some("readOnly"), Some("on-request")) => Some(":read-only"),
-        (Some("workspaceWrite"), Some("on-request")) => Some(":workspace"),
-        (Some("dangerFullAccess"), Some("never")) => Some(":danger-full-access"),
+    let profile = match (normalized, policy) {
+        (Some("readOnly"), Some("on-request" | "never") | None) => Some(":read-only"),
+        (Some("workspaceWrite"), Some("on-request" | "never") | None) => Some(":workspace"),
+        (Some("dangerFullAccess"), Some("never") | None) => Some(":danger-full-access"),
         _ => None,
     };
     let synthetic = if sandbox.is_null() && result["approvalPolicy"].is_null() {
@@ -36,7 +62,7 @@ fn permission_from_resume(result: &Value) -> Value {
     } else {
         json!({
             "activePermissionProfile": profile.map(|id| json!({"id": id})).unwrap_or(Value::Null),
-            "sandboxPolicy": sandbox,
+            "sandboxPolicy": normalized.map(|kind| json!({"type": kind})).unwrap_or_else(|| sandbox.clone()),
             "approvalPolicy": result["approvalPolicy"],
             "approvalsReviewer": result["approvalsReviewer"],
         })
@@ -53,6 +79,7 @@ fn permission_wire(id: &str) -> Option<(&'static str, &'static str, &'static str
     }
 }
 
+#[cfg(test)]
 pub(super) async fn probe(home: &Path, id: Uuid) -> Option<SessionInfo> {
     let result = timeout(Duration::from_secs(2), async {
         let mut server = AppServer::connect(home).await?;
@@ -105,15 +132,23 @@ pub(super) async fn probe(home: &Path, id: Uuid) -> Option<SessionInfo> {
     result.ok().and_then(Result::ok)
 }
 
-pub(super) async fn set_permission(home: &Path, id: Uuid, view: &View, input: &Value) -> Outcome {
+pub(super) async fn set_permission(
+    home: &Path,
+    id: Uuid,
+    view: &View,
+    input: &Value,
+) -> (Outcome, Option<Value>) {
     if settings::permission_request(view, input).is_err() {
-        return Outcome::Rejected("会话权限已变化，请重新打开权限面板".into());
+        return (
+            Outcome::Rejected("会话权限已变化，请重新打开权限面板".into()),
+            None,
+        );
     }
     let Some(permission_id) = input["value"].as_str() else {
-        return Outcome::Rejected("权限选项无效".into());
+        return (Outcome::Rejected("权限选项无效".into()), None);
     };
     let Some((sandbox_mode, sandbox_type, approval_policy)) = permission_wire(permission_id) else {
-        return Outcome::Rejected("权限选项无效".into());
+        return (Outcome::Rejected("权限选项无效".into()), None);
     };
     let mut sent = false;
     let result = timeout(Duration::from_secs(8), async {
@@ -132,69 +167,23 @@ pub(super) async fn set_permission(home: &Path, id: Uuid, view: &View, input: &V
             )
             .await?;
         if reply["error"]["code"].as_i64().is_some() {
-            return Ok::<_, anyhow::Error>(Outcome::Rejected(
-                "Codex 拒绝更新会话权限，请刷新后重试".into(),
+            return Ok::<_, anyhow::Error>((
+                Outcome::Rejected("Codex 拒绝更新会话权限，请刷新后重试".into()),
+                None,
             ));
         }
         let data = &reply["result"];
         if data["sandbox"]["type"] == sandbox_type && data["approvalPolicy"] == approval_policy {
-            Ok(Outcome::Completed(None))
+            Ok((Outcome::Completed(None), Some(permission_from_resume(data))))
         } else {
-            Ok(Outcome::Uncertain)
+            Ok((Outcome::Uncertain, None))
         }
     })
     .await;
     match result {
         Ok(Ok(outcome)) => outcome,
-        _ if sent => Outcome::Uncertain,
-        _ => Outcome::Rejected("无法连接本机 Codex 会话服务".into()),
-    }
-}
-
-pub(super) async fn set_settings(home: &Path, id: Uuid, view: &View, input: &Value) -> Outcome {
-    if settings::model_request(view, input).is_err() {
-        return Outcome::Rejected("桌面设置已变化，请刷新后重试".into());
-    }
-    if input
-        .get("mode")
-        .is_some_and(|mode| *mode != view.thread["mode"])
-    {
-        return Outcome::Rejected("当前 Codex 会话暂不支持切换计划模式".into());
-    }
-    let (Some(model), Some(effort)) = (input["model"].as_str(), input["effort"].as_str()) else {
-        return Outcome::Rejected("模型设置无效".into());
-    };
-    let mut params = json!({
-        "threadId": id,
-        "excludeTurns": true,
-        "model": model,
-        "config": {"model_reasoning_effort": effort},
-    });
-    if let Some(tier) = input.get("serviceTier").filter(|v| v.is_string()) {
-        params["serviceTier"] = tier.clone();
-    }
-    let mut sent = false;
-    let result = timeout(Duration::from_secs(8), async {
-        let mut server = AppServer::connect(home).await?;
-        sent = true;
-        let reply = server.request("thread/resume", params).await?;
-        if reply["error"]["code"].as_i64().is_some() {
-            return Ok::<_, anyhow::Error>(Outcome::Rejected(
-                "Codex 拒绝更新模型设置，请刷新后重试".into(),
-            ));
-        }
-        let data = &reply["result"];
-        if data["model"] == model && data["reasoningEffort"] == effort {
-            Ok(Outcome::Completed(None))
-        } else {
-            Ok(Outcome::Uncertain)
-        }
-    })
-    .await;
-    match result {
-        Ok(Ok(outcome)) => outcome,
-        _ if sent => Outcome::Uncertain,
-        _ => Outcome::Rejected("无法连接本机 Codex 会话服务".into()),
+        _ if sent => (Outcome::Uncertain, None),
+        _ => (Outcome::Rejected("无法连接本机 Codex 会话服务".into()), None),
     }
 }
 
@@ -205,6 +194,7 @@ pub(super) async fn send_turn(
     text: &str,
     files: &[Attachment],
     tools: &[Value],
+    model_override: Option<(&str, &str)>,
 ) -> Outcome {
     let Ok((mut input, _)) = native_input(text, files) else {
         return Outcome::Rejected("无法读取附件路径，请重新上传".into());
@@ -227,16 +217,16 @@ pub(super) async fn send_turn(
             }
         }
         sent = true;
-        let reply = server
-            .request(
-                "turn/start",
-                json!({
-                    "threadId": id,
-                    "input": input,
-                    "clientUserMessageId": request,
-                }),
-            )
-            .await?;
+        let mut params = json!({
+            "threadId": id,
+            "input": input,
+            "clientUserMessageId": request,
+        });
+        if let Some((model, effort)) = model_override {
+            params["model"] = json!(model);
+            params["effort"] = json!(effort);
+        }
+        let reply = server.request("turn/start", params).await?;
         if reply["error"]["code"].as_i64().is_some() {
             return Ok(Outcome::Rejected("Codex 拒绝发送此消息，请刷新后重试".into()));
         }
@@ -254,6 +244,7 @@ pub(super) async fn send_turn(
     }
 }
 
+#[cfg(test)]
 pub(super) async fn steer_turn(
     home: &Path,
     id: Uuid,
@@ -364,12 +355,30 @@ mod tests {
         assert_eq!(danger["permission"], ":danger-full-access");
 
         let custom = permission_from_resume(&json!({
-            "sandbox": {"type": "workspaceWrite"},
-            "approvalPolicy": "never",
+            "sandbox": {"type": "dangerFullAccess"},
+            "approvalPolicy": "on-request",
             "approvalsReviewer": "user",
         }));
         assert_eq!(custom["permission"], "custom");
         assert_ne!(workspace["permissionRevision"], custom["permissionRevision"]);
+
+        let sqlite_disabled = permission_from_resume(&json!({
+            "sandbox": {"type": "disabled"},
+            "approvalPolicy": "never",
+        }));
+        assert_eq!(sqlite_disabled["permission"], ":danger-full-access");
+
+        let sqlite_managed_write = permission_from_resume(&json!({
+            "sandbox": {"type": "managed", "file_system": {"entries": [{"access": "write"}]}},
+            "approvalPolicy": "on-request",
+        }));
+        assert_eq!(sqlite_managed_write["permission"], ":workspace");
+
+        let sqlite_managed_ro = permission_from_resume(&json!({
+            "sandbox": {"type": "managed", "file_system": {"entries": [{"access": "read"}]}},
+            "approvalPolicy": "on-request",
+        }));
+        assert_eq!(sqlite_managed_ro["permission"], ":read-only");
     }
 
     #[test]
@@ -527,7 +536,7 @@ mod tests {
         });
         assert!(matches!(
             set_permission(&home, thread, &view, &change).await,
-            Outcome::Completed(None)
+            (Outcome::Completed(None), Some(_))
         ));
         let updated = probe(&home, thread).await.expect("probe after change");
         assert_eq!(updated.controls["permission"], ":read-only");
@@ -537,7 +546,7 @@ mod tests {
             json!({"type": "mention", "name": "Demo Plugin", "path": "plugin://demo@local"}),
         ];
         assert!(matches!(
-            send_turn(&home, thread, Uuid::new_v4(), "hello", &[], &tools).await,
+            send_turn(&home, thread, Uuid::new_v4(), "hello", &[], &tools, None).await,
             Outcome::Accepted(ref turn) if turn == "turn-1"
         ));
         assert!(matches!(

@@ -743,6 +743,9 @@ impl Backend {
                     && requests.is_empty()
             );
             thread["canInterrupt"] = json!(!self.read_only && active && execution.is_some());
+            if let Some(permission) = permissions::preset_id(&summary["annotations"]["permissionPreset"]) {
+                thread["controls"] = json!({"permission": permission});
+            }
             if let Some(queue) = page.queue() {
                 queue.display(&mut thread);
             }

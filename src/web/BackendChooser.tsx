@@ -403,7 +403,7 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
                           onClick={() =>
                             void run(async () => {
                               if (deviceSession.host?.hostId !== hostId)
-                                await deviceSession.select(host, false);
+                                await deviceSession.select(host, true);
                               if (deviceSession.host?.hostId === hostId)
                                 editing.value = { hostId, backendId: backend.id, product: backend.product };
                             })

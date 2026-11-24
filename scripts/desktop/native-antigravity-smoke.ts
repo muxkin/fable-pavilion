@@ -1041,7 +1041,7 @@ try {
   if (!oldGateway) {
     const permission = await session.rpc<ControlCatalog>(scoped(`/threads/${threadId}/controls`));
     assert.deepEqual(permission.actions, []);
-    assert.equal(permission.state.permission, 'antigravity:inherit');
+    assert.equal(permission.state.permission, 'antigravity:request-review');
     assert.match(permission.permissionUnavailableReason ?? '', /只读/);
   }
   const readOnlyId = randomUUID();

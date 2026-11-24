@@ -45,6 +45,8 @@ pub(super) async fn run(
     let mut previous = None;
     let mut last_active = false;
     let mut force_refresh = false;
+    let mut pending_settings: Option<(String, String)> = None;
+    let mut pending_controls: Option<Value> = None;
     loop {
         tokio::select! {
             _ = refresh.tick() => {
@@ -56,17 +58,34 @@ pub(super) async fn run(
                     activity = latest;
                 }
                 last_active = activity.status == "active";
-                let session = app_server_tools::probe(history.home(), id).await;
+                let app_server = app_server_tools::available(history.home());
                 let store = history.clone();
                 let prior = previous.take();
                 let force = std::mem::take(&mut force_refresh);
+                let override_settings = pending_settings.clone();
+                let override_controls = pending_controls.clone();
                 let (view, stamp) = tokio::task::spawn_blocking(move || {
-                    let stamp = rollout_stamp(&store, id)
-                        .map(|file| (activity.clone(), session.clone(), file));
+                    let stamp = rollout_stamp(&store, id).map(|file| {
+                        (
+                            activity.clone(),
+                            app_server,
+                            override_settings.clone(),
+                            override_controls.clone(),
+                            file,
+                        )
+                    });
                     let view = if !force && stamp.is_some() && stamp == prior {
                         None
                     } else {
-                        Some(read_view(&store, id, activity, session, epoch)?)
+                        Some(read_view(
+                            &store,
+                            id,
+                            activity,
+                            app_server,
+                            override_settings.as_ref(),
+                            override_controls.as_ref(),
+                            epoch,
+                        )?)
                     };
                     Ok::<_, anyhow::Error>((view, stamp))
                 }).await??;
@@ -103,6 +122,8 @@ pub(super) async fn run(
                             view,
                             command.request,
                             command.kind,
+                            &mut pending_settings,
+                            &mut pending_controls,
                         )
                         .await
                     }
@@ -113,7 +134,8 @@ pub(super) async fn run(
                             "canSend"
                         };
                         if view.thread[capability] == true {
-                            send(&mut stream, &anchor, id, command.request, command.kind).await
+                            send(&mut stream, &anchor, id, command.request, command.kind, None)
+                                .await
                         } else {
                             Outcome::Rejected("当前 Codex 会话暂不可发送".into())
                         }
@@ -226,7 +248,9 @@ fn read_view(
     history: &History,
     id: Uuid,
     activity: Activity,
-    session: Option<app_server_tools::SessionInfo>,
+    app_server: bool,
+    pending_settings: Option<&(String, String)>,
+    pending_controls: Option<&Value>,
     epoch: Uuid,
 ) -> Result<View> {
     let params = json!({"id":id});
@@ -236,8 +260,7 @@ fn read_view(
         .context("找不到本机会话")?;
     let mut thread = page["thread"].clone();
     ensure!(thread["id"] == json!(id), "历史会话与桌面会话不匹配");
-    let app_server = session.is_some();
-    let owner = session.as_ref().is_some_and(|s| s.loaded) && activity.status != "notLoaded";
+    let owner = app_server && activity.status != "notLoaded";
     thread["owner"] = json!(owner);
     thread["synchronized"] = json!(true);
     thread["runtimeStatus"] = json!(activity.status);
@@ -249,22 +272,31 @@ fn read_view(
     thread["canSendFileReferences"] = json!(true);
     thread["pendingRequests"] = json!(usize::from(activity.pending));
     thread["canInterrupt"] = json!(app_server && activity.active_turn.is_some());
-    let (controls, disabled_plugins) = if let Some(session) = session {
-        if let Some(model) = session.model {
+    if thread.get("mode").is_none_or(Value::is_null) {
+        thread["mode"] = json!("default");
+    }
+    let controls = if app_server {
+        let defaults = history.thread_session_defaults(id);
+        let controls = pending_controls.cloned().unwrap_or_else(|| {
+            defaults
+                .as_ref()
+                .map(app_server_tools::permission_from_resume)
+                .unwrap_or_else(|| settings::permission(&Value::Null))
+        });
+        if let Some((model, effort)) = pending_settings {
             thread["model"] = json!(model);
-        }
-        if let Some(effort) = session.effort {
             thread["reasoningEffort"] = json!(effort);
+        } else if let Some(defaults) = defaults.as_ref() {
+            if let Some(model) = defaults["model"].as_str() {
+                thread["model"] = json!(model);
+            }
+            if let Some(effort) = defaults["reasoningEffort"].as_str() {
+                thread["reasoningEffort"] = json!(effort);
+            }
         }
-        if let Some(tier) = session.service_tier {
-            thread["serviceTier"] = json!(tier);
-        }
-        if let Some(mode) = session.mode {
-            thread["mode"] = json!(mode);
-        }
-        (session.controls, session.disabled_plugins)
+        controls
     } else {
-        (settings::permission(&Value::Null), Vec::new())
+        settings::permission(&Value::Null)
     };
     thread["controls"] = controls;
     if !activity.can_send && !activity.can_steer() {
@@ -284,10 +316,11 @@ fn read_view(
         pending: Default::default(),
         inline: Default::default(),
         reply_turns: Default::default(),
-        disabled_plugins,
+        disabled_plugins: Vec::new(),
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_app_server(
     home: &std::path::Path,
     stream: &mut Stream,
@@ -296,17 +329,77 @@ async fn execute_app_server(
     view: &View,
     request: Uuid,
     action: Action,
+    pending_settings: &mut Option<(String, String)>,
+    pending_controls: &mut Option<Value>,
 ) -> Outcome {
     let first_send = matches!(action, Action::FirstSend { .. });
     match action {
-        Action::Permission { input } => app_server_tools::set_permission(home, id, view, &input).await,
-        Action::Settings { input } => app_server_tools::set_settings(home, id, view, &input).await,
+        Action::Permission { input } => {
+            if view.thread["runtimeStatus"] == "notLoaded" {
+                let _ = app_tools::call(
+                    stream,
+                    anchor,
+                    Uuid::new_v4(),
+                    Tool::Open,
+                    json!({"threadId": id}),
+                )
+                .await;
+            }
+            let (outcome, updated) = app_server_tools::set_permission(home, id, view, &input).await;
+            if let Some(controls) = updated {
+                *pending_controls = Some(controls);
+            }
+            outcome
+        }
+        Action::Settings { input } => {
+            if settings::model_request(view, &input).is_err() {
+                return Outcome::Rejected("桌面设置已变化，请刷新后重试".into());
+            }
+            if input
+                .get("mode")
+                .is_some_and(|mode| *mode != view.thread["mode"])
+            {
+                return Outcome::Rejected("当前 Codex 会话暂不支持切换计划模式".into());
+            }
+            if input
+                .get("serviceTier")
+                .and_then(Value::as_str)
+                .is_some_and(|tier| tier != "default")
+            {
+                return Outcome::Rejected("当前 Codex 会话暂不支持切换速度档位".into());
+            }
+            let (Some(model), Some(effort)) = (input["model"].as_str(), input["effort"].as_str())
+            else {
+                return Outcome::Rejected("模型设置无效".into());
+            };
+            *pending_settings = Some((model.to_owned(), effort.to_owned()));
+            Outcome::Completed(None)
+        }
         Action::Interrupt { expected } => {
             if view.thread["activeTurnId"].as_str() == Some(expected.as_str()) {
                 app_server_tools::interrupt_turn(home, id, &expected).await
             } else {
                 Outcome::Rejected("当前任务已结束或已变化".into())
             }
+        }
+        Action::Send { text, files, tools } if tools.is_empty() => {
+            let outcome = send(
+                stream,
+                anchor,
+                id,
+                request,
+                Action::Send { text, files, tools },
+                pending_settings.as_ref(),
+            )
+            .await;
+            if matches!(outcome, Outcome::Completed(_)) {
+                *pending_settings = None;
+                *pending_controls = None;
+            }
+            outcome
+        }
+        Action::Steer { .. } => {
+            send(stream, anchor, id, request, action, None).await
         }
         Action::Send { text, files, tools } | Action::FirstSend { text, files, tools } => {
             if first_send && (!view.turns.is_empty() || !view.messages.is_empty()) {
@@ -318,22 +411,34 @@ async fn execute_app_server(
             {
                 return Outcome::Rejected("未确认 Codex 当前会话可以发送，请刷新后重试".into());
             }
-            app_server_tools::send_turn(home, id, request, &text, &files, &tools).await
-        }
-        Action::Steer {
-            text,
-            expected,
-            files,
-        } => {
-            if !read_status(stream, anchor, id, true)
-                .await
-                .is_ok_and(|activity| {
-                    activity.can_steer() && activity.active_turn.as_deref() == Some(expected.as_str())
-                })
-            {
-                return Outcome::Rejected("未确认 Codex 当前会话可以追加，请刷新后重试".into());
+            if view.thread["runtimeStatus"] == "notLoaded" {
+                let _ = app_tools::call(
+                    stream,
+                    anchor,
+                    Uuid::new_v4(),
+                    Tool::Open,
+                    json!({"threadId": id}),
+                )
+                .await;
             }
-            app_server_tools::steer_turn(home, id, request, &expected, &text, &files).await
+            let model_override = pending_settings
+                .as_ref()
+                .map(|(m, e)| (m.as_str(), e.as_str()));
+            let outcome = app_server_tools::send_turn(
+                home,
+                id,
+                request,
+                &text,
+                &files,
+                &tools,
+                model_override,
+            )
+            .await;
+            if matches!(outcome, Outcome::Accepted(_)) {
+                *pending_settings = None;
+                *pending_controls = None;
+            }
+            outcome
         }
         _ => Outcome::Rejected("Codex 桌面接口不支持此操作".into()),
     }
@@ -345,6 +450,7 @@ async fn send(
     id: Uuid,
     request: Uuid,
     action: Action,
+    model_override: Option<&(String, String)>,
 ) -> Outcome {
     let (text, files, expected) = match action {
         Action::Send { text, files, tools } if tools.is_empty() => (text, files, None),
@@ -375,14 +481,14 @@ async fn send(
     {
         return Outcome::Rejected("未确认 Codex 当前会话可以发送，请刷新后重试".into());
     }
-    let result = app_tools::call(
-        stream,
-        anchor,
-        request,
-        Tool::SendMessage,
-        json!({"threadId":id,"hostId":"local","prompt":prompt}),
-    )
-    .await;
+    let mut args = json!({"threadId":id,"hostId":"local","prompt":prompt});
+    if expected.is_none()
+        && let Some((model, effort)) = model_override
+    {
+        args["model"] = json!(model);
+        args["thinking"] = json!(effort);
+    }
+    let result = app_tools::call(stream, anchor, request, Tool::SendMessage, args).await;
     if result.is_ok_and(|value| value["threadId"] == json!(id)) {
         Outcome::Completed(None)
     } else {

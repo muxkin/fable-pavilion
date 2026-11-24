@@ -41,6 +41,10 @@ const PRESETS: &[Preset] = &[
     },
 ];
 
+pub(super) fn preset_id(value: &Value) -> Option<&'static str> {
+    read_preset(value).ok().flatten().map(|preset| preset.id)
+}
+
 fn read_preset(value: &Value) -> Result<Option<&'static Preset>> {
     match value {
         Value::Null => Ok(None),
@@ -71,9 +75,8 @@ fn unavailable() -> Value {
 }
 
 struct PermissionView {
-    current: &'static str,
-    inherited: &'static str,
-    inherited_from_project: bool,
+    current: Option<&'static str>,
+    current_description: Option<&'static str>,
     options: Vec<&'static Preset>,
     revision: String,
     unavailable_reason: Option<&'static str>,
@@ -81,22 +84,18 @@ struct PermissionView {
 
 impl PermissionView {
     fn catalog(self) -> Value {
-        let (inherit_name, inherit_description) = if self.inherited_from_project {
-            ("沿用项目权限", format!("项目预设：{}", self.inherited))
-        } else {
-            ("沿用全局权限", format!("全局预设：{}", self.inherited))
-        };
-        let permissions = std::iter::once(json!({
-            "id":INHERIT,"name":inherit_name,"description":inherit_description
-        }))
-        .chain(self.options.iter().map(
-            |preset| json!({"id":preset.id,"name":preset.name,"description":preset.description}),
-        ))
-        .collect::<Vec<_>>();
+        let permissions = self
+            .options
+            .iter()
+            .map(|preset| json!({"id":preset.id,"name":preset.name,"description":preset.description}))
+            .collect::<Vec<_>>();
+        let mut state = json!({"permission":self.current,"permissionRevision":self.revision});
+        if let Some(description) = self.current_description {
+            state["permissionDescription"] = json!(description);
+        }
         json!({"product":"antigravity","permissions":permissions,"presets":[],
             "actions":if self.unavailable_reason.is_none() { vec!["permission"] } else { vec![] },
-            "state":{"permission":self.current,"permissionRevision":self.revision},
-            "permissionScopeDescription":"会话预设只在此会话生效。项目和全局权限规则仍然有效。",
+            "state":state,
             "permissionUnavailableReason":self.unavailable_reason})
     }
 }
@@ -162,13 +161,6 @@ impl Backend {
             && (project["sandboxMode"].is_boolean()
                 || has_setting(&project["autoExecutionPolicy"])
                 || has_setting(&project["fileAccessPolicy"]));
-        let inherited = if legacy_project_settings {
-            "项目自定义权限"
-        } else {
-            project_preset
-                .or(global)
-                .map_or("本机设置", |preset| preset.name)
-        };
         let current = read_preset(&summary["annotations"]["permissionPreset"])?;
         let conversation_preset = enabled(&flags, "permission-v2")
             && enabled(&flags, "enable-conversation-scoped-permissions");
@@ -186,7 +178,11 @@ impl Backend {
                 _ => true,
             })
             .collect::<Vec<_>>();
-        let current_id = current.map_or(INHERIT, |preset| preset.id);
+        let (current_id, current_description) = match current {
+            Some(preset) => (Some(preset.id), None),
+            None if legacy_project_settings => (Some("custom"), Some("项目自定义权限")),
+            None => (project_preset.or(global).map(|preset| preset.id), None),
+        };
         let revision = format!(
             "{:x}",
             Sha256::digest(serde_json::to_vec(&json!([
@@ -215,8 +211,7 @@ impl Backend {
         };
         Ok(PermissionView {
             current: current_id,
-            inherited,
-            inherited_from_project: project_preset.is_some() || legacy_project_settings,
+            current_description,
             options,
             revision,
             unavailable_reason,
@@ -259,13 +254,19 @@ impl Backend {
         if let Some(reason) = view.unavailable_reason {
             return Delivery::Rejected(reason);
         }
-        if expected != Some(view.current) || expected_revision != Some(view.revision.as_str()) {
+        if expected != view.current || expected_revision != Some(view.revision.as_str()) {
             return Delivery::Rejected("Antigravity 会话权限已变化，请重新选择");
         }
         let Some(native) = requested_preset(value, &view.options) else {
             return Delivery::Rejected("此 Antigravity 会话不支持所选权限");
         };
-        if value == view.current {
+        if Some(value) == view.current
+            && read_preset(&summary["annotations"]["permissionPreset"])
+                .ok()
+                .flatten()
+                .map(|preset| preset.id)
+                == Some(value)
+        {
             return Delivery::Completed(None);
         }
         let unchanged = self.summaries_at(&daemon).await.is_ok_and(|summaries| {

@@ -815,6 +815,7 @@ pub(crate) fn status(available: Availability, transport: Option<LiveTransport>) 
             )
         );
     let interrupt = full_control || app_server;
+    let model_settings = full_control || app_server;
     let open = (available.open && (available.ipc_online || full_control))
         || available.app_tool_messages
         || (online && matches!(transport, Some(LiveTransport::AppTools { .. })));
@@ -828,7 +829,7 @@ pub(crate) fn status(available: Availability, transport: Option<LiveTransport>) 
         "connected":connected,"desktopIpcConnected":available.ipc_online,"desktopVersion":null,"supportedVersion":connected,
         "writesEnabled":connected,"reason":reason,
         "capabilities":{
-            "send":online,"steer":steer,"interrupt":interrupt,"modelSettings":full_control,
+            "send":online,"steer":steer,"interrupt":interrupt,"modelSettings":model_settings,
             "questions":full_control,"approvals":full_control,"permissionRequests":full_control,
             "openThread":open,"elicitationForms":full_control,
             "newThread":available.create,"queue":full_control,
@@ -866,7 +867,7 @@ pub(crate) fn info(available: Availability, transport: Option<LiveTransport>) ->
         ("steer", status["capabilities"]["steer"] == true),
         ("interrupt", status["capabilities"]["interrupt"] == true),
         ("respond", full_control),
-        ("settings", full_control),
+        ("settings", status["capabilities"]["modelSettings"] == true),
         ("queue", full_control),
         ("create", available.create),
         ("open", status["capabilities"]["openThread"] == true),
@@ -942,6 +943,10 @@ mod connection_tests {
             app_server: true,
         };
         assert_eq!(status(available, Some(app_server))["capabilities"]["interrupt"], true);
+        assert_eq!(
+            status(available, Some(app_server))["capabilities"]["modelSettings"],
+            true
+        );
         assert_eq!(
             [app_tools, app_server, LiveTransport::Follower]
                 .into_iter()

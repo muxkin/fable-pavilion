@@ -101,19 +101,18 @@ export async function testAntigravityBrowserSwitching(options: AntigravityBrowse
     await expect(sparseMarker).toBeVisible({ timeout: 15000 });
     if (!oldGateway) {
       const permission = page.getByRole('button', { name: '会话权限', exact: true });
-      await expect(permission).toHaveAttribute('title', /沿用项目权限/);
+      await expect(permission).toHaveAttribute('title', /逐次审批/);
       await permission.click();
       const review = page.getByRole('menuitemradio', { name: /^逐次审批/ });
-      const inherit = page.getByRole('menuitemradio', { name: /^沿用项目权限/ });
-      await expect(inherit).toHaveAttribute('aria-checked', 'true');
-      await expect(page.getByText('会话预设只在此会话生效。项目和全局权限规则仍然有效。')).toBeVisible();
-      await review.click();
-      await expect(permission).toHaveAttribute('title', /逐次审批/);
+      const turbo = page.getByRole('menuitemradio', { name: /^Turbo/ });
+      await expect(review).toHaveAttribute('aria-checked', 'true');
+      await turbo.click();
+      await expect(permission).toHaveAttribute('title', /Turbo/);
       await expect.poll(() => fixture.calls.permissionUpdates.length).toBe(1);
       await permission.click();
-      await expect(review).toHaveAttribute('aria-checked', 'true');
-      await inherit.click();
-      await expect(permission).toHaveAttribute('title', /沿用项目权限/);
+      await expect(turbo).toHaveAttribute('aria-checked', 'true');
+      await review.click();
+      await expect(permission).toHaveAttribute('title', /逐次审批/);
       await expect.poll(() => fixture.calls.permissionUpdates.length).toBe(2);
       assert(fixture.calls.permissionUpdates.every((update) => update.threadId === threadId));
     }

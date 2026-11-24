@@ -2155,5 +2155,6 @@
   "找不到此 Antigravity 会话": "Could not find this Antigravity session",
   "无法确认此 Antigravity 会话的权限": "Unable to verify permissions for this Antigravity session",
   "Antigravity 会话权限已变化，请重新选择": "Antigravity session permissions changed. Please select again",
-  "此 Antigravity 会话不支持所选权限": "The selected permission is not supported for this Antigravity session"
+  "此 Antigravity 会话不支持所选权限": "The selected permission is not supported for this Antigravity session",
+  "权限": "Permissions"
 }

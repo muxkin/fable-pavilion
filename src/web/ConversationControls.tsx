@@ -106,7 +106,11 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
     watchSection(() => {
       if (request && request.target !== 'permission') setSection(request.target);
     }, [request]);
-    const current = state ?? catalog?.state;
+    const current = state?.permissionRevision
+      ? state
+      : state && catalog?.state
+        ? { ...state, ...catalog.state }
+        : (catalog?.state ?? state);
     const locked = disabled || !!working;
     const has = (name: ControlAction['action']) => catalog?.actions.includes(name);
     const showGoal = has('goal') || !!catalog?.goal || !!catalog?.goalUnavailableReason;
@@ -133,7 +137,7 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
       permissionNames[current?.permission ?? ''] ??
       permission?.name ??
       current?.permission ??
-      (antigravity ? '本机权限' : '原生默认');
+      '权限';
     const permissionUnavailable =
       catalog?.permissionUnavailableReason ||
       (antigravity ? '请在电脑上的 Antigravity 查看或修改权限。' : '当前会话不支持修改权限');
@@ -194,10 +198,7 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
                 </p>
               )}
               {!catalog && !error && connected && <p class="popover-note">正在读取权限…</p>}
-              {catalog?.permissionScopeDescription && (
-                <p class="popover-note">{catalog.permissionScopeDescription}</p>
-              )}
-              {catalog && (!permission || !canChangePermission) && (
+              {catalog && ((current?.permission && !permission) || !canChangePermission) && (
                 <p class="permission-custom">
                   <strong>{permissionName}</strong>
                   {(current?.permissionDescription || permission?.description || !antigravity) && (

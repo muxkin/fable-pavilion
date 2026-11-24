@@ -6,17 +6,17 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use bytes::BytesMut;
 use libp2p_identity::{Keypair, PeerId};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::Duration,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, DuplexStream},
-    sync::{Semaphore, watch},
+    sync::{Semaphore, mpsc, watch},
     time::timeout,
 };
 use uuid::Uuid;
@@ -24,9 +24,26 @@ use webrtc::{
     data_channel::{DataChannel, DataChannelEvent},
     peer_connection::{
         PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
-        RTCIceGatheringState, RTCIceServer, RTCPeerConnectionState, RTCSessionDescription,
+        RTCIceGatheringState, RTCIceServer, RTCPeerConnectionIceEvent, RTCPeerConnectionState,
+        RTCSessionDescription, SettingEngineBuilder,
     },
 };
+
+pub struct DirectConnection {
+    pc: Arc<dyn PeerConnection>,
+    replaced: Arc<AtomicBool>,
+}
+
+impl DirectConnection {
+    pub fn peer(&self) -> &dyn PeerConnection {
+        self.pc.as_ref()
+    }
+
+    pub async fn close(&self) {
+        self.replaced.store(true, Ordering::Release);
+        let _ = self.pc.close().await;
+    }
+}
 
 #[derive(Clone)]
 pub struct Direct {
@@ -50,7 +67,8 @@ impl Direct {
         ticket: String,
         session: Uuid,
         backends: Backends,
-    ) -> Result<(Arc<dyn PeerConnection>, String)> {
+        signal: mpsc::UnboundedSender<Value>,
+    ) -> Result<(DirectConnection, String)> {
         ensure!(sdp.len() <= 48 * 1024, "WebRTC offer 过大");
         let slot = self
             .slots
@@ -60,6 +78,7 @@ impl Direct {
         let identity = db.lock().expect("database mutex poisoned").identity.clone();
         let (state, mut updates) = watch::channel(RTCPeerConnectionState::New);
         let (gathering, mut gathered) = watch::channel(false);
+        let replaced = Arc::new(AtomicBool::new(false));
         let handler = Arc::new(Handler {
             db,
             identity,
@@ -72,6 +91,8 @@ impl Direct {
             },
             state,
             gathering,
+            signal: signal.clone(),
+            replaced: replaced.clone(),
             lanes: Arc::new(AtomicU8::new(0)),
         });
         let config = RTCConfigurationBuilder::new()
@@ -85,9 +106,17 @@ impl Direct {
                     .collect(),
             )
             .build();
+        let settings = SettingEngineBuilder::new()
+            .with_ice_timeouts(
+                Some(Duration::from_secs(10)),
+                Some(Duration::from_secs(30)),
+                Some(Duration::from_secs(2)),
+            )
+            .build();
         let pc: Arc<dyn PeerConnection> = Arc::new(
             PeerConnectionBuilder::new()
                 .with_configuration(config)
+                .with_setting_engine(settings)
                 .with_handler(handler)
                 .with_udp_addrs(vec!["0.0.0.0:0".to_owned(), "[::]:0".to_owned()])
                 .with_data_channel_send_buffer_limit(512 * 1024)
@@ -99,7 +128,9 @@ impl Direct {
                 .await?;
             pc.set_local_description(pc.create_answer(None).await?)
                 .await?;
-            let _ = timeout(Duration::from_secs(3), gathered.wait_for(|done| *done)).await;
+            // Return the answer quickly so both peers trickle ICE candidates in parallel
+            // and punch NAT mappings simultaneously instead of stalling 3s on slow interfaces.
+            let _ = timeout(Duration::from_millis(150), gathered.wait_for(|done| *done)).await;
             Ok::<_, anyhow::Error>(
                 pc.local_description()
                     .await
@@ -115,15 +146,20 @@ impl Direct {
             }
         };
         let connection = pc.clone();
+        let replaced_task = replaced.clone();
         tokio::spawn(async move {
             let _slot = slot;
+            let mut connected = false;
             loop {
                 let state = *updates.borrow_and_update();
+                if state == RTCPeerConnectionState::Connected {
+                    connected = true;
+                }
                 let deadline = match state {
                     RTCPeerConnectionState::Connected => None,
-                    RTCPeerConnectionState::Disconnected => Some(Duration::from_secs(8)),
+                    RTCPeerConnectionState::Disconnected => Some(Duration::from_secs(10)),
                     RTCPeerConnectionState::Closed | RTCPeerConnectionState::Failed => break,
-                    _ => Some(Duration::from_secs(20)),
+                    _ => Some(Duration::from_secs(25)),
                 };
                 let changed = if let Some(duration) = deadline {
                     timeout(duration, updates.changed())
@@ -137,8 +173,11 @@ impl Direct {
                 }
             }
             let _ = connection.close().await;
+            if connected && !replaced_task.load(Ordering::Acquire) {
+                let _ = signal.send(json!({"type": "direct-closed"}));
+            }
         });
-        Ok((pc, answer))
+        Ok((DirectConnection { pc, replaced }, answer))
     }
 }
 
@@ -158,14 +197,36 @@ struct Handler {
     backends: Backends,
     state: watch::Sender<RTCPeerConnectionState>,
     gathering: watch::Sender<bool>,
+    signal: mpsc::UnboundedSender<Value>,
+    replaced: Arc<AtomicBool>,
     lanes: Arc<AtomicU8>,
 }
 
 #[async_trait::async_trait]
 impl PeerConnectionEventHandler for Handler {
+    async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
+        if self.replaced.load(Ordering::Acquire) {
+            return;
+        }
+        if let Ok(init) = event.candidate.to_json()
+            && !init.candidate.is_empty()
+        {
+            let _ = self.signal.send(json!({
+                "type": "candidate",
+                "candidate": {
+                    "candidate": init.candidate,
+                    "sdpMLineIndex": init.sdp_mline_index.unwrap_or(0),
+                },
+            }));
+        }
+    }
+
     async fn on_ice_gathering_state_change(&self, state: RTCIceGatheringState) {
         if state == RTCIceGatheringState::Complete {
             self.gathering.send_replace(true);
+            if !self.replaced.load(Ordering::Acquire) {
+                let _ = self.signal.send(json!({"type": "candidate", "candidate": null}));
+            }
         }
     }
 

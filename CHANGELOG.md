@@ -1,5 +1,17 @@
 # 更新记录
 
+## 1.0.6 — 2026-11-24
+
+- **Codex 模型与推理强度选择修复**：修复新版 Codex 桌面下连接共享 App Server 导致的 `This model isn't available` 报错与模型目录被覆盖问题；普通发消息、运行中追加与模型/推理强度切换统一改走 Codex 桌面官方 `send_message_to_thread` 接口，恢复现代 Codex 桌面的模型设置能力。
+- **Codex & Antigravity 权限展示清理**：从 Codex 本地会话数据库准确识别真实沙箱权限（含完全访问 `disabled`），移除伪造的「原生默认 / 沿用 Codex 创建权限」卡片；移除 Antigravity 虚构的「沿用全局/项目权限」选项，直接展示当前真实生效预设档位。
+- **WebRTC 直连打洞与多主机热连接池**：网页端并行刷新 ICE 候选并发送 `end-of-candidates`，新增指数退避重连与断线宽限；同时新增最多 3 台主机的热连接池，进入/离开工作台或切换电脑时直接复用现有 Relay + Direct 长连接，不再重复重连。
+
+## Rust 桌面适配器 1.0.6 — 2026-11-24
+
+- **Codex 桌面零轮询与官方消息路由**：移除每 2s/10s 连接 `app-server-control.sock` 的探测轮询，改用本地文件探测与 SQLite 会话默认配置读取；所有常规发送、运行中追加与模型/推理强度覆盖均通过 `codex_app::send_message_to_thread` 交付给 Codex 桌面，避免改变会话客户端身份导致 `gpt-6.2-astra` 等模型报错。
+- **WebRTC 双向 Trickle ICE 与 NAT 保活**：`direct.rs` 启用真实双向 Trickle ICE、`150ms` Answer 快速回传实现双方同时打洞、配置 `2s` NAT 保活与 `10s` 断线宽限，并修复连接替换时的陈旧事件泄漏。
+- **Codex & Antigravity 真实权限解析**：支持从 Codex `state_*.sqlite` 解析 `disabled`/`managed` 等真实沙箱策略；Antigravity 权限快照与菜单直接解析项目/全局继承后的真实档位。
+
 ## 1.0.5 — 2026-11-24
 
 - **Antigravity 会话权限切换**：启用会话级权限预设的 Antigravity 桌面实例支持在工作台查看当前会话预设、切换预设或恢复继承项目/全局权限；读取失败时仅记录后端日志并静默隐藏不可用入口。

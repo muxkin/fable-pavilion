@@ -170,6 +170,7 @@ impl View {
             && self.thread["runtimeStatus"] != "notLoaded"
     }
 
+    #[cfg(feature = "official-plugins")]
     pub(crate) fn supports_controls(&self) -> bool {
         self.is_open() || self.app_server
     }
