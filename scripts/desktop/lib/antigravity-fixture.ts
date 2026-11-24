@@ -76,6 +76,7 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
     answerReplyLost: 0,
     approval: 0,
     rename: 0,
+    permissionUpdates: [] as { threadId: string; preset: string }[],
     queueAdd: 0,
     queueRemove: 0,
     quotaRefresh: [] as boolean[],
@@ -94,6 +95,9 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
   let extendedQuestions = false;
   let nextQuestionReceiptFault: QuestionReceiptFault | undefined;
   let expectedCommandApproval: boolean | undefined;
+  let conversationPermissions = true;
+  let adminPermissionLock = false;
+  let sandboxAvailable = true;
   const skillInfo = {
     name: 'fixture-skill',
     type: 'SLASH_COMMAND_TYPE_SKILL',
@@ -105,7 +109,7 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
     running: boolean;
     steps: Record<string, unknown>[];
     pending?: { id: string; requestId: string; text: string }[];
-    annotations?: { title: string };
+    annotations?: { title?: string; permissionPreset?: string };
     executorMetadatas?: { executionId: string; terminationReason: string }[];
   };
   const initial = (): Conversation => ({
@@ -374,6 +378,20 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
     switch (method) {
       case 'GetCapabilities':
         return {};
+      case 'GetServerConfiguration':
+        return { config: { sandboxAvailable, subclientType: 'hub' } };
+      case 'GetMendelFlags':
+        return { experimentConfig: { experiments: [
+          { keyString: 'permission-v2' },
+          { keyString: 'enable-conversation-scoped-permissions', disabled: !conversationPermissions },
+          { keyString: 'enable-auto-permission-preset' },
+        ] } };
+      case 'GetPermissionSettings':
+        return { globalPreset: 'AGENT_PERMISSION_PRESET_TURBO' };
+      case 'FetchAdminControls':
+        return adminPermissionLock
+          ? { adminControlsApplicable: true, agentControls: { permissionPresetLocked: true } }
+          : {};
       case 'RetrieveUserQuotaSummary':
         assert.equal(typeof body.forceRefresh, 'boolean');
         calls.quotaRefresh.push(body.forceRefresh);
@@ -438,6 +456,10 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
             },
           ],
         };
+      case 'ReadProject':
+        assert.deepEqual(body, { id: projectId });
+        return { project: { id: projectId, backendType: 'BACKEND_TYPE_LOCAL',
+          settings: { permissionPreset: 'AGENT_PERMISSION_PRESET_REQUEST_REVIEW' } } };
       case 'GetCascadeModelConfigData':
         return quotaCatalog();
       case 'GetSlashCommands':
@@ -664,10 +686,20 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
         assert.equal(body.cascadeIds.length, 1);
         const conversation = conversations.get(body.cascadeIds[0]);
         assert(conversation);
+        if (body.annotations.permissionPreset) {
+          assert(conversationPermissions && !adminPermissionLock);
+          assert.deepEqual(Object.keys(body.annotations), ['permissionPreset']);
+          const preset = body.annotations.permissionPreset;
+          calls.permissionUpdates.push({ threadId: body.cascadeIds[0], preset });
+          conversation.annotations = { ...conversation.annotations, permissionPreset: preset };
+          if (preset === 'AGENT_PERMISSION_PRESET_UNSPECIFIED')
+            delete conversation.annotations.permissionPreset;
+          return {};
+        }
         assert.deepEqual(Object.keys(body.annotations), ['title']);
         assert.equal(typeof body.annotations.title, 'string');
         assert.equal(body.annotations.title, body.annotations.title.trim());
-        conversation.annotations = body.annotations;
+        conversation.annotations = { ...conversation.annotations, ...body.annotations };
         calls.rename++;
         return {};
       }
@@ -797,6 +829,11 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
     },
     setNextModelEnabled(enabled: boolean) {
       nextModelEnabled = enabled;
+    },
+    setPermissionCapabilities(options: { enabled?: boolean; adminLocked?: boolean; sandbox?: boolean }) {
+      conversationPermissions = options.enabled ?? true;
+      adminPermissionLock = options.adminLocked ?? false;
+      sandboxAvailable = options.sandbox ?? true;
     },
     failHistory(thread: string | undefined) {
       unavailableHistory = thread;
@@ -935,6 +972,9 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
       extendedQuestions = false;
       nextQuestionReceiptFault = undefined;
       expectedCommandApproval = undefined;
+      conversationPermissions = true;
+      adminPermissionLock = false;
+      sandboxAvailable = true;
       errors.length = 0;
       calls.send = 0;
       calls.steer = 0;
@@ -944,6 +984,7 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
       calls.answerReplyLost = 0;
       calls.approval = 0;
       calls.rename = 0;
+      calls.permissionUpdates.length = 0;
       calls.queueAdd = 0;
       calls.queueRemove = 0;
       calls.quotaRefresh.length = 0;

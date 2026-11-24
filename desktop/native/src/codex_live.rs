@@ -136,6 +136,8 @@ pub struct View {
     pub messages: Vec<Value>,
     #[serde(default)]
     pub(crate) app_tools: bool,
+    #[serde(default)]
+    pub(crate) app_server: bool,
     #[cfg(feature = "official-plugins")]
     #[serde(skip)]
     pub(crate) native_goal: Option<Value>,
@@ -166,6 +168,10 @@ impl View {
         self.thread["synchronized"] == true
             && self.thread["owner"] == true
             && self.thread["runtimeStatus"] != "notLoaded"
+    }
+
+    pub(crate) fn supports_controls(&self) -> bool {
+        self.is_open() || self.app_server
     }
 
     pub(crate) fn is_ready_to_continue(&self) -> bool {

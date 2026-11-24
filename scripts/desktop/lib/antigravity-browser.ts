@@ -99,6 +99,24 @@ export async function testAntigravityBrowserSwitching(options: AntigravityBrowse
     const denseMarker = transcript.getByText('Synthetic history marker.', { exact: true });
     const sparseThread = page.getByRole('button', { name: new RegExp(initialTitle) });
     await expect(sparseMarker).toBeVisible({ timeout: 15000 });
+    if (!oldGateway) {
+      const permission = page.getByRole('button', { name: '会话权限', exact: true });
+      await expect(permission).toHaveAttribute('title', /沿用项目权限/);
+      await permission.click();
+      const review = page.getByRole('menuitemradio', { name: /^逐次审批/ });
+      const inherit = page.getByRole('menuitemradio', { name: /^沿用项目权限/ });
+      await expect(inherit).toHaveAttribute('aria-checked', 'true');
+      await expect(page.getByText('会话预设只在此会话生效。项目和全局权限规则仍然有效。')).toBeVisible();
+      await review.click();
+      await expect(permission).toHaveAttribute('title', /逐次审批/);
+      await expect.poll(() => fixture.calls.permissionUpdates.length).toBe(1);
+      await permission.click();
+      await expect(review).toHaveAttribute('aria-checked', 'true');
+      await inherit.click();
+      await expect(permission).toHaveAttribute('title', /沿用项目权限/);
+      await expect.poll(() => fixture.calls.permissionUpdates.length).toBe(2);
+      assert(fixture.calls.permissionUpdates.every((update) => update.threadId === threadId));
+    }
     fixture.failHistory(switchId);
     const denseThread = page.getByRole('button', { name: new RegExp(switchTitle) });
     await denseThread.click();
@@ -501,7 +519,7 @@ export async function testAntigravityBrowserSwitching(options: AntigravityBrowse
     }
 
     console.log(
-      `Antigravity session switching (including a delayed response after reload), history retry and pagination, questions, next-message model, plugins, photos, same-task append and queue UI passed in ${channel} ${browser.version()} (${process.platform}, ${headed ? 'headed' : 'headless'}).`,
+      `Antigravity session switching (including a delayed response after reload), history retry and pagination, conversation permissions, questions, next-message model, plugins, photos, same-task append and queue UI passed in ${channel} ${browser.version()} (${process.platform}, ${headed ? 'headed' : 'headless'}).`,
     );
   } catch (error) {
     const outputDir = process.env.TEST_OUTPUT;

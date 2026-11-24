@@ -65,6 +65,7 @@ export const threadSchema = z
     canSend: z.boolean(),
     canResumeForSend: z.boolean().optional(),
     textOnlySend: z.boolean().optional(),
+    canSendFileReferences: z.boolean().optional(),
     canInterrupt: z.boolean(),
     reason: z.string().nullable(),
   })

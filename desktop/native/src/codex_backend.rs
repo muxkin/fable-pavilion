@@ -31,7 +31,11 @@ const VOICE_RPC_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum LiveTransport {
-    AppTools,
+    AppTools {
+        supports_steer: bool,
+        file_references: bool,
+        app_server: bool,
+    },
     Follower,
 }
 
@@ -787,9 +791,33 @@ async fn follow(
 pub(crate) fn status(available: Availability, transport: Option<LiveTransport>) -> Value {
     let online = available.desktop && transport.is_some();
     let full_control = online && transport == Some(LiveTransport::Follower);
+    let app_server = online
+        && matches!(
+            transport,
+            Some(LiveTransport::AppTools {
+                app_server: true,
+                ..
+            })
+        );
+    let steer = online
+        && matches!(
+            transport,
+            Some(
+                LiveTransport::Follower
+                    | LiveTransport::AppTools {
+                        supports_steer: true,
+                        ..
+                    }
+                    | LiveTransport::AppTools {
+                        app_server: true,
+                        ..
+                    }
+            )
+        );
+    let interrupt = full_control || app_server;
     let open = (available.open && (available.ipc_online || full_control))
         || available.app_tool_messages
-        || (online && transport == Some(LiveTransport::AppTools));
+        || (online && matches!(transport, Some(LiveTransport::AppTools { .. })));
     let connected = online || open || available.create || available.rename || available.fork;
     let reason = match (connected, available.history) {
         (true, _) => None,
@@ -800,7 +828,7 @@ pub(crate) fn status(available: Availability, transport: Option<LiveTransport>) 
         "connected":connected,"desktopIpcConnected":available.ipc_online,"desktopVersion":null,"supportedVersion":connected,
         "writesEnabled":connected,"reason":reason,
         "capabilities":{
-            "send":online,"steer":full_control,"interrupt":full_control,"modelSettings":full_control,
+            "send":online,"steer":steer,"interrupt":interrupt,"modelSettings":full_control,
             "questions":full_control,"approvals":full_control,"permissionRequests":full_control,
             "openThread":open,"elicitationForms":full_control,
             "newThread":available.create,"queue":full_control,
@@ -817,18 +845,32 @@ pub(crate) fn info(available: Availability, transport: Option<LiveTransport>) ->
     let status = status(available, transport);
     let online = status["capabilities"]["send"] == true;
     let full_control = online && transport == Some(LiveTransport::Follower);
+    let attachments = full_control
+        || (online
+            && matches!(
+                transport,
+                Some(
+                    LiveTransport::AppTools {
+                        file_references: true,
+                        ..
+                    } | LiveTransport::AppTools {
+                        app_server: true,
+                        ..
+                    }
+                )
+            ));
     let mut capabilities = serde_json::Map::new();
     for (name, supported) in [
         ("history", true),
         ("send", online),
-        ("steer", full_control),
-        ("interrupt", full_control),
+        ("steer", status["capabilities"]["steer"] == true),
+        ("interrupt", status["capabilities"]["interrupt"] == true),
         ("respond", full_control),
         ("settings", full_control),
         ("queue", full_control),
         ("create", available.create),
         ("open", status["capabilities"]["openThread"] == true),
-        ("attachments", full_control),
+        ("attachments", attachments),
         ("skills", true),
         ("plugins", true),
         ("voice", available.voice),
@@ -869,7 +911,7 @@ mod connection_tests {
     }
 
     #[test]
-    fn app_tools_support_text_without_advertising_follower_controls() {
+    fn app_tools_advertise_verified_message_capabilities() {
         let available = Availability {
             history: true,
             desktop: true,
@@ -879,20 +921,45 @@ mod connection_tests {
         let cold = status(available, None);
         assert_eq!(cold["capabilities"]["openThread"], true);
         assert_eq!(cold["capabilities"]["send"], false);
-        let app_tools = Some(LiveTransport::AppTools);
-        let live = status(available, app_tools);
+        let app_tools = LiveTransport::AppTools {
+            supports_steer: true,
+            file_references: true,
+            app_server: false,
+        };
+        let live = status(available, Some(app_tools));
         assert_eq!(live["capabilities"]["send"], true);
-        assert_eq!(live["capabilities"]["steer"], false);
+        assert_eq!(live["capabilities"]["steer"], true);
+        assert_eq!(live["capabilities"]["interrupt"], false);
+        assert_eq!(live["capabilities"]["queue"], false);
         assert_eq!(live["capabilities"]["modelSettings"], false);
         assert_eq!(
-            info(available, app_tools).unwrap()["capabilities"]["attachments"]["state"],
-            "unavailable"
+            info(available, Some(app_tools)).unwrap()["capabilities"]["attachments"]["state"],
+            "supported"
         );
+        let app_server = LiveTransport::AppTools {
+            supports_steer: true,
+            file_references: true,
+            app_server: true,
+        };
+        assert_eq!(status(available, Some(app_server))["capabilities"]["interrupt"], true);
         assert_eq!(
-            [LiveTransport::AppTools, LiveTransport::Follower]
+            [app_tools, app_server, LiveTransport::Follower]
                 .into_iter()
                 .max(),
             Some(LiveTransport::Follower)
+        );
+        let older_plugin = Some(LiveTransport::AppTools {
+            supports_steer: false,
+            file_references: false,
+            app_server: false,
+        });
+        assert_eq!(
+            status(available, older_plugin)["capabilities"]["steer"],
+            false
+        );
+        assert_eq!(
+            info(available, older_plugin).unwrap()["capabilities"]["attachments"]["state"],
+            "unavailable"
         );
     }
 }

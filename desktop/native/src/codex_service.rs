@@ -79,6 +79,7 @@ pub(crate) struct Local {
     desktop: Option<Desktop>,
     voice: Option<Voice>,
     ipc_online: AtomicBool,
+    app_server_online: AtomicBool,
 }
 
 #[cfg(feature = "official-plugins")]
@@ -108,6 +109,7 @@ impl Local {
             desktop,
             voice,
             ipc_online: AtomicBool::new(false),
+            app_server_online: AtomicBool::new(false),
         })
     }
 
@@ -118,6 +120,7 @@ impl Local {
             .map(|desktop| desktop.tools.catalog())
             .unwrap_or_default();
         let ipc_online = self.ipc_online.load(Ordering::Relaxed);
+        let app_server_online = self.app_server_online.load(Ordering::Relaxed);
         Availability {
             history: true,
             desktop: self.desktop.is_some(),
@@ -128,7 +131,7 @@ impl Local {
             create_attachments: catalog.can_create(),
             create_tools: catalog.can_create()
                 && catalog.has(Tool::Open)
-                && ipc_online
+                && (ipc_online || app_server_online)
                 && self
                     .desktop
                     .as_ref()
@@ -146,12 +149,23 @@ impl Local {
 
     pub(crate) async fn refresh(&self) -> Availability {
         if let Some(desktop) = &self.desktop {
-            let (ipc_online, _, _) = tokio::join!(
+            let app_server = async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    crate::codex_goal::AppServer::connect(self.history.home()),
+                )
+                .await
+                .is_ok_and(|result| result.is_ok())
+            };
+            let (ipc_online, app_server_online, _, _) = tokio::join!(
                 desktop.ipc_available(),
+                app_server,
                 desktop.tools.refresh(),
                 desktop.reply_fork.probe()
             );
             self.ipc_online.store(ipc_online, Ordering::Relaxed);
+            self.app_server_online
+                .store(app_server_online, Ordering::Relaxed);
         }
         self.availability()
     }
@@ -240,7 +254,7 @@ impl Local {
                 let id = params["id"].as_str().context("会话 ID 无效")?;
                 let view = live
                     .and_then(|live| live.view.borrow().clone())
-                    .filter(|view| !view.app_tools);
+                    .filter(|view| !view.app_tools || view.app_server);
                 let state = view.as_ref().map_or_else(
                     || settings::permission(&Value::Null),
                     |view| view.thread["controls"].clone(),
@@ -389,7 +403,7 @@ impl Local {
                 .view
                 .borrow()
                 .as_ref()
-                .is_some_and(|view| view.is_open())
+                .is_some_and(|view| view.supports_controls())
             {
                 return Outcome::Rejected("请先打开 Codex 会话".into());
             }

@@ -23,6 +23,7 @@ mod export;
 mod history;
 mod interactions;
 mod media;
+mod permissions;
 mod plugin_selection;
 mod projection;
 mod queue;
@@ -91,6 +92,7 @@ pub struct Backend {
     project_catalog: Arc<tokio::sync::Mutex<Option<(std::time::Instant, Value)>>>,
     project_uris: Arc<tokio::sync::Mutex<HashMap<String, Vec<Value>>>>,
     model_catalog: Arc<tokio::sync::Mutex<Option<(std::time::Instant, Vec<NativeModel>)>>>,
+    permission_write: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -162,6 +164,7 @@ impl Backend {
             project_catalog: Default::default(),
             project_uris: Default::default(),
             model_catalog: Default::default(),
+            permission_write: Default::default(),
         })
     }
 
@@ -1101,9 +1104,7 @@ impl Backend {
                     }
                 }
             }
-            "controls.read" => {
-                json!({"product":"antigravity","permissions":[],"presets":[],"actions":[],"state":{}})
-            }
+            "controls.read" => self.permission_catalog(thread_id(params)?).await,
             _ => return Ok(None),
         };
         Ok(Some(result))

@@ -47,7 +47,7 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
   reload: () => void;
   canWriteGoal: boolean;
   goalOperationError?: string;
-  toolSelectionDisabled?: boolean;
+  limitedSend?: boolean;
   modeDisabled?: boolean;
   running: boolean;
   plan: boolean;
@@ -85,7 +85,7 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
     reload,
     canWriteGoal,
     goalOperationError,
-    toolSelectionDisabled,
+    limitedSend,
     modeDisabled,
     running,
     plan,
@@ -110,9 +110,15 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
     const locked = disabled || !!working;
     const has = (name: ControlAction['action']) => catalog?.actions.includes(name);
     const showGoal = has('goal') || !!catalog?.goal || !!catalog?.goalUnavailableReason;
-    const skills = !toolSelectionDisabled && (!backend || capabilityEnabled(backend.capabilities.skills));
-    const plugins = !toolSelectionDisabled && capabilityEnabled(backend?.capabilities.plugins);
-    const showPermission = !!current?.permission || has('permission') || request?.target === 'permission';
+    const skills = !limitedSend && (!backend || capabilityEnabled(backend.capabilities.skills));
+    const plugins = !limitedSend && capabilityEnabled(backend?.capabilities.plugins);
+    const antigravity = backend?.product === 'antigravity';
+    const canChangePermission = has('permission');
+    const showPermission =
+      !limitedSend &&
+      (canChangePermission ||
+        (!antigravity && !!current?.permission) ||
+        request?.target === 'permission');
     const showTools =
       skills ||
       plugins ||
@@ -124,7 +130,13 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
       (request && request.target !== 'permission');
     const permission = catalog?.permissions.find((p) => p.id === current?.permission);
     const permissionName =
-      permissionNames[current?.permission ?? ''] ?? permission?.name ?? current?.permission ?? '原生默认';
+      permissionNames[current?.permission ?? ''] ??
+      permission?.name ??
+      current?.permission ??
+      (antigravity ? '本机权限' : '原生默认');
+    const permissionUnavailable =
+      catalog?.permissionUnavailableReason ||
+      (antigravity ? '请在电脑上的 Antigravity 查看或修改权限。' : '当前会话不支持修改权限');
     const action = (a: ControlAction) => {
       setError('');
       onAction(a);
@@ -181,21 +193,28 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
                   </button>
                 </p>
               )}
-              {!catalog && !error && <p class="popover-note">正在读取权限…</p>}
-              {catalog && !permission && (
+              {!catalog && !error && connected && <p class="popover-note">正在读取权限…</p>}
+              {catalog?.permissionScopeDescription && (
+                <p class="popover-note">{catalog.permissionScopeDescription}</p>
+              )}
+              {catalog && (!permission || !canChangePermission) && (
                 <p class="permission-custom">
                   <strong>{permissionName}</strong>
-                  <span>{current?.permissionDescription || '保留当前原生配置'}</span>
+                  {(current?.permissionDescription || permission?.description || !antigravity) && (
+                    <span>
+                      {current?.permissionDescription || permission?.description || '保留当前原生配置'}
+                    </span>
+                  )}
                 </p>
               )}
-              {has('permission') &&
+              {canChangePermission &&
                 catalog?.permissions.map((p) => (
                   <button
                     key={p.id}
                     type="button"
                     role="menuitemradio"
                     aria-checked={current?.permission === p.id}
-                    disabled={locked}
+                    disabled={locked || (antigravity && (catalogLoading || !!error))}
                     class="permission-option"
                     onClick={() => {
                       if (current?.permission !== p.id)
@@ -217,7 +236,9 @@ export const ConversationControls = tsxComponent(function ConversationControls(_
                     {current?.permission === p.id && <Icon name="check" size={18} />}
                   </button>
                 ))}
-              {catalog && !has('permission') && <p class="popover-note">当前会话不支持修改权限</p>}
+              {(catalog || (antigravity && !connected)) && !canChangePermission && (
+                <p class="popover-note">{permissionUnavailable}</p>
+              )}
               {running && <p class="popover-note permission-timing">正在执行的任务遵守原生生效时机</p>}
             </>
           )}

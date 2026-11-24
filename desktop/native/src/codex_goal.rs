@@ -50,4 +50,4 @@ impl Change {
 #[cfg(feature = "official-plugins")]
 mod app_server;
 #[cfg(feature = "official-plugins")]
-pub(crate) use app_server::{Goals, snapshot_revision};
+pub(crate) use app_server::{AppServer, Goals, snapshot_revision, thread_loaded};

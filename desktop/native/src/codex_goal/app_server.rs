@@ -12,7 +12,7 @@ use tokio::{sync::Mutex, time::timeout};
 use uuid::Uuid;
 
 mod transport;
-use transport::AppServer;
+pub(crate) use transport::AppServer;
 
 #[derive(Clone)]
 pub(crate) struct Goals {
@@ -85,7 +85,7 @@ impl Goals {
     }
 
     pub(crate) async fn enrich(&self, result: &mut Value, thread: Uuid, view: &View) {
-        if !view.is_open() {
+        if !view.supports_controls() {
             return;
         }
         let inspection = timeout(Duration::from_secs(3), async {
@@ -115,28 +115,11 @@ impl Goals {
 
     async fn connect(&self, thread: Uuid) -> Result<AppServer> {
         let mut server = AppServer::connect(&self.home).await?;
-        let mut query = json!({});
-        let mut cursors = HashSet::new();
-        loop {
-            let loaded = server.request("thread/loaded/list", query).await?;
-            ensure!(loaded["error"].is_null(), "Codex 无法确认已加载的会话");
-            let result = &loaded["result"];
-            let entries = result["data"].as_array().context("Codex 会话目录无效")?;
-            if entries
-                .iter()
-                .any(|id| id.as_str().and_then(|id| Uuid::parse_str(id).ok()) == Some(thread))
-            {
-                return Ok(server);
-            }
-            let cursor = result["nextCursor"]
-                .as_str()
-                .context("当前会话未加载在共享 Codex App Server 中")?;
-            ensure!(
-                (1..=4096).contains(&cursor.len()) && cursors.insert(cursor.to_owned()),
-                "Codex 会话分页游标无效"
-            );
-            query = json!({"cursor":cursor});
-        }
+        ensure!(
+            thread_loaded(&mut server, thread).await?,
+            "当前会话未加载在共享 Codex App Server 中"
+        );
+        Ok(server)
     }
 
     pub(crate) async fn change(&self, thread: Uuid, change: Change) -> Outcome {
@@ -185,6 +168,31 @@ impl Goals {
             _ if sent => Outcome::Uncertain,
             _ => Outcome::Rejected("此会话的共享 Codex 目标接口暂不可用".into()),
         }
+    }
+}
+
+pub(crate) async fn thread_loaded(server: &mut AppServer, thread: Uuid) -> Result<bool> {
+    let mut query = json!({});
+    let mut cursors = HashSet::new();
+    loop {
+        let loaded = server.request("thread/loaded/list", query).await?;
+        ensure!(loaded["error"].is_null(), "Codex 无法确认已加载的会话");
+        let result = &loaded["result"];
+        let entries = result["data"].as_array().context("Codex 会话目录无效")?;
+        if entries
+            .iter()
+            .any(|id| id.as_str().and_then(|id| Uuid::parse_str(id).ok()) == Some(thread))
+        {
+            return Ok(true);
+        }
+        let Some(cursor) = result["nextCursor"].as_str() else {
+            return Ok(false);
+        };
+        ensure!(
+            (1..=4096).contains(&cursor.len()) && cursors.insert(cursor.to_owned()),
+            "Codex 会话分页游标无效"
+        );
+        query = json!({"cursor":cursor});
     }
 }
 

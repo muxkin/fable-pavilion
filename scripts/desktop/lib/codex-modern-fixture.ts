@@ -6,7 +6,11 @@ import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { encodeFrame, FrameReader } from '../../../packages/adapter-codex/src/framing.js';
 
-export const MODERN_CODEX = { id: 'codex-modern', title: '新版 Codex 测试会话' };
+export const MODERN_CODEX = {
+  id: 'codex-modern',
+  title: '新版 Codex 测试会话',
+  otherThreadId: '10000000-0000-4000-8000-000000000003',
+};
 
 export async function createModernCodexFixture(directory: string, threadId: string, rollout: string) {
   const path =
@@ -15,10 +19,12 @@ export async function createModernCodexFixture(directory: string, threadId: stri
       : join(directory, 'modern-tools.sock');
   const sockets = new Set<Socket>();
   const errors: string[] = [];
-  const sends: { callId: string; prompt: string }[] = [];
+  const sends: { callId: string; prompt: string; activeTurnId?: string }[] = [];
   const navCalls: string[] = [];
   const time = 1_800_000_000_000;
   let status: 'notLoaded' | 'idle' | 'active' = 'notLoaded';
+  let activeTurnId: string | undefined;
+  let activeFlags: string[] = [];
   let wrongAcknowledgement = false;
 
   // This server speaks only app-tools. The fixture's configured follower socket does not exist.
@@ -42,9 +48,11 @@ export async function createModernCodexFixture(directory: string, threadId: stri
           }
           assert.equal(call.method, 'tools/call');
           const { tool, callId, arguments: args } = call.params;
-          assert.equal(call.params.threadId, threadId);
+          const otherThread = tool === 'read_thread' && args.threadId === MODERN_CODEX.otherThreadId;
+          const target = otherThread ? MODERN_CODEX.otherThreadId : threadId;
+          assert.equal(call.params.threadId, target);
           assert.equal(call.params.hostId, 'local');
-          assert.equal(args.threadId, threadId);
+          assert.equal(args.threadId, target);
           let result: unknown;
           switch (tool) {
             case 'navigate_to_codex_page':
@@ -53,28 +61,54 @@ export async function createModernCodexFixture(directory: string, threadId: stri
               status = 'idle';
               break;
             case 'read_thread':
-              assert.deepEqual(args, { threadId, hostId: 'local', includeTurns: false });
+              assert.deepEqual(
+                args,
+                args.includeTurns
+                  ? {
+                      threadId: target,
+                      hostId: 'local',
+                      includeTurns: true,
+                      turnLimit: 1,
+                      includeOutputs: false,
+                      maxOutputCharsPerItem: 0,
+                    }
+                  : { threadId: target, hostId: 'local', includeTurns: false },
+              );
               result = {
                 schemaVersion: 1,
                 thread: {
-                  id: threadId,
+                  id: target,
                   kind: 'codex',
                   hostId: 'local',
-                  status: { type: status, ...(status === 'active' && { activeFlags: [] }) },
+                  status: otherThread ? { type: 'notLoaded' } : {
+                    type: status,
+                    ...(status === 'active' && { activeFlags }),
+                  },
                   title: MODERN_CODEX.title,
                   cwd: directory,
                   createdAt: time,
                   updatedAt: time,
                 },
-                turns: [],
+                turns:
+                  !otherThread && args.includeTurns && status === 'active' && activeTurnId
+                    ? [{ id: activeTurnId, status: 'inProgress' }]
+                    : [],
+                ...(args.includeTurns && { page: { order: 'newest_first' } }),
               };
               break;
             case 'send_message_to_thread':
-              assert.notEqual(status, 'active', 'Fixture received a send while the thread was active');
+              if (status === 'active') {
+                assert(activeTurnId, 'Fixture received a follow-up without an active turn');
+                assert.equal(activeFlags.length, 0, 'Fixture received a follow-up with a pending request');
+              }
               assert.deepEqual(Object.keys(args).sort(), ['hostId', 'prompt', 'threadId']);
               assert.equal(args.hostId, 'local');
               assert.equal(typeof args.prompt, 'string');
-              sends.push({ callId, prompt: args.prompt });
+              sends.push({
+                callId,
+                prompt: args.prompt,
+                activeTurnId: status === 'active' ? activeTurnId : undefined,
+              });
               const escaped = args.prompt
                 .replaceAll('&', '&amp;')
                 .replaceAll('<', '&lt;')
@@ -86,7 +120,7 @@ export async function createModernCodexFixture(directory: string, threadId: stri
                   payload: {
                     type: 'item_completed',
                     thread_id: threadId,
-                    turn_id: crypto.randomUUID(),
+                    turn_id: (status === 'active' && activeTurnId) || crypto.randomUUID(),
                     item: {
                       type: 'FunctionCallOutput',
                       id: crypto.randomUUID(),
@@ -125,6 +159,13 @@ export async function createModernCodexFixture(directory: string, threadId: stri
     navCalls,
     setStatus: (value: typeof status) => {
       status = value;
+      activeTurnId = undefined;
+      activeFlags = [];
+    },
+    setActiveTurn: (id: string, flags: string[] = []) => {
+      status = 'active';
+      activeTurnId = id;
+      activeFlags = flags;
     },
     mismatchNextAcknowledgement: () => {
       wrongAcknowledgement = true;

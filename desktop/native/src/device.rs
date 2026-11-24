@@ -472,7 +472,11 @@ impl DeviceSession {
             .filter_map(|(_, watch)| watch.live.as_ref().and_then(Live::view))
             .map(|view| {
                 if view.app_tools {
-                    LiveTransport::AppTools
+                    LiveTransport::AppTools {
+                        supports_steer: view.thread["canSteer"].is_boolean(),
+                        file_references: view.thread["canSendFileReferences"] == true,
+                        app_server: view.app_server,
+                    }
                 } else {
                     LiveTransport::Follower
                 }

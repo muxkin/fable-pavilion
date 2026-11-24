@@ -66,23 +66,20 @@ import { SessionToolsSheet } from './workspace/SessionToolsSheet';
 import { useWorkbenchSidebar, WorkbenchSidebarToggle } from './workspace/WorkbenchSidebarToggle';
 import { ConversationGoalSummary } from './workspace/GoalControls';
 import { useConversationControlCatalog } from './workspace/conversation-control-catalog';
-import { canResumeThread, canSendOpenedThread, openForSend, openedThreadBlocked } from './workspace/open-for-send';
+import { canSendOpenedThread, openForSend, openedThreadBlocked } from './workspace/open-for-send';
+import {
+  activeTurnChanged,
+  canSendFileReferences,
+  fileReferenceExtrasHint,
+  onlySendsText,
+  requiresFullSend,
+  textOnlySendHint,
+  textSteeringTurnId,
+} from './workspace/codex-text-send';
 
 const CodexVoice = defineAsyncComponent(() => import('./CodexVoice'));
 const subscribeConnection = (notify: () => void) => deviceSession.onChange(notify);
 const connectionSnapshot = () => deviceSession.online;
-const textOnlySendHint =
-  '当前仅可发送文本。带附件或使用所选技能、插件或模型的消息，请在电脑上的 Codex 发送。';
-
-function requiresFullSend(draft: ChatDraft) {
-  return !!(draft.uploads.length || draft.skills.length || draft.plugins.length || draft.model);
-}
-
-function onlySendsText(view: ThreadView | null, threadId: string) {
-  return (
-    (view?.id === threadId && view.synchronized && view.textOnlySend === true) || canResumeThread(view, threadId)
-  );
-}
 
 export default tsxComponent(function AgentWorkspace(_props: {
   route: AppRoute;
@@ -294,11 +291,10 @@ export default tsxComponent(function AgentWorkspace(_props: {
     const backendId = route.backend ?? DEFAULT_BACKEND;
     const backend = backendState.value;
     const presentation = backend?.presentation;
+    const codex = backend?.product === 'codex' || (!backend && backendId === DEFAULT_BACKEND);
     const antigravity = backend?.product === 'antigravity';
     const canAttach = !backend || capabilityEnabled(backend.capabilities.attachments);
     const imagesOnly = presentation?.attachmentMode === 'image';
-    const canSelectSkills = !backend || capabilityEnabled(backend.capabilities.skills);
-    const canSelectPlugins = !backend || capabilityEnabled(backend.capabilities.plugins);
     const emptyCreation = presentation?.creation.empty ?? false;
     const controlPlan = presentation?.plan === 'control';
     const agentName = backend?.name ?? 'Agent';
@@ -428,15 +424,24 @@ export default tsxComponent(function AgentWorkspace(_props: {
     selectedId.current = selected?.id ?? null;
     const receivedView = receivedViewState.value;
     const view = receivedView?.id === selected?.id ? receivedView : null;
-    const canSteer =
-      (status?.capabilities.steer ?? !antigravity) &&
-      (!antigravity || (view?.synchronized === true && view.canSteer === true));
     const textOnlyAppend = antigravity && !!view?.activeTurnId;
     const currentModel =
       view?.modelName ?? (/^MODEL_PLACEHOLDER_/.test(view?.model ?? '') ? 'Antigravity 模型' : view?.model);
     const stream = connection.value;
     const voice = voiceState.value;
-    const voiceHost = deviceSession.host?.hostId;
+    const pairedHost = deviceSession.host;
+    const voiceHost = pairedHost?.hostId;
+    const sameSendScope = (threadId: string) =>
+      _props.active !== false &&
+      _props.route.page === 'workbench' &&
+      _props.route.thread === threadId &&
+      _props.route.host === route.host &&
+      (_props.route.backend ?? DEFAULT_BACKEND) === backendId &&
+      selectedId.current === threadId &&
+      deviceIdState.value === deviceId &&
+      deviceSession.host?.hostId === pairedHost?.hostId &&
+      deviceSession.host?.deviceId === pairedHost?.deviceId &&
+      deviceSession.online;
     const voiceMode = status?.capabilities.voice ? status.capabilities.voiceMode : undefined;
     const voiceOpen =
       active &&
@@ -447,7 +452,24 @@ export default tsxComponent(function AgentWorkspace(_props: {
     const drafts = readChatDrafts(deviceId, selected?.id ?? null);
     const messageModel = drafts.draft.model;
     const textOnlySend = !!selected && onlySendsText(view, selected.id);
-    const unsupportedSendDraft = textOnlySend && requiresFullSend(drafts.draft);
+    const canSelectSkills = !textOnlySend && (!backend || capabilityEnabled(backend.capabilities.skills));
+    const canSelectPlugins = !textOnlySend && (!backend || capabilityEnabled(backend.capabilities.plugins));
+    const allowsFileReferences = (latest: ThreadView | null, threadId: string) => {
+      const current = backendState.value;
+      return current?.id === backendId && capabilityEnabled(current.capabilities.attachments) &&
+        canSendFileReferences(latest, threadId);
+    };
+    const fileReferences = textOnlySend && !!selected && allowsFileReferences(view, selected.id);
+    const canAttachToThread = textOnlySend ? fileReferences : canAttach;
+    const running = !!view?.activeTurnId || (textOnlySend && view?.runtimeStatus === 'active');
+    const canSteer = textOnlySend
+      ? !!selected &&
+        status?.writesEnabled === true &&
+        status.capabilities.steer === true &&
+        !!textSteeringTurnId(view, selected.id)
+      : (status?.capabilities.steer ?? !antigravity) &&
+        (!antigravity || (view?.synchronized === true && view.canSteer === true));
+    const unsupportedSendDraft = textOnlySend && requiresFullSend(drafts.draft, fileReferences);
 
     const { text: draft, uploads, skills: selectedSkills, plugins: selectedPlugins } = drafts.draft;
     function setSelectedSkills(value: SkillChoice[] | ((old: SkillChoice[]) => SkillChoice[])) {
@@ -683,6 +705,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                   boundedQuestionAvailable: false,
                   canResumeForSend: false,
                   textOnlySend: false,
+                  canSendFileReferences: false,
                   canSend: false,
                   canInterrupt: false,
                   reason: null,
@@ -904,8 +927,29 @@ export default tsxComponent(function AgentWorkspace(_props: {
           sendPreparationError.value = latest?.reason || openedThreadBlocked;
           return;
         }
-        if (requiresFullSend(submitted)) {
-          sendPreparationError.value = textOnlySendHint;
+        const allowsFiles = allowsFileReferences(latest, selected.id);
+        if (requiresFullSend(submitted, allowsFiles)) {
+          sendPreparationError.value = allowsFiles ? fileReferenceExtrasHint : textOnlySendHint;
+          return;
+        }
+      }
+      if (kind === 'steer' && (textOnlySend || onlySendsText(latest, selected.id))) {
+        const threadDraft = drafts.readCurrent();
+        const original = retryDraft ? threadDraft?.outgoing?.draft : threadDraft?.draft;
+        if (original !== submitted || !sameSendScope(selected.id)) return;
+        const liveStatus = statusState.value;
+        if (
+          !view?.activeTurnId ||
+          textSteeringTurnId(latest, selected.id) !== view.activeTurnId ||
+          liveStatus?.writesEnabled !== true ||
+          liveStatus.capabilities.steer !== true
+        ) {
+          sendPreparationError.value = latest?.reason || activeTurnChanged;
+          return;
+        }
+        const allowsFiles = allowsFileReferences(latest, selected.id);
+        if (requiresFullSend(submitted, allowsFiles)) {
+          sendPreparationError.value = allowsFiles ? fileReferenceExtrasHint : textOnlySendHint;
           return;
         }
       }
@@ -1018,6 +1062,8 @@ export default tsxComponent(function AgentWorkspace(_props: {
     }
     async function uploadFiles(files: FileList | File[] | null) {
       if (!selected || !files || uploadLock.current) return;
+      const latest = receivedViewState.value;
+      if (onlySendsText(latest, selected.id) && !allowsFileReferences(latest, selected.id)) return;
       const threadId = selected.id,
         list = Array.from(files);
       if (!list.length) return;
@@ -1226,12 +1272,12 @@ export default tsxComponent(function AgentWorkspace(_props: {
       stream &&
       !!view?.synchronized &&
       (textOnlySend
-        ? !!selected && canSendOpenedThread(view, selected.id) && status?.writesEnabled === true
+        ? canSteer || (!!selected && canSendOpenedThread(view, selected.id) && status?.writesEnabled === true)
         : view.canSend || (view.canInterrupt && view.pendingRequests === 0));
     const canOpenForSend =
       stream && needsOpen && !canCompose && !!status?.writesEnabled && !!status.capabilities.openThread;
     async function sendDraft() {
-      if (openingForSendState.value || !selected || (view?.activeTurnId && !canSteer)) return;
+      if (openingForSendState.value || !selected || (running && !canSteer)) return;
       sendPreparationError.value = '';
       if (!canOpenForSend) {
         await act(view?.activeTurnId ? 'steer' : 'send');
@@ -1245,19 +1291,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
       const attempt = new AbortController();
       waitingForOpenedThread.value = false;
       openingForSendState.value = attempt;
-      const host = deviceSession.host;
-      const current = () =>
-        openingForSendState.value === attempt &&
-        _props.active !== false &&
-        _props.route.page === 'workbench' &&
-        _props.route.thread === threadId &&
-        _props.route.host === route.host &&
-        (_props.route.backend ?? DEFAULT_BACKEND) === backendId &&
-        selectedId.current === threadId &&
-        deviceIdState.value === deviceId &&
-        deviceSession.host?.hostId === host?.hostId &&
-        deviceSession.host?.deviceId === host?.deviceId &&
-        deviceSession.online;
+      const current = () => openingForSendState.value === attempt && sameSendScope(threadId);
       let readyToSend = false;
       try {
         const result = await openForSend({
@@ -1306,7 +1340,6 @@ export default tsxComponent(function AgentWorkspace(_props: {
       // Use the normal send journal only after the desktop is ready.
       if (readyToSend) await act('send');
     }
-    const codex = backend?.product === 'codex' || (!backend && backendId === DEFAULT_BACKEND);
     const currentIds = codex ? undefined : new Set(view?.messages.map((message) => message.id));
     const firstLiveStep = antigravity ? antigravityStep(view?.messages[0]) : undefined;
     const messages = !view
@@ -1383,7 +1416,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
       openingActivity ||
       sendPreparationError.value ||
       (textOnlySend && !canCompose && view?.reason) ||
-      (unsupportedSendDraft && textOnlySendHint);
+      (unsupportedSendDraft && (fileReferences ? fileReferenceExtrasHint : textOnlySendHint));
     const composerDelivery = delivery?.id === outgoingOperation?.id ? undefined : delivery;
     const draftHasContent = !!(
       draft.trim() ||
@@ -1752,7 +1785,11 @@ export default tsxComponent(function AgentWorkspace(_props: {
                         canCompose &&
                         !busy &&
                         !pending &&
-                        !(textOnlySend && requiresFullSend(outgoing.draft)) &&
+                        !(
+                          textOnlySend &&
+                          (requiresFullSend(outgoing.draft, fileReferences) ||
+                            (outgoing.operation.kind === 'steer' && outgoing.operation.turnId !== view?.activeTurnId))
+                        ) &&
                         (outgoing.operation.kind !== 'queue' || !!view?.queueFingerprint) &&
                         (!view?.activeTurnId ||
                           (!outgoing.draft.skills.length && !outgoing.draft.plugins.length))
@@ -1922,7 +1959,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                   disabled={!canEdit || openingForSend}
                   placeholder={
                     canEdit || !stream || (!view?.synchronized && !view?.reason)
-                      ? view?.activeTurnId
+                      ? running
                         ? (canSteer ? '给当前任务追加指令…' : '任务运行中，可以先写草稿…')
                         : `给 ${agentName} 发消息…`
                       : view?.requests?.length
@@ -1933,15 +1970,16 @@ export default tsxComponent(function AgentWorkspace(_props: {
                   uploadItems={uploadThread === selected.id ? uploadJobs : []}
                   onDismissUploads={() => setUploadJobs([])}
                   uploadDisabled={busy || uploading || pending || !(canCompose || canOpenForSend)}
-                  onUpload={canAttach && !textOnlySend ? uploadFiles : undefined}
+                  onUpload={canAttachToThread ? uploadFiles : undefined}
                   imageUploadTypes={imagesOnly ? antigravityImages : undefined}
-                  running={!!view?.activeTurnId}
+                  running={running}
                   canSteer={canSteer}
+                  canInterrupt={view?.canInterrupt}
                   sendDisabled={
-                    view?.activeTurnId &&
+                    running &&
                     (!canSteer ||
                       (!draft.trim() && !uploads.length && !selectedSkills.length && !selectedPlugins.length))
-                      ? busy || !stream || !view.canInterrupt
+                      ? busy || !stream || !view?.canInterrupt
                       : busy ||
                         hasOutgoingFailure ||
                         uploading ||
@@ -1949,13 +1987,14 @@ export default tsxComponent(function AgentWorkspace(_props: {
                         !stream ||
                         !(canCompose || canOpenForSend) ||
                         unsupportedSendDraft ||
-                        (!!uploads.length && (!canAttach || textOnlyAppend)) ||
+                        (!!uploads.length && (!canAttachToThread || textOnlyAppend)) ||
                         (!!selectedSkills.length && !canSelectSkills) ||
                         (!!selectedPlugins.length && !canSelectPlugins) ||
                         (!draft.trim() && !uploads.length) ||
                         (!!view?.activeTurnId && (!!selectedSkills.length || !!selectedPlugins.length))
                   }
                   canQueue={
+                    !textOnlySend &&
                     (canSteer || status?.capabilities.queue === true) &&
                     canCompose &&
                     !!view?.canInterrupt &&
@@ -2020,12 +2059,15 @@ export default tsxComponent(function AgentWorkspace(_props: {
                             connected={stream}
                             canWriteGoal={status?.writesEnabled !== false}
                             goalOperationError={goalOperationError}
-                            toolSelectionDisabled={textOnlySend}
+                            limitedSend={textOnlySend}
                             {...controlCatalog}
                             modeDisabled={
                               textOnlySend ||
                               (presentation?.plan === 'settings' &&
-                                ((!view.canSend && !view.canInterrupt) || !view.model || !view.reasoningEffort))
+                                (!canChangeModel ||
+                                  (!view.canSend && !view.canInterrupt) ||
+                                  !view.model ||
+                                  !view.reasoningEffort))
                             }
                             request={controlRequest?.threadId === view.id ? controlRequest : undefined}
                             onAction={(control) => void act('control', { control })}
@@ -2048,7 +2090,14 @@ export default tsxComponent(function AgentWorkspace(_props: {
                               type="button"
                               class="plan-chip"
                               aria-label="取消计划模式"
-                              disabled={busy || pending || !stream || textOnlySend || (!view.canSend && !view.canInterrupt)}
+                              disabled={
+                                busy ||
+                                pending ||
+                                !stream ||
+                                textOnlySend ||
+                                (!controlPlan && !canChangeModel) ||
+                                (!view.canSend && !view.canInterrupt)
+                              }
                               onClick={() =>
                                 void (controlPlan
                                   ? act('control', { control: { action: 'plan', enabled: false } })

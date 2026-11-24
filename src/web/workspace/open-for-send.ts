@@ -1,6 +1,7 @@
 import { RpcError } from '../../shared/rpc';
 import type { Operation, ThreadView } from '../../shared/types';
 import { mergeOperation } from '../operation-state';
+import { canResumeThread } from './codex-text-send';
 
 const OPEN_FOR_SEND_TIMEOUT = 30_000;
 const RECEIPT_POLL_INTERVAL = 750;
@@ -8,17 +9,6 @@ const unavailable = '暂时无法打开会话，消息未发送。请重试。';
 export const openedThreadBlocked = '消息未发送。请查看当前会话状态，草稿已保留。';
 
 type OpenResult = { state: 'ready' | 'cancelled' } | { state: 'blocked'; message: string };
-
-export function canResumeThread(view: ThreadView | null, threadId: string) {
-  return !!(
-    view?.id === threadId &&
-    view.synchronized &&
-    view.canSend &&
-    !view.owner &&
-    (view.runtimeStatus === 'notLoaded' || view.runtimeStatus === 'idle') &&
-    view.canResumeForSend === true
-  );
-}
 
 function isOpenedThread(view: ThreadView | null, threadId: string): view is ThreadView {
   return !!(

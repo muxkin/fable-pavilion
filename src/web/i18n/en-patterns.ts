@@ -47,6 +47,8 @@ export function translatePatternZhToEn(
     [/^创建群聊\s*\((\d+)\)$/, (_m, n) => `Create Group (${n})`],
 
     // Workbench, models, tools, progress
+    [/^项目预设：(.+)$/, (_m, p) => `Project preset: ${tr(p)}`],
+    [/^全局预设：(.+)$/, (_m, p) => `Global preset: ${tr(p)}`],
     [/^当前模型：(.+?)（点击为下一条消息切换模型）$/, (_m, lbl) => `Model: ${lbl} (click to switch for next message)`],
     [/^当前模型：(.+?)（点击修改）$/, (_m, lbl) => `Model: ${lbl} (click to change)`],
     [/^查看\s*(\d+)\s*项工具活动$/, (_m, n) => `View ${n} tool activities`],

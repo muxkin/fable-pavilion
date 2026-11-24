@@ -38,6 +38,8 @@ export interface ControlCatalog {
   presets: { id: string; name: string; description?: string }[];
   actions: ControlAction['action'][];
   state: ControlState;
+  permissionScopeDescription?: string;
+  permissionUnavailableReason?: string | null;
   goal?: GoalState | null;
   goalObjectiveMaxLength?: number;
   goalUnavailableReason?: string;

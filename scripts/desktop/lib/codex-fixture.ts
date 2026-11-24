@@ -484,12 +484,19 @@ export async function createCodexDesktopFixture(options: CodexDesktopFixtureOpti
               snapshot();
               break;
             case 'thread-follower-start-turn': {
-              const text = value.params.turnStart.request.input[0].text;
+              const { input } = value.params.turnStart.request;
+              const text = input[0].text;
+              const selectedTools = input.slice(1).map((item: any) => [item.type, item.name]);
+              const expectedTools = [
+                ['skill', 'fixture'],
+                ['mention', 'Fixture Plugin'],
+              ];
               if (text === '从历史会话直接发送' || text === browserReadOnlyPrompt) {
                 if (text === browserReadOnlyPrompt) {
                   assert.equal(permission, ':read-only');
                   assert.equal(sandbox, 'readOnly');
                   assert.equal(value.params.turnStart.context.inheritThreadSettings, true);
+                  assert.deepEqual(selectedTools, expectedTools);
                 }
                 browserSends++;
                 assert.equal(value.targetClientId, 'fixture-owner');
@@ -530,13 +537,7 @@ export async function createCodexDesktopFixture(options: CodexDesktopFixtureOpti
               assert.deepEqual(value.params.turnStart.context.attachments, [
                 { label: legacyName, path: legacyPath, fsPath: legacyPath },
               ]);
-              assert.deepEqual(
-                value.params.turnStart.request.input.slice(1).map((item: any) => [item.type, item.name]),
-                [
-                  ['skill', 'fixture'],
-                  ['mention', 'Fixture Plugin'],
-                ],
-              );
+              assert.deepEqual(selectedTools, expectedTools);
               nativeTurns.push({
                 turnId: turn,
                 status: 'inProgress',

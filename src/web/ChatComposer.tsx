@@ -98,6 +98,7 @@ export const ChatComposer = tsxComponent(function ChatComposer(_props: {
   onUpload?: (files: FileList | File[] | null, source?: ComposerAttachmentSource) => void;
   running?: boolean;
   canSteer?: boolean;
+  canInterrupt?: boolean;
   sendDisabled: boolean;
   canQueue?: boolean;
   showQueueButton?: boolean;
@@ -135,6 +136,7 @@ export const ChatComposer = tsxComponent(function ChatComposer(_props: {
     onUpload,
     running = false,
     canSteer = true,
+    canInterrupt = true,
     sendDisabled,
     canQueue = false,
     showQueueButton = false,
@@ -353,6 +355,8 @@ export const ChatComposer = tsxComponent(function ChatComposer(_props: {
               activity={activity}
               labels={sendLabels}
               running={running}
+              canInterrupt={canInterrupt}
+              canSteer={canSteer}
               hasDraft={hasDraft && (!running || canSteer)}
               disabled={sendDisabled}
               canQueue={pressToQueue}

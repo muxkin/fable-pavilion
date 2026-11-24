@@ -892,6 +892,7 @@ export class DeviceSession {
             boundedQuestionAvailable: false,
             canResumeForSend: false,
             textOnlySend: false,
+            canSendFileReferences: false,
             canSend: false,
             canInterrupt: false,
             reason: null,

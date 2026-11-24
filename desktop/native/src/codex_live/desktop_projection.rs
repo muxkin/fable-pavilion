@@ -606,6 +606,7 @@ pub(super) fn project<'a>(id: Uuid, state: &'a Value, revision: u64, epoch: Uuid
         }),
         messages,
         app_tools: false,
+        app_server: false,
         native_goal: native_goal.cloned(),
         expanded,
         activities,

@@ -6,6 +6,8 @@ import { Icon } from './Icon';
 /** One action surface: send/steer, interrupt while empty, hold to queue a text draft. */
 export const SendButton = tsxComponent(function SendButton(_props: {
   running: boolean;
+  canInterrupt?: boolean;
+  canSteer?: boolean;
   hasDraft: boolean;
   disabled: boolean;
   canQueue: boolean;
@@ -24,6 +26,8 @@ export const SendButton = tsxComponent(function SendButton(_props: {
   const watchDisabled = watchRender();
   return ({
     running,
+    canInterrupt = true,
+    canSteer = true,
     hasDraft,
     disabled,
     canQueue,
@@ -34,7 +38,7 @@ export const SendButton = tsxComponent(function SendButton(_props: {
     activity,
   }) => {
     const holding = holdingState.value;
-    const pause = running && !hasDraft;
+    const pause = running && !hasDraft && (canInterrupt || !canSteer);
     const cancel = () => {
       clearTimeout(timer.current);
       timer.current = undefined;
@@ -57,7 +61,15 @@ export const SendButton = tsxComponent(function SendButton(_props: {
               ? (labels?.running ?? '追加指令 ↑')
               : (labels?.send ?? '发送 ↑'))
         }
-        title={pause ? (labels?.stop ?? '中断当前任务') : canQueue ? '点击直接发送；长按排队下一轮' : '发送'}
+        title={
+          pause
+            ? (labels?.stop ?? '中断当前任务')
+            : canQueue
+              ? '点击直接发送；长按排队下一轮'
+              : running
+                ? (labels?.running ?? '追加到当前任务')
+                : '发送'
+        }
         aria-describedby={canQueue ? hintId : undefined}
         disabled={disabled || !!activity}
         onPointerdown={(e) => {

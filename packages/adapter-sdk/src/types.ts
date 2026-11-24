@@ -155,6 +155,7 @@ export interface ThreadView extends ThreadSummary {
   canSend: boolean;
   canResumeForSend?: boolean;
   textOnlySend?: boolean;
+  canSendFileReferences?: boolean;
   canSteer?: boolean;
   canInterrupt: boolean;
   reason: string | null;

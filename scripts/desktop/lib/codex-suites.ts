@@ -822,6 +822,18 @@ export async function verifyCodexBrowserDirect(options: CodexBrowserDirectOption
     await expect(permissions.getByRole('menuitemradio', { name: /^完全访问/ })).toBeVisible();
     await permissions.getByRole('menuitemradio', { name: /^只读/ }).click();
     await expect(permission).toHaveAttribute('title', '会话权限：只读');
+    const tools = page.getByRole('button', { name: '工具', exact: true });
+    for (const [label, name] of [['技能', 'fixture'], ['插件', 'Fixture Plugin']]) {
+      await tools.click();
+      const panel = page.getByRole('dialog', { name: '工具', exact: true });
+      await panel.getByRole('button', { name: label, exact: true }).click();
+      const picker = page.getByRole('dialog', { name: `添加${label}`, exact: true });
+      const choice = picker.getByRole('checkbox', { name, exact: true });
+      await expect(choice).toBeEnabled();
+      await choice.check();
+      await picker.getByRole('button', { name: '添加到消息', exact: true }).click();
+      await expect(page.getByRole('button', { name: `移除${label} ${name}`, exact: true })).toBeVisible();
+    }
     await draft.fill(browserReadOnlyPrompt);
     await page.locator('.composer .send-button').click();
     await expect.poll(fixture.browserSends).toBe(2);
@@ -830,7 +842,7 @@ export async function verifyCodexBrowserDirect(options: CodexBrowserDirectOption
     await expect(permissions.getByRole('menuitemradio', { name: /^只读/ })).toHaveAttribute('aria-checked', 'true');
     await permissions.getByRole('menuitemradio', { name: /^工作区内修改/ }).click();
     await expect(permission).toHaveAttribute('title', '会话权限：工作区内修改');
-    console.log('Chromium changed Codex session permissions and verified the next native turn inherited them.');
+    console.log('Chromium changed Codex permissions and verified the next native turn inherited them and received the selected skill and plugin.');
     const approval = page.locator('[data-request-kind="command"]');
     for (const [decision, label] of [
       ['accept', '允许本次'],

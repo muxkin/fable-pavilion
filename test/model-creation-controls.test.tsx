@@ -148,3 +148,49 @@ it('offers interrupt while saving a draft on a running conversation that cannot 
   expect(markup).toContain('>next message draft</textarea>');
   expect(markup).toContain('aria-label="中断任务"');
 });
+
+it('keeps the append action on an active conversation without interrupt support', async () => {
+  const render = (text: string) =>
+    renderToString(
+      createSSRApp({
+        render: () => (
+          <ChatComposer
+            value={{ text, uploads: [], skills: [], plugins: [] }}
+            onChange={() => {}}
+            onSubmit={() => {}}
+            disabled={false}
+            sendDisabled={!text}
+            running
+            canSteer
+            canInterrupt={false}
+          />
+        ),
+      }),
+    );
+  const appendButton = /<button\b[^>]*aria-label="追加指令 ↑"[^>]*>/;
+  expect((await render('')).match(appendButton)?.[0]).toContain(' disabled');
+  const writing = (await render('next instruction')).match(appendButton)?.[0];
+  expect(writing).toBeDefined();
+  expect(writing).not.toContain(' disabled');
+});
+
+it('keeps the disabled stop button when a running session supports neither interrupt nor steer', async () => {
+  const html = await renderToString(
+    createSSRApp({
+      render: () => (
+        <ChatComposer
+          value={{ text: '', uploads: [], skills: [], plugins: [] }}
+          onChange={() => {}}
+          onSubmit={() => {}}
+          disabled={false}
+          sendDisabled
+          running
+          canSteer={false}
+          canInterrupt={false}
+        />
+      ),
+    }),
+  );
+  expect(html).toContain('aria-label="中断任务"');
+  expect(html).not.toContain('aria-label="追加指令 ↑"');
+});

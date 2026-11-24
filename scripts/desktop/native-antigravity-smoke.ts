@@ -10,6 +10,7 @@ import { platformRuntime } from '../../src/server/platform.js';
 import { buildRelay } from '../../src/server/relay.js';
 import { apiCall, type RpcCall } from '../../src/shared/rpc.js';
 import { createIdentity } from '../../src/shared/secure-channel.js';
+import type { ControlCatalog } from '../../src/shared/controls.js';
 import {
   testAntigravityBrowserSwitching,
   testAntigravityPluginProcess,
@@ -19,6 +20,7 @@ import {
   createAntigravityFixture,
   type AntigravityFixture,
 } from './lib/antigravity-fixture.js';
+import { verifyAntigravityPermissions } from './lib/antigravity-permissions.js';
 import {
   allocateLocalPort,
   normalizeWindowsStateFiles,
@@ -313,6 +315,16 @@ try {
   const pluginPid = await assertRustChildren(adapter.child.pid!);
   const operation = (id: string) =>
     session!.rpc<{ state: string; turnId?: string; resultThreadId?: string }>(scoped(`/operations/${id}`));
+
+  if (!oldGateway) {
+    phase = 'native conversation permission, inheritance and stale guards';
+    await session.request('watch', { backendId, threadId: switchId });
+    try {
+      await verifyAntigravityPermissions({ rpc: (call) => session!.rpc(call), scoped, fixture });
+    } finally {
+      await session.request('unwatch', { backendId, threadId: switchId });
+    }
+  }
 
   phase = 'native question, answer, and continuation';
   fixture.askQuestion();
@@ -1026,6 +1038,12 @@ try {
   assert.equal(status.capabilities.renameThread, false, 'Read-only mode still advertised rename');
   assert.equal(status.capabilities.queue, false, 'Read-only mode still advertised queue');
   assert.equal(status.capabilities.steer, false, 'Read-only mode still advertised append');
+  if (!oldGateway) {
+    const permission = await session.rpc<ControlCatalog>(scoped(`/threads/${threadId}/controls`));
+    assert.deepEqual(permission.actions, []);
+    assert.equal(permission.state.permission, 'antigravity:inherit');
+    assert.match(permission.permissionUnavailableReason ?? '', /只读/);
+  }
   const readOnlyId = randomUUID();
   await assert.rejects(
     session.rpc(
@@ -1090,7 +1108,7 @@ try {
   }
   assert.deepEqual(fixture.errors, []);
   console.log(
-    'Native Antigravity: framed SDK plugin, encrypted history/watch, grouped quotas, selectable skills and plugins, scoped stale-ID rejection, structured questions and continuation, one-time command approval, next-message model, verified photos, native queue, guarded same-execution append and interrupt, durable deduplication, daemon rotation, Rust process recovery, identity/pairing restart and read-only checks passed.',
+    'Native Antigravity: framed SDK plugin, encrypted history/watch, grouped quotas, conversation permissions, selectable skills and plugins, scoped stale-ID rejection, structured questions and continuation, one-time command approval, next-message model, verified photos, native queue, guarded same-execution append and interrupt, durable deduplication, daemon rotation, Rust process recovery, identity/pairing restart and read-only checks passed.',
   );
   if (browserFailure) {
     phase = 'browser acceptance';

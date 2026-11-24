@@ -204,6 +204,19 @@ impl Adapter for Backend {
         }
         match action {
             Write::Respond(answer) => self.respond_to_interaction(thread, &answer).await,
+            Write::Control(crate::plugins::Control::Permission {
+                value,
+                expected,
+                expected_revision,
+            }) => {
+                self.set_permission(
+                    thread,
+                    &value,
+                    expected.as_deref(),
+                    expected_revision.as_deref(),
+                )
+                .await
+            }
             Write::Send {
                 text,
                 files,

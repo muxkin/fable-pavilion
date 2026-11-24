@@ -119,11 +119,15 @@ agent-space-native --adapter result <REQUEST_ID>
 
 ### Codex 历史会话发送
 
-原有实时跟随通道不可用时，Codex 插件可通过已验证的桌面工具 `read_thread` 和 `send_message_to_thread` 向本机会话发送纯文本。插件在写入前复核会话标识和状态，历史会话通过 `canResumeForSend` 声明可供发送。工作台沿用稳定请求 ID 记录操作结果。
+原有实时跟随通道不可用时，Codex 插件通过已验证的桌面工具 `read_thread` 和 `send_message_to_thread` 向本机会话发送消息；当同账号 `CODEX_HOME` 下的共享 App Server 控制套接字可用时，插件进一步通过 `thread/resume`、`turn/start`、`turn/steer` 和 `turn/interrupt` 恢复会话权限切换、随消息选择技能与插件、原生图片输入、运行中追加和任务中断，并允许在新会话中使用技能与插件。历史会话通过 `canResumeForSend` 声明可供发送。仅桌面工具可用时，运行中追加沿用 `turn.steer`，并在提交前复核会话标识、目标回合和待处理交互，已上传的附件作为本机文件引用交付。工作台沿用稳定请求 ID 记录操作结果。
 
 ### Codex 长期目标
 
 工作台沿用 `controls.read` 和 `control.execute`。原生 Codex 插件通过同账号 `CODEX_HOME` 下的 App Server 控制套接字读取 `thread/goal/get`，并使用 `thread/goal/set` 和 `thread/goal/clear` 提交写操作。写入要求实时会话由该 App Server 加载，更新和清除会校验目标引用，重复请求由工作台的操作记录去重。桌面快照包含目标时，控制套接字不可用的实例仍可提供只读目标状态。
+
+### Antigravity 会话权限
+
+启用会话级权限预设的 Antigravity 桌面实例通过 `controls.read` 提供所选会话的预设和继承来源。`control.execute` 写入前复核会话、权限修订标识和当前可用选项，使用原生 `UpdateConversationAnnotations` 合并会话预设，并回读确认。项目和全局权限规则参与原生评估。旧版或受组织限制的实例仍显示可读取的权限说明。
 
 ## 五、源码构建与本地验证
 

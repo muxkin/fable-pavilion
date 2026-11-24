@@ -678,9 +678,15 @@ try {
   const secondaryBytes = Buffer.from('第二个实例的附件');
   if (ipc && codexPackage) {
     const rollout = historyFixture({ codexHome: modernHome } as Parameters<typeof historyFixture>[0]);
+    const otherRollout = join(modernHome, 'sessions', `rollout-${MODERN_CODEX.otherThreadId}.jsonl`);
+    await writeFile(otherRollout, '');
     const db = new DatabaseSync(join(modernHome, 'state_5.sqlite'));
     try {
       db.prepare('UPDATE threads SET title = ?, cwd = ? WHERE id = ?').run(MODERN_CODEX.title, directory, THREAD);
+      db.prepare(`
+        INSERT INTO threads (id, title, cwd, updated_at_ms, archived, thread_source, rollout_path)
+        VALUES (?, ?, ?, 100, 0, 'user', ?)
+      `).run(MODERN_CODEX.otherThreadId, '第二个新版 Codex 测试会话', directory, otherRollout);
     } finally {
       db.close();
     }

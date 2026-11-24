@@ -25,6 +25,8 @@ use uuid::Uuid;
 mod follow_frame;
 #[path = "desktop_projection.rs"]
 mod projection;
+#[path = "app_server_tools.rs"]
+mod app_server_tools;
 #[path = "desktop_tools.rs"]
 mod desktop_tools;
 #[cfg(test)]
@@ -346,7 +348,7 @@ impl Action {
     }
 }
 
-fn native_input(text: &str, files: &[Attachment]) -> Result<(Vec<Value>, Vec<Value>)> {
+pub(super) fn native_input(text: &str, files: &[Attachment]) -> Result<(Vec<Value>, Vec<Value>)> {
     let mut attachments = Vec::new();
     let mut input = Vec::new();
     let prompt = attachment_prompt(text, files, true)?;
