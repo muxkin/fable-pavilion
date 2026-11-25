@@ -136,6 +136,12 @@ impl Store {
                backend_id TEXT NOT NULL, request_id TEXT NOT NULL,
                device_id TEXT NOT NULL, outcome TEXT NOT NULL,
                PRIMARY KEY(backend_id,request_id)
+             );
+             CREATE TABLE IF NOT EXISTS backend_projects (
+               backend_id TEXT NOT NULL, id TEXT NOT NULL,
+               name TEXT NOT NULL, path TEXT NOT NULL,
+               created INTEGER NOT NULL,
+               PRIMARY KEY(backend_id,id)
              );",
         )?;
         crate::appearance::initialize(&db)?;
@@ -254,6 +260,56 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn save_backend_project(
+        &self,
+        backend_id: &str,
+        name: &str,
+        path: &str,
+    ) -> Result<(String, String, String)> {
+        let id = format!("dir:{}", &hash(path)[..16]);
+        let trimmed = name.trim();
+        let display = if trimmed.is_empty() {
+            Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("项目")
+                .to_owned()
+        } else {
+            trimmed.chars().filter(|c| !c.is_control()).take(120).collect()
+        };
+        self.db.execute(
+            "INSERT INTO backend_projects (backend_id,id,name,path,created) VALUES (?1,?2,?3,?4,?5)
+             ON CONFLICT(backend_id,id) DO UPDATE SET name=excluded.name, path=excluded.path",
+            params![backend_id, id, display, path, now()],
+        )?;
+        Ok((id, display, path.to_owned()))
+    }
+
+    pub fn list_backend_projects(&self, backend_id: &str) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.db.prepare(
+            "SELECT id, name, path FROM backend_projects WHERE backend_id=?1 ORDER BY created DESC, id ASC",
+        )?;
+        let rows = stmt
+            .query_map([backend_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn find_backend_project(&self, backend_id: &str, id: &str) -> Result<Option<(String, String)>> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .db
+            .query_row(
+                "SELECT name, path FROM backend_projects WHERE backend_id=?1 AND id=?2",
+                params![backend_id, id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
     }
 }
 

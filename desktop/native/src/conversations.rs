@@ -25,6 +25,7 @@ pub struct Request {
     title: Option<String>,
     prompt: Option<String>,
     project_id: Option<String>,
+    project_path: Option<String>,
     model: Option<String>,
     thinking: Option<String>,
     last_turn_id: Option<String>,
@@ -61,6 +62,8 @@ pub enum Change {
         title: Option<String>,
         prompt: String,
         project_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_path: Option<String>,
         model: Option<String>,
         thinking: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -81,6 +84,7 @@ impl Request {
                 && (creating
                     || (self.prompt.is_none()
                         && self.project_id.is_none()
+                        && self.project_path.is_none()
                         && self.model.is_none()
                         && self.thinking.is_none()))
                 && (creating || renaming || self.title.is_none()),
@@ -150,6 +154,7 @@ impl Request {
                 );
                 for (value, max) in [
                     (&self.project_id, 200),
+                    (&self.project_path, 1024),
                     (&self.model, 500),
                     (&self.thinking, 40),
                 ] {
@@ -164,6 +169,7 @@ impl Request {
                     title: title.filter(|title| !title.is_empty()),
                     prompt: prompt.to_owned(),
                     project_id: self.project_id,
+                    project_path: self.project_path,
                     model: self.model,
                     thinking: self.thinking,
                     files: Vec::new(),
@@ -182,6 +188,7 @@ impl Change {
         let Self::Create {
             prompt,
             files,
+            project_path,
             skill_ids,
             plugin_ids,
             model,
@@ -191,7 +198,7 @@ impl Change {
         else {
             return None;
         };
-        if skill_ids.is_empty() && plugin_ids.is_empty() {
+        if skill_ids.is_empty() && plugin_ids.is_empty() && project_path.is_none() {
             return None;
         }
         Some(FirstTurn {
@@ -289,6 +296,7 @@ impl Change {
                 title,
                 prompt,
                 project_id,
+                project_path,
                 model,
                 thinking,
                 files,
@@ -316,28 +324,51 @@ impl Change {
                         );
                     }
                 }
-                if !skill_ids.is_empty() || !plugin_ids.is_empty() {
+                if !skill_ids.is_empty() || !plugin_ids.is_empty() || project_path.is_some() {
                     if !desktop.reply_fork.supports_blank() || !tools.catalog().has(Tool::Open) {
-                        return Outcome::Rejected("此 Codex 桌面版本暂不支持新会话工具".into());
+                        return Outcome::Rejected("此 Codex 桌面版本暂不支持自定义文件夹或新会话工具".into());
                     }
-                    let Ok((mut cwd, project_id)) =
-                        destination(&tools, &history, &anchor, project_id.as_deref()).await
-                    else {
-                        return Outcome::Rejected("所选桌面项目已不可用".into());
+                    let (mut cwd, mut resolved_project_id) = if let Some(raw_path) = &project_path {
+                        let candidate = PathBuf::from(raw_path);
+                        let Ok(canonical) = candidate.canonicalize() else {
+                            return Outcome::Rejected("所选电脑文件夹不存在或不可访问".into());
+                        };
+                        if !canonical.is_dir() {
+                            return Outcome::Rejected("所选路径不是文件夹".into());
+                        }
+                        let matched = projects(&tools, history.clone(), &anchor)
+                            .await
+                            .ok()
+                            .and_then(|list| {
+                                list.into_iter().find_map(|p| {
+                                    let path = p.path?.canonicalize().ok()?;
+                                    (path == canonical).then_some(p.id)
+                                })
+                            });
+                        (canonical, matched)
+                    } else {
+                        let Ok((cwd, project_id)) =
+                            destination(&tools, &history, &anchor, project_id.as_deref()).await
+                        else {
+                            return Outcome::Rejected("所选桌面项目已不可用".into());
+                        };
+                        (cwd, project_id)
                     };
-                    let home = history.home().to_owned();
-                    let workspace = cwd.clone();
-                    let chosen = tokio::task::spawn_blocking(move || {
-                        crate::tools_catalog::Catalog::scan(&home, &workspace, &[])?
-                            .select(&skill_ids, &plugin_ids)
-                    })
-                    .await;
-                    if !matches!(chosen, Ok(Ok(_))) {
-                        return Outcome::Rejected(
-                            "所选技能或插件已停用、移除或不属于所选项目".into(),
-                        );
+                    if !skill_ids.is_empty() || !plugin_ids.is_empty() {
+                        let home = history.home().to_owned();
+                        let workspace = cwd.clone();
+                        let chosen = tokio::task::spawn_blocking(move || {
+                            crate::tools_catalog::Catalog::scan(&home, &workspace, &[])?
+                                .select(&skill_ids, &plugin_ids)
+                        })
+                        .await;
+                        if !matches!(chosen, Ok(Ok(_))) {
+                            return Outcome::Rejected(
+                                "所选技能或插件已停用、移除或不属于所选项目".into(),
+                            );
+                        }
                     }
-                    if project_id.is_none() {
+                    if project_path.is_none() && resolved_project_id.is_none() {
                         let Some(base) =
                             dirs::home_dir().map(|home| home.join("Documents").join("Codex"))
                         else {
@@ -357,7 +388,10 @@ impl Change {
                     let Ok(cwd) = cwd.canonicalize() else {
                         return Outcome::Rejected("所选桌面项目目录不可用".into());
                     };
-                    let mut params = json!({"threadSource":"user","historyMode":"paginated","cwd":cwd,"projectId":project_id});
+                    let mut params = json!({"threadSource":"user","historyMode":"paginated","cwd":cwd});
+                    if let Some(pid) = resolved_project_id.take() {
+                        params["projectId"] = json!(pid);
+                    }
                     if let Some(model) = model {
                         params["model"] = json!(model);
                     }
@@ -461,7 +495,7 @@ pub struct Project {
     name: String,
     #[serde(skip)]
     desktop_id: String,
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<PathBuf>,
 }
 

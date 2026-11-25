@@ -353,11 +353,10 @@ impl Backend {
                 "elicitationForms":false,"newThread":writes,"renameThread":writes,"forkThread":false,"queue":writes}})
     }
 
-    async fn summaries(&self) -> Result<BTreeMap<String, Value>> {
-        self.summaries_at(&self.daemon().await?).await
-    }
-
-    async fn summaries_at(&self, daemon: &Daemon) -> Result<BTreeMap<String, Value>> {
+    async fn daemon_summaries_at(
+        &self,
+        daemon: &Daemon,
+    ) -> Result<serde_json::Map<String, Value>> {
         let data = self
             .call_at(
                 daemon,
@@ -367,16 +366,34 @@ impl Backend {
             )
             .await?;
         if data["trajectorySummaries"].is_null() {
-            return Ok(BTreeMap::new());
+            return Ok(serde_json::Map::new());
         }
-        let map = data["trajectorySummaries"]
+        data["trajectorySummaries"]
             .as_object()
-            .context("Antigravity 会话列表格式不兼容")?;
-        Ok(map
-            .iter()
+            .cloned()
+            .context("Antigravity 会话列表格式不兼容")
+    }
+
+    async fn summaries(&self) -> Result<BTreeMap<String, Value>> {
+        self.summaries_at(&self.daemon().await?).await
+    }
+
+    async fn summaries_at(&self, daemon: &Daemon) -> Result<BTreeMap<String, Value>> {
+        let map = self.daemon_summaries_at(daemon).await?;
+        let seen: HashSet<String> = map.keys().cloned().collect();
+        let mut summaries: BTreeMap<String, Value> = map
+            .into_iter()
             .filter(|(_, s)| s["annotations"]["archived"] != true)
-            .map(|(id, s)| (id.clone(), s.clone()))
-            .collect())
+            .collect();
+        let home = self.home.clone();
+        if let Ok(disk) = tokio::task::spawn_blocking(move || read_disk_summaries(&home)).await {
+            for (id, summary) in disk {
+                if !seen.contains(&id) {
+                    summaries.entry(id).or_insert(summary);
+                }
+            }
+        }
+        Ok(summaries)
     }
 
     async fn rename(&self, thread: &str, title: &str) -> Result<Value> {
@@ -656,15 +673,27 @@ impl Backend {
         id: &str,
         cursor: Option<history::Cursor<'_>>,
     ) -> Result<HistoryView> {
-        let (daemon, summary) = self.conversation(id).await?;
+        let (daemon, mut summary) = self.conversation(id).await?;
         if cursor.is_none()
             && let Some(data) = self.readable_trajectory(&daemon, id).await?
         {
+            if summary["annotations"].is_null()
+                && let Ok(mut live) = self.daemon_summaries_at(&daemon).await
+                && let Some(fresh) = live.remove(id)
+            {
+                summary = fresh;
+            }
             return Ok(HistoryView::Full(
                 self.full_view(id, &summary, &daemon, data).await?,
             ));
         }
 
+        if summary["trajectoryId"].is_null()
+            && let Ok(mut live) = self.daemon_summaries_at(&daemon).await
+            && let Some(fresh) = live.remove(id)
+        {
+            summary = fresh;
+        }
         let trajectory = summary["trajectoryId"]
             .as_str()
             .context("Antigravity 会话版本不可用")?;
@@ -1065,18 +1094,27 @@ impl Backend {
             "projects.list" => {
                 let summaries = self.summaries().await?;
                 let projects = self.projects().await?;
-                let rows: Vec<_> = projects
+                let mut rows: Vec<_> = projects
                     .as_array()
                     .into_iter()
                     .flatten()
                     .map(|p| {
-                        let count = summaries
-                            .values()
-                            .filter(|s| s["trajectoryMetadata"]["projectId"] == p["id"])
-                            .count();
-                        json!({"id":p["id"],"name":p["name"],"count":count})
+                        let mut count = 0usize;
+                        let mut latest = 0i64;
+                        for s in summaries.values() {
+                            if s["trajectoryMetadata"]["projectId"] == p["id"] {
+                                count += 1;
+                                let ts = timestamp_ms(s["lastModifiedTime"].as_str().unwrap_or(""));
+                                if ts > latest {
+                                    latest = ts;
+                                }
+                            }
+                        }
+                        (latest, json!({"id":p["id"],"name":p["name"],"count":count}))
                     })
                     .collect();
+                rows.sort_by(|a, b| b.0.cmp(&a.0));
+                let rows: Vec<_> = rows.into_iter().map(|(_, row)| row).collect();
                 json!({"projects":rows,"total":summaries.len(),"ungrouped":summaries.values().filter(|s| s["trajectoryMetadata"]["projectId"].as_str().is_none_or(str::is_empty)).count()})
             }
             "thread.read" => {
@@ -1115,5 +1153,151 @@ impl Backend {
         };
         Ok(Some(result))
     }
+}
+
+fn normalize_sqlite_timestamp(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.len() < 19 {
+        return String::new();
+    }
+    let mut normalized = trimmed.to_owned();
+    if normalized.as_bytes().get(10) == Some(&b' ') {
+        normalized.replace_range(10..11, "T");
+    }
+    if normalized.ends_with('Z') {
+        return normalized;
+    }
+    if let Some(stem) = normalized
+        .strip_suffix("+00:00")
+        .or_else(|| normalized.strip_suffix("-00:00"))
+    {
+        return format!("{stem}Z");
+    }
+    // Handle arbitrary numeric timezone offset like +08:00 or -05:00.
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 25 {
+        let sign_pos = bytes.len() - 6;
+        let sign = bytes[sign_pos];
+        if matches!(sign, b'+' | b'-')
+            && bytes[sign_pos + 3] == b':'
+            && let (Ok(oh), Ok(om)) = (
+                normalized[sign_pos + 1..sign_pos + 3].parse::<i64>(),
+                normalized[sign_pos + 4..sign_pos + 6].parse::<i64>(),
+            )
+            && oh <= 23
+            && om <= 59
+        {
+            let utc_str = format!("{}Z", &normalized[..sign_pos]);
+            let local_ms = timestamp_ms(&utc_str);
+            if local_ms > 0 {
+                let offset_ms = (oh * 60 + om) * 60 * 1000 * if sign == b'+' { 1 } else { -1 };
+                let utc_ms = local_ms - offset_ms;
+                if let Ok(dt) = time::OffsetDateTime::from_unix_timestamp_nanos(
+                    i128::from(utc_ms) * 1_000_000,
+                ) {
+                    return format!(
+                        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                        dt.year(),
+                        dt.month() as u8,
+                        dt.day(),
+                        dt.hour(),
+                        dt.minute(),
+                        dt.second(),
+                        dt.millisecond()
+                    );
+                }
+            }
+        }
+    }
+    format!("{normalized}Z")
+}
+
+fn annotation_archived(home: &std::path::Path, id: &str) -> bool {
+    let path = home.join("annotations").join(format!("{id}.pbtxt"));
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    text.contains("archived:true") || text.contains("archived: true")
+}
+
+fn read_disk_summaries(home: &std::path::Path) -> BTreeMap<String, Value> {
+    let mut out = BTreeMap::new();
+    let db_path = home.join("conversation_summaries.db");
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return out;
+    };
+    let _ = conn.busy_timeout(Duration::from_millis(500));
+    let mut archived = HashSet::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT DISTINCT conversation_id FROM conversations_fts WHERE archived != 0")
+        && let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0))
+    {
+        for id in rows.flatten() {
+            archived.insert(id);
+        }
+    }
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT conversation_id, title, last_modified_time, workspace_uris, project_id
+         FROM conversation_summaries
+         WHERE parent_conversation_id = ''
+           AND nesting_depth = 0
+           AND killed = 0
+         ORDER BY last_modified_time DESC
+         LIMIT 5000",
+    ) else {
+        return out;
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    }) else {
+        return out;
+    };
+    let conversations_dir = home.join("conversations");
+    for row in rows.flatten() {
+        let (id, title, modified, workspace_uris_json, project_id) = row;
+        if valid_id(&id).is_err()
+            || archived.contains(&id)
+            || annotation_archived(home, &id)
+            || !conversations_dir.join(format!("{id}.db")).is_file()
+        {
+            continue;
+        }
+        let uris: Vec<Value> = serde_json::from_str::<Vec<String>>(&workspace_uris_json)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|uri| !uri.is_empty() && !uri.chars().any(char::is_control))
+            .map(|uri| json!(uri))
+            .collect();
+        let workspaces: Vec<Value> = uris
+            .iter()
+            .map(|uri| json!({"workspaceFolderAbsoluteUri": uri}))
+            .collect();
+        let mut metadata = serde_json::Map::new();
+        if !project_id.is_empty() {
+            metadata.insert("projectId".into(), json!(project_id));
+        }
+        if !uris.is_empty() {
+            metadata.insert("workspaceUris".into(), Value::Array(uris));
+        }
+        let mut summary = json!({
+            "summary": title,
+            "lastModifiedTime": normalize_sqlite_timestamp(&modified),
+            "trajectoryMetadata": Value::Object(metadata),
+        });
+        if !workspaces.is_empty() {
+            summary["workspaces"] = Value::Array(workspaces);
+        }
+        out.insert(id, summary);
+    }
+    out
 }
 

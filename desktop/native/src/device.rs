@@ -138,6 +138,7 @@ impl<T: 'static> Drop for StorageJobs<T> {
 fn rpc_activity(method: &str) -> bool {
     !(method.ends_with(".read")
         || method.ends_with(".list")
+        || method == "fs.directories"
         || method == "security.backup.status"
         || method == "plugins.manage.read")
 }

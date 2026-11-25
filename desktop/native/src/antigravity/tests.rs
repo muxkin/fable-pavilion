@@ -858,3 +858,131 @@ fn queue_snapshot_excludes_running_immediate_steer_messages() {
     assert_eq!(queued[0]["text"], "排队消息");
     assert_eq!(queued[0]["status"], "queued");
 }
+
+#[test]
+fn disk_summaries_include_unloaded_top_level_conversations_and_filter_subagents_and_archived() {
+    let dir = tempfile::tempdir().unwrap();
+    let conversations = dir.path().join("conversations");
+    let annotations = dir.path().join("annotations");
+    fs::create_dir_all(&conversations).unwrap();
+    fs::create_dir_all(&annotations).unwrap();
+
+    let keep_id = Uuid::new_v4().to_string();
+    let sub_id = Uuid::new_v4().to_string();
+    let killed_id = Uuid::new_v4().to_string();
+    let archived_id = Uuid::new_v4().to_string();
+    let missing_db_id = Uuid::new_v4().to_string();
+    for id in [&keep_id, &sub_id, &killed_id, &archived_id] {
+        fs::write(conversations.join(format!("{id}.db")), b"").unwrap();
+    }
+    fs::write(
+        annotations.join(format!("{archived_id}.pbtxt")),
+        "title:\"Old\" archived:true\n",
+    )
+    .unwrap();
+
+    let conn = rusqlite::Connection::open(dir.path().join("conversation_summaries.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE conversation_summaries (
+            conversation_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL DEFAULT '',
+            last_modified_time TEXT NOT NULL,
+            workspace_uris TEXT NOT NULL,
+            project_id TEXT NOT NULL DEFAULT '',
+            parent_conversation_id TEXT NOT NULL DEFAULT '',
+            nesting_depth INTEGER NOT NULL DEFAULT 0,
+            killed INTEGER NOT NULL DEFAULT 0
+        );",
+    )
+    .unwrap();
+    let insert = "INSERT INTO conversation_summaries VALUES (?1,?2,?3,?4,?5,?6,?7,?8)";
+    conn.execute(
+        insert,
+        rusqlite::params![
+            keep_id,
+            "Saved Thread",
+            "2026-11-22 12:32:52.170593586+00:00",
+            r#"["file:///tmp/demo"]"#,
+            "proj-1",
+            "",
+            0,
+            0
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        insert,
+        rusqlite::params![
+            sub_id,
+            "Subagent",
+            "2026-11-22 12:32:52+00:00",
+            "[]",
+            "proj-1",
+            keep_id,
+            1,
+            0
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        insert,
+        rusqlite::params![
+            killed_id,
+            "Killed",
+            "2026-11-22 12:32:52+00:00",
+            "[]",
+            "proj-1",
+            "",
+            0,
+            1
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        insert,
+        rusqlite::params![
+            archived_id,
+            "Archived",
+            "2026-11-22 12:32:52+00:00",
+            "[]",
+            "proj-1",
+            "",
+            0,
+            0
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        insert,
+        rusqlite::params![
+            missing_db_id,
+            "Deleted",
+            "2026-11-22 12:32:52+00:00",
+            "[]",
+            "proj-1",
+            "",
+            0,
+            0
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let disk = read_disk_summaries(dir.path());
+    assert_eq!(disk.len(), 1);
+    let saved = disk.get(&keep_id).unwrap();
+    assert_eq!(saved["summary"], "Saved Thread");
+    assert_eq!(saved["trajectoryMetadata"]["projectId"], "proj-1");
+    assert_eq!(
+        saved["trajectoryMetadata"]["workspaceUris"],
+        json!(["file:///tmp/demo"])
+    );
+    assert_eq!(
+        timestamp_ms(saved["lastModifiedTime"].as_str().unwrap()),
+        timestamp_ms("2026-11-22T12:32:52.170Z")
+    );
+    assert_eq!(
+        timestamp_ms(&normalize_sqlite_timestamp("2026-11-22 20:32:52+08:00")),
+        timestamp_ms("2026-11-22T12:32:52.000Z")
+    );
+}

@@ -327,7 +327,7 @@ impl Adapter for Backend {
                 }
                 let result = self.dispatch("SendUserCascadeMessage", body).await;
                 drop(staged);
-                delivery(result, Delivery::Accepted(None))
+                delivery(result, Delivery::Accepted(Some(expected)))
             }
             Write::Interrupt { expected } => {
                 let Ok(view) = self.snapshot(thread).await else {

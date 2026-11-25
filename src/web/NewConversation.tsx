@@ -16,6 +16,7 @@ import { uploadItems, type UploadItem } from './UploadProgress';
 import { browserId } from './browser-id';
 import { ComposerPopover } from './ComposerPopover';
 import { ComposerToolEntries, ComposerToolPicker, type ToolKind } from './ComposerToolPicker';
+import { FolderPickerDialog, type CreatedProject } from './FolderPickerDialog';
 
 export interface NewConversationInput {
   title?: string;
@@ -44,6 +45,7 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
   defaultProject?: string;
   knownProjects: ProjectSummary[];
   onDirtyChange: (dirty: boolean) => void;
+  onProjectCreated?: (project: CreatedProject) => void;
   feedback?: string;
   operation?: Operation;
   onCheck?: () => Promise<void>;
@@ -86,6 +88,8 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
   const setRefresh = writeRef(refreshState);
   const modelOpenState = shallowRef(false);
   const setModelOpen = writeRef(modelOpenState);
+  const folderOpenState = shallowRef(false);
+  const setFolderOpen = writeRef(folderOpenState);
   const settingsState = shallowRef<ModelUpdate>();
   const setSettings = writeRef(settingsState);
   const restoredState = shallowRef<string>();
@@ -113,6 +117,7 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
     defaultProject,
     knownProjects,
     onDirtyChange,
+    onProjectCreated,
     feedback,
     operation,
     onCheck,
@@ -149,6 +154,8 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
     const loading = loadingState.value;
     const refresh = refreshState.value;
     const modelOpen = modelOpenState.value;
+    const folderOpen = folderOpenState.value;
+    const canCreateProject = creation?.createProject === true;
     const settings = settingsState.value;
     const draftKey = deviceSession.contentKey(`new-conversation:${anchor}`);
     const restored = restoredState.value === draftKey;
@@ -353,27 +360,40 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
     return (
       <div class="new-conversation">
         <div class="new-conversation-fields">
-          <label>
-            项目
-            <select
-              aria-label="新会话项目"
-              value={projectId}
-              disabled={disabled}
-              onChange={(e) => chooseProject((e.currentTarget as HTMLSelectElement).value)}
-            >
-              <option value="" disabled={requireProject}>
-                {requireProject ? '请选择项目' : '独立会话'}
-              </option>
-              {projectId && !choices.some((p) => p.id === projectId) && (
-                <option value={projectId}>当前项目</option>
-              )}
-              {choices.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
+          <div class="new-conversation-project-row">
+            <label>
+              项目
+              <select
+                aria-label="新会话项目"
+                value={projectId}
+                disabled={disabled}
+                onChange={(e) => chooseProject((e.currentTarget as HTMLSelectElement).value)}
+              >
+                <option value="" disabled={requireProject}>
+                  {requireProject ? '请选择项目' : '独立会话'}
                 </option>
-              ))}
-            </select>
-          </label>
+                {projectId && !choices.some((p) => p.id === projectId) && (
+                  <option value={projectId}>当前项目</option>
+                )}
+                {choices.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {canCreateProject && (
+              <button
+                type="button"
+                class="secondary new-project-trigger"
+                disabled={disabled}
+                onClick={() => setFolderOpen(true)}
+              >
+                <Icon name="folderPlus" size={17} />
+                <span>新建项目</span>
+              </button>
+            )}
+          </div>
           {catalog && creation ? (
             <>
               {creation.preset && (
@@ -581,6 +601,22 @@ export const NewConversation = tsxComponent(function NewConversation(initialProp
             onPlugins={(plugins) => setDraft((old) => ({ ...old, plugins }))}
             onClose={() => setToolKind(undefined)}
             onDirtyChange={setToolPickerDirty}
+          />
+        )}
+        {folderOpen && canCreateProject && (
+          <FolderPickerDialog
+            open={folderOpen}
+            onClose={() => setFolderOpen(false)}
+            onCreated={(created) => {
+              setProjects((old) => {
+                const list = old ?? knownProjects.map((p) => ({ id: p.id, name: p.name }));
+                return list.some((item) => item.id === created.id)
+                  ? list
+                  : [...list, { id: created.id, name: created.name }];
+              });
+              chooseProject(created.id);
+              onProjectCreated?.(created);
+            }}
           />
         )}
         {modelOpen && (

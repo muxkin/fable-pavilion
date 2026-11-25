@@ -221,15 +221,30 @@ impl Local {
                         self.availability().create_tools,
                         "此 Codex 桌面版本不支持新会话工具"
                     );
-                    let id = params["id"].as_str().context("会话 ID 无效")?.to_owned();
-                    let lookup = self.history.clone();
-                    let anchor = tokio::task::spawn_blocking(move || lookup.anchor(&id)).await??;
-                    let project = query["projectId"]
+                    let cwd = if let Some(raw_path) = query["projectPath"]
                         .as_str()
-                        .filter(|value| !value.is_empty());
-                    let (cwd, _) =
-                        conversations::destination(&desktop.tools, &self.history, &anchor, project)
-                            .await?;
+                        .filter(|value| !value.is_empty())
+                    {
+                        let raw = raw_path.to_owned();
+                        tokio::task::spawn_blocking(move || {
+                            let canonical = std::fs::canonicalize(&raw)
+                                .context("所选电脑文件夹不存在或不可访问")?;
+                            ensure!(canonical.is_dir(), "所选路径不是文件夹");
+                            Ok::<_, anyhow::Error>(canonical)
+                        })
+                        .await??
+                    } else {
+                        let id = params["id"].as_str().context("会话 ID 无效")?.to_owned();
+                        let lookup = self.history.clone();
+                        let anchor = tokio::task::spawn_blocking(move || lookup.anchor(&id)).await??;
+                        let project = query["projectId"]
+                            .as_str()
+                            .filter(|value| !value.is_empty());
+                        let (cwd, _) =
+                            conversations::destination(&desktop.tools, &self.history, &anchor, project)
+                                .await?;
+                        cwd
+                    };
                     let home = self.history.home().to_owned();
                     tokio::task::spawn_blocking(move || {
                         crate::tools_catalog::Catalog::scan(&home, &cwd, &[])

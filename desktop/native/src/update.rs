@@ -28,10 +28,11 @@ use uuid::Uuid;
 
 const MAX_MANIFEST: usize = 16 * 1024;
 const MAX_PACKAGE: u64 = 512 * 1024 * 1024;
-const CHECK_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const RETRY_INITIAL: Duration = Duration::from_secs(15);
 const RETRY_MAX: Duration = Duration::from_secs(5 * 60);
 const QUIET_PERIOD: Duration = Duration::from_secs(2);
+const ACTIVE_DISPATCH_WINDOW_MS: i64 = 15_000;
 const KEY: &str = include_str!("../update-release.pub");
 const SPKI_HEADER: &[u8] = b"\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00";
 
@@ -201,10 +202,13 @@ impl UpdateGate {
         {
             return Ok(false);
         }
+        // This adapter is a remote-control bridge; restarting it does not interrupt
+        // tasks already running on the desktop Agent. Only defer while an operation
+        // is actively in-flight across the wire within the recent dispatch window.
+        let cutoff = now().saturating_sub(ACTIVE_DISPATCH_WINDOW_MS);
         let busy: bool = db.lock().expect("database poisoned").db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM operations WHERE state IN ('received','dispatching')
-                 OR (state='accepted' AND turn_id IS NULL))",
-            [],
+            "SELECT EXISTS(SELECT 1 FROM operations WHERE state IN ('received','dispatching') AND updated >= ?1)",
+            [cutoff],
             |row| row.get(0),
         )?;
         if !busy {
@@ -1316,14 +1320,15 @@ mod tests {
         drop(client);
         assert!(!gate.drain(&db).unwrap());
         age();
+        let fresh = now();
         db.lock()
             .unwrap()
             .db
             .execute(
                 "INSERT INTO operations
              (id,device_id,thread_id,kind,fingerprint,state,created,updated)
-             VALUES ('id','device','thread','send','hash','dispatching',0,0)",
-                [],
+             VALUES ('id','device','thread','send','hash','dispatching',?1,?1)",
+                [fresh],
             )
             .unwrap();
         assert!(!gate.drain(&db).unwrap());
@@ -1333,18 +1338,19 @@ mod tests {
             .execute("UPDATE operations SET state='accepted'", [])
             .unwrap();
         assert!(
-            !gate.drain(&db).unwrap(),
-            "accepted without delivery evidence must block"
+            gate.drain(&db).unwrap(),
+            "accepted operations are already delivered and must not block remote-control updates"
         );
+        gate.resume();
         db.lock()
             .unwrap()
             .db
-            .execute(
-                "UPDATE operations SET turn_id='independent-desktop-turn'",
-                [],
-            )
+            .execute("UPDATE operations SET state='dispatching', updated=0", [])
             .unwrap();
-        assert!(gate.drain(&db).unwrap());
+        assert!(
+            gate.drain(&db).unwrap(),
+            "stale dispatching rows outside the active dispatch window must not deadlock updates"
+        );
         assert!(!gate.connection_allowed());
         assert!(gate.admit().is_none());
         gate.resume();
@@ -1385,7 +1391,7 @@ mod tests {
         );
         retry.reset();
         assert_eq!(retry.failed(), Duration::from_secs(15));
-        assert_eq!(CHECK_INTERVAL, Duration::from_secs(15 * 60));
+        assert_eq!(CHECK_INTERVAL, Duration::from_secs(5 * 60));
     }
 
     #[test]

@@ -1,5 +1,17 @@
 # 更新记录
 
+## 1.0.11 — 2026-11-25
+
+- **Antigravity 历史会话与项目计数完整恢复**：修复 Antigravity 桌面端重启后仅返回内存已打开会话，导致「最近」会话缺失且多个已有项目错误显示 `0`（此项目暂无会话）的问题；同步按最近会话活动时间排序项目列表，并支持点击任意历史会话即时加载。
+- **支持电脑文件夹浏览器「新建项目」（模式 B）**：在侧栏「项目」页与「新会话」对话框新增「新建项目」入口，通过端到端加密通道浏览电脑目录、切换常用根目录、搜索筛选子目录、在任意目录下在线新建文件夹，并将其绑定为 Codex 项目以在该工作目录直接创建会话。
+- **静默自动更新提速且永不因遥控会话死锁**：将桌面适配器后台检查更新周期由 15 分钟缩短为 5 分钟，移除对已受理或陈旧操作的无限期排空阻断，确保遥控连接不会阻塞桌面适配器自动升级。
+
+## Rust 桌面适配器 1.0.11 — 2026-11-25
+
+- **Antigravity 离线历史索引合并**：`antigravity.rs` 的 `summaries_at` 在保留实时 `GetAllCascadeTrajectories` 优先的前提下，只读合并 `conversation_summaries.db` 中未归档、未删除的顶层历史会话（过滤子代理并规范化时间戳与工作区 URI）；`history_view` 在首次按需加载历史会话后自动补全 `trajectoryId` 与权限标注；`projects.list` 按最近活跃会话降序排列。
+- **电脑目录浏览与项目绑定 RPC**：在 `device/rpc.rs`、`state.rs`、`conversations.rs`、`codex_service.rs` 中新增 `fs.directories`、`fs.mkdir` 与 `project.create` 加密通道 RPC，持久化书签项目并自动合并去重至 `projects.list` / `creation.projects`，创建新会话与扫描新会话工具时自动映射至目标电脑目录 `cwd`（官方 App Server `thread/start`）。
+- **非阻塞静默更新门控与 Antigravity 追加收口**：`update.rs` 将 `CHECK_INTERVAL` 调整为 5 分钟，排空检查仅保护 15 秒窗口内正在派发的 `received`/`dispatching` 请求，不再因 `accepted` 或历史残留记录永久卡死升级；`antigravity/adapter.rs` 的 `Write::Steer` 返回 `Delivery::Accepted(Some(expected))` 立即绑定目标执行 ID，避免遗留 `turn_id IS NULL` 的未完结操作记录。
+
 ## 1.0.10 — 2026-11-25
 
 - **统一账号、电脑授权与通行密钥关系**：

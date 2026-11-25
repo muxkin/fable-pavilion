@@ -30,6 +30,7 @@ import { mergeOperation, readPending, rememberOperation } from './operation-stat
 import { ModelSettings, modelLabel, settingsUpdate, type ModelUpdate } from './ModelSettings';
 import { RequestCards, type RequestResponse } from './RequestCards';
 import { NewConversation, type NewConversationInput } from './NewConversation';
+import { FolderPickerDialog } from './FolderPickerDialog';
 import { TranscriptMessages } from './TranscriptMessages';
 import { TurnNavigation } from './TurnNavigation';
 import { ThreadTools } from './ThreadTools';
@@ -136,6 +137,8 @@ export default tsxComponent(function AgentWorkspace(_props: {
   const setPickerDirty = writeRef(pickerDirtyState);
   const newOpenState = shallowRef(false);
   const setNewOpen = writeRef(newOpenState);
+  const folderPickerOpenState = shallowRef(false);
+  const setFolderPickerOpen = writeRef(folderPickerOpenState);
   const newProjectState = shallowRef<string>();
   const setNewProject = writeRef(newProjectState);
   const newDirtyState = shallowRef(false);
@@ -1536,6 +1539,10 @@ export default tsxComponent(function AgentWorkspace(_props: {
           agentName={agentName}
           onWorkbench={() => backTo({ page: 'workbench' }, navigate)}
           canCreate={canCreateConversation}
+          canCreateProject={
+            presentation?.creation?.createProject === true && status?.writesEnabled === true
+          }
+          onCreateProject={() => setFolderPickerOpen(true)}
           canRename={status?.capabilities.renameThread === true}
           canFork={status?.capabilities.forkThread === true}
           canExportLog={backend?.presentation?.exportLog === true}
@@ -2264,6 +2271,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                       defaultProject={newProject}
                       knownProjects={projects.projects}
                       onDirtyChange={setNewDirty}
+                      onProjectCreated={() => void loadThreads()}
                       disabled={
                         busy ||
                         pending ||
@@ -2410,6 +2418,24 @@ export default tsxComponent(function AgentWorkspace(_props: {
             </>
           )}
         </main>
+        {folderPickerOpenState.value && presentation?.creation?.createProject === true && (
+          <FolderPickerDialog
+            open={folderPickerOpenState.value}
+            onClose={() => setFolderPickerOpen(false)}
+            onCreated={(project) => {
+              void loadThreads();
+              if (canCreateConversation) {
+                setNewProject(project.id);
+                if (!selected && threads[0]) setSelected(threads[0]);
+                else if (!selected && emptyCreation) {
+                  updateSelected({ id: 'new', title: `新建 ${agentName} 会话`, cwd: '', updatedAt: Date.now() });
+                  navigate({ page: 'workbench', backend: backendId, thread: 'new' });
+                }
+                setNewOpen(true);
+              }
+            }}
+          />
+        )}
       </div>
     );
   };

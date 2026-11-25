@@ -75,6 +75,7 @@ export interface BackendPresentation {
     empty: boolean;
     attachments?: boolean;
     tools?: boolean;
+    createProject?: boolean;
     permission: 'native' | 'select';
     preset: boolean;
     plan: boolean;

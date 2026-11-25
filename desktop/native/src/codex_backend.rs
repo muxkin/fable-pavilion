@@ -883,7 +883,7 @@ pub(crate) fn info(available: Availability, transport: Option<LiveTransport>) ->
     }
     Some(json!({
         "id":ID,"product":"codex","name":"Codex","connected":available.ipc_online || status["connected"] == true,"version":null,"profile":"rust-native",
-        "presentation":{"description":"Codex 桌面","creation":{"empty":true,"attachments":available.create_attachments,"tools":available.create_tools,"permission":"native","preset":false,"plan":false,"notice":"沿用 Codex 创建权限"},"plan":"settings","fileReferences":false,"exportLog":false,"nativeCommands":false},
+        "presentation":{"description":"Codex 桌面","creation":{"empty":true,"attachments":available.create_attachments,"tools":available.create_tools,"createProject":available.create_tools,"permission":"native","preset":false,"plan":false,"notice":"沿用 Codex 创建权限"},"plan":"settings","fileReferences":false,"exportLog":false,"nativeCommands":false},
         "capabilities":capabilities,
     }))
 }

@@ -40,6 +40,8 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
   backend?: BackendInfo;
   onWorkbench?: () => void;
   canCreate?: boolean;
+  canCreateProject?: boolean;
+  onCreateProject?: () => void;
   canRename?: boolean;
   canFork?: boolean;
   canExportLog?: boolean;
@@ -97,6 +99,8 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
     backend,
     onWorkbench,
     canCreate,
+    canCreateProject,
+    onCreateProject,
     canRename,
     canFork,
     canExportLog,
@@ -455,7 +459,19 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
               )}
             </>
           ) : (
-            groups.map((p) => (
+            <>
+              {canCreateProject && onCreateProject && (
+                <button
+                  type="button"
+                  class="new-project-row"
+                  disabled={!online}
+                  onClick={onCreateProject}
+                >
+                  <Icon name="folderPlus" size={20} />
+                  <span>新建项目（选择电脑文件夹）</span>
+                </button>
+              )}
+              {groups.map((p) => (
               <section class="project-group" key={p.id}>
                 <button
                   class="project-heading"
@@ -490,7 +506,8 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
                   </div>
                 )}
               </section>
-            ))
+            ))}
+            </>
           )}
         </nav>
         {menu && (
@@ -615,6 +632,20 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
                   >
                     <Icon name="plusCircle" size={15} />
                     <span>新建会话</span>
+                  </button>
+                )}
+                {canCreateProject && onCreateProject && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!online}
+                    onClick={() => {
+                      closeMenu();
+                      onCreateProject();
+                    }}
+                  >
+                    <Icon name="folderPlus" size={15} />
+                    <span>新建项目</span>
                   </button>
                 )}
                 <button

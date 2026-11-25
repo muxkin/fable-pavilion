@@ -319,6 +319,47 @@ impl DeviceSession {
                 .revoke_device(&self.device.id)?;
             return Ok(Some(json!({"ok":true})));
         }
+        if method == "fs.directories" {
+            let path = call["body"]["path"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            let include_hidden = call["body"]["includeHidden"] == true;
+            let extra_roots: Vec<String> = self
+                .db
+                .lock()
+                .expect("database mutex poisoned")
+                .list_backend_projects(backend_id(&call).unwrap_or(CODEX))
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(_, _, p)| {
+                    std::path::Path::new(&p)
+                        .parent()
+                        .map(|parent| parent.to_string_lossy().into_owned())
+                })
+                .collect();
+            let result = tokio::task::spawn_blocking(move || {
+                browse_directories(path.as_deref(), include_hidden, &extra_roots)
+            })
+            .await??;
+            return Ok(Some(result));
+        }
+        if method == "fs.mkdir" {
+            let parent = call["body"]["parent"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .context("上级目录路径无效")?
+                .to_owned();
+            let name = call["body"]["name"]
+                .as_str()
+                .context("文件夹名称无效")?
+                .to_owned();
+            let result =
+                tokio::task::spawn_blocking(move || create_directory(&parent, &name)).await??;
+            return Ok(Some(result));
+        }
         let Some(backend) = backend_id(&call) else {
             return Ok(None);
         };
@@ -612,6 +653,126 @@ impl DeviceSession {
             "thread.open" | "thread.create" | "thread.rename" | "thread.fork" => {
                 self.manage(backend, connector, method, &call).map(Some)
             }
+            "project.create" => {
+                ensure!(
+                    connector.has_creation_tools(),
+                    "当前 Codex 实例暂不支持新建项目"
+                );
+                let raw_path = call["body"]["path"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty() && value.encode_utf16().count() <= 1024)
+                    .context("请选择电脑上的文件夹")?
+                    .to_owned();
+                ensure!(
+                    !raw_path.chars().any(char::is_control),
+                    "文件夹路径包含无效字符"
+                );
+                let raw_name = call["body"]["name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim()
+                    .to_owned();
+                ensure!(
+                    raw_name.encode_utf16().count() <= 120 && !raw_name.chars().any(char::is_control),
+                    "项目名称无效"
+                );
+                let canonical = tokio::task::spawn_blocking(move || {
+                    let path =
+                        std::fs::canonicalize(&raw_path).context("所选电脑文件夹不存在或不可访问")?;
+                    ensure!(path.is_dir(), "所选路径不是文件夹");
+                    Ok::<_, anyhow::Error>(path.to_string_lossy().into_owned())
+                })
+                .await??;
+                if let Ok(Some(native)) = connector
+                    .read("creation.projects", &json!({"id": "new"}), &Value::Null, None)
+                    .await
+                    && let Some(existing) = native["projects"].as_array().and_then(|rows| {
+                        rows.iter().find(|row| {
+                            row["path"]
+                                .as_str()
+                                .and_then(|p| std::fs::canonicalize(p).ok())
+                                .is_some_and(|p| p.to_string_lossy() == canonical)
+                        })
+                    })
+                {
+                    return Ok(Some(json!({
+                        "project": {
+                            "id": existing["id"],
+                            "name": existing["name"],
+                            "path": canonical,
+                        },
+                        "existing": true,
+                    })));
+                }
+                let (id, name, path) = self
+                    .db
+                    .lock()
+                    .expect("database mutex poisoned")
+                    .save_backend_project(backend, &raw_name, &canonical)?;
+                Ok(Some(json!({
+                    "project": { "id": id, "name": name, "path": path },
+                    "existing": false,
+                })))
+            }
+            "projects.list" | "creation.projects" => {
+                let mut result = connector
+                    .read(method, &call["params"], &call["query"], None)
+                    .await?;
+                let saved = self
+                    .db
+                    .lock()
+                    .expect("database mutex poisoned")
+                    .list_backend_projects(backend)?;
+                if !saved.is_empty()
+                    && let Some(value) = result.as_mut()
+                {
+                    let native_paths = if method == "projects.list" {
+                        connector
+                            .read("creation.projects", &json!({"id": "new"}), &Value::Null, None)
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v["projects"].as_array().cloned())
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    merge_backend_projects(
+                        value,
+                        &saved,
+                        &native_paths,
+                        method == "projects.list",
+                    );
+                }
+                Ok(result)
+            }
+            "skills.list" | "plugins.list" => {
+                let mut query = call["query"].clone();
+                if query["creation"] == "1"
+                    && let Some(project_id) = query["projectId"].as_str()
+                    && project_id.starts_with("dir:")
+                {
+                    let found = self
+                        .db
+                        .lock()
+                        .expect("database mutex poisoned")
+                        .find_backend_project(backend, project_id)?;
+                    if let Some((_, path)) = found
+                        && let Some(obj) = query.as_object_mut()
+                    {
+                        obj.remove("projectId");
+                        obj.insert("projectPath".into(), json!(path));
+                    }
+                }
+                let live = thread_id(&call["params"]["id"])
+                    .ok()
+                    .and_then(|id| self.codex_watch(backend, id))
+                    .and_then(|watch| watch.live.as_ref());
+                connector
+                    .read(method, &call["params"], &query, live)
+                    .await
+            }
             "usage.read" => {
                 let watched = self
                     .watches
@@ -759,9 +920,24 @@ impl DeviceSession {
         call: &Value,
     ) -> Result<Value> {
         ensure!(connector.has_desktop(), "尚未连接 Codex");
+        let mut body = call["body"].clone();
+        if method == "thread.create"
+            && let Some(project_id) = body["projectId"].as_str().map(str::to_owned)
+            && project_id.starts_with("dir:")
+        {
+            let (_, path) = self
+                .db
+                .lock()
+                .expect("database mutex poisoned")
+                .find_backend_project(backend, &project_id)?
+                .context("找不到该项目对应的电脑文件夹，请重新添加项目")?;
+            if let Some(map) = body.as_object_mut() {
+                map.remove("projectId");
+                map.insert("projectPath".into(), json!(path));
+            }
+        }
         let (request, mut change, draft) =
-            serde_json::from_value::<conversations::Request>(call["body"].clone())?
-                .parse(method)?;
+            serde_json::from_value::<conversations::Request>(body)?.parse(method)?;
         if change.first_turn().is_some() {
             ensure!(
                 connector.has_creation_tools(),
@@ -911,5 +1087,262 @@ impl DeviceSession {
             });
         }
         Ok(operation)
+    }
+}
+
+fn canonical_path_key(raw: &str) -> String {
+    std::fs::canonicalize(raw)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| raw.to_owned())
+}
+
+fn merge_backend_projects(
+    value: &mut Value,
+    saved: &[(String, String, String)],
+    native_catalog: &[Value],
+    include_count: bool,
+) {
+    let Some(rows) = value["projects"].as_array_mut() else {
+        return;
+    };
+    let mut known_ids: std::collections::HashSet<String> = rows
+        .iter()
+        .filter_map(|row| row["id"].as_str().map(str::to_owned))
+        .collect();
+    let mut known_paths: std::collections::HashSet<String> = rows
+        .iter()
+        .chain(native_catalog.iter())
+        .filter_map(|row| row["path"].as_str())
+        .filter(|path| !path.is_empty())
+        .map(canonical_path_key)
+        .collect();
+    for (id, name, path) in saved {
+        if !std::path::Path::new(path).is_dir() {
+            continue;
+        }
+        let key = canonical_path_key(path);
+        if known_ids.contains(id) || known_paths.contains(&key) {
+            continue;
+        }
+        known_ids.insert(id.clone());
+        known_paths.insert(key);
+        let entry = if include_count {
+            json!({ "id": id, "name": name, "path": path, "count": 0 })
+        } else {
+            json!({ "id": id, "name": name, "path": path })
+        };
+        rows.push(entry);
+    }
+}
+
+fn quick_roots(home: Option<&std::path::Path>, extra_roots: &[String]) -> Vec<Value> {
+    let mut seen = std::collections::HashSet::new();
+    let mut roots = Vec::new();
+    let mut push_root = |label: String, path: std::path::PathBuf| {
+        if !path.is_dir() {
+            return;
+        }
+        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+        let text = canonical.to_string_lossy().into_owned();
+        if seen.insert(text.clone()) {
+            roots.push(json!({ "label": label, "path": text }));
+        }
+    };
+    if let Some(home) = home {
+        push_root("主目录".into(), home.to_path_buf());
+        for candidate in [
+            "source",
+            "src",
+            "projects",
+            "Projects",
+            "workspace",
+            "workspaces",
+            "code",
+            "Code",
+            "Desktop",
+            "Documents",
+        ] {
+            let sub = home.join(candidate);
+            if sub.is_dir() {
+                push_root(candidate.into(), sub);
+            }
+        }
+    }
+    for extra in extra_roots {
+        let p = std::path::PathBuf::from(extra);
+        if let Some(label) = p.file_name().and_then(|s| s.to_str()).filter(|s| !s.is_empty()) {
+            push_root(label.to_owned(), p);
+        }
+    }
+    #[cfg(windows)]
+    {
+        for letter in b'C'..=b'Z' {
+            let drive = format!("{}:\\", letter as char);
+            let path = std::path::PathBuf::from(&drive);
+            if path.is_dir() {
+                push_root(format!("{}:", letter as char), path);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        push_root("/".into(), std::path::PathBuf::from("/"));
+    }
+    roots
+}
+
+fn browse_directories(
+    requested: Option<&str>,
+    include_hidden: bool,
+    extra_roots: &[String],
+) -> Result<Value> {
+    let home = dirs::home_dir();
+    let target = match requested {
+        Some(raw) => {
+            ensure!(
+                raw.encode_utf16().count() <= 1024 && !raw.chars().any(char::is_control),
+                "文件夹路径无效"
+            );
+            std::path::PathBuf::from(raw)
+        }
+        None => home.clone().unwrap_or_else(|| std::path::PathBuf::from("/")),
+    };
+    let canonical =
+        std::fs::canonicalize(&target).context("找不到该电脑文件夹或没有访问权限")?;
+    ensure!(canonical.is_dir(), "目标路径不是文件夹");
+    let parent = canonical
+        .parent()
+        .filter(|p| *p != canonical.as_path())
+        .map(|p| p.to_string_lossy().into_owned());
+    let mut entries = Vec::new();
+    let read_dir = std::fs::read_dir(&canonical).context("无法读取此文件夹内容")?;
+    for entry in read_dir.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.is_empty() || name.chars().any(char::is_control) {
+            continue;
+        }
+        if !include_hidden && name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if !std::fs::metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+            continue;
+        }
+        let is_git = path.join(".git").exists();
+        entries.push((name, path.to_string_lossy().into_owned(), is_git));
+    }
+    entries.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()).then_with(|| a.0.cmp(&b.0)));
+    const MAX_ENTRIES: usize = 500;
+    let truncated = entries.len() > MAX_ENTRIES;
+    entries.truncate(MAX_ENTRIES);
+    let entries: Vec<Value> = entries
+        .into_iter()
+        .map(|(name, path, is_git)| json!({ "name": name, "path": path, "isGit": is_git }))
+        .collect();
+    Ok(json!({
+        "path": canonical.to_string_lossy(),
+        "parent": parent,
+        "home": home.as_deref().map(|p| p.to_string_lossy().into_owned()),
+        "roots": quick_roots(home.as_deref(), extra_roots),
+        "entries": entries,
+        "truncated": truncated,
+    }))
+}
+
+fn create_directory(parent: &str, raw_name: &str) -> Result<Value> {
+    ensure!(
+        parent.encode_utf16().count() <= 1024 && !parent.chars().any(char::is_control),
+        "上级目录路径无效"
+    );
+    let name = raw_name.trim();
+    ensure!(
+        !name.is_empty()
+            && name.encode_utf16().count() <= 120
+            && name != "."
+            && name != ".."
+            && !name.contains('/')
+            && !name.contains('\\')
+            && !name.contains(':')
+            && !name.chars().any(char::is_control),
+        "文件夹名称无效，不能包含路径分隔符或特殊控制字符"
+    );
+    let base = std::fs::canonicalize(parent).context("上级目录不存在或不可访问")?;
+    ensure!(base.is_dir(), "上级路径不是文件夹");
+    let target = base.join(name);
+    ensure!(!target.exists(), "同名文件夹或文件已存在");
+    std::fs::create_dir(&target).context("创建文件夹失败，请检查目录权限")?;
+    let canonical = std::fs::canonicalize(&target).unwrap_or(target);
+    Ok(json!({
+        "name": name,
+        "path": canonical.to_string_lossy(),
+    }))
+}
+
+#[cfg(test)]
+mod fs_tests {
+    use super::*;
+
+    #[test]
+    fn browse_and_create_directory_enforces_single_segment_and_hides_dotfiles_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".hidden")).unwrap();
+        std::fs::create_dir(dir.path().join("alpha")).unwrap();
+        std::fs::create_dir(dir.path().join("alpha/.git")).unwrap();
+        std::fs::write(dir.path().join("file.txt"), b"hi").unwrap();
+
+        let listed = browse_directories(Some(dir.path().to_str().unwrap()), false, &[]).unwrap();
+        let entries = listed["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["name"], "alpha");
+        assert_eq!(entries[0]["isGit"], true);
+
+        let with_hidden =
+            browse_directories(Some(dir.path().to_str().unwrap()), true, &[]).unwrap();
+        assert_eq!(with_hidden["entries"].as_array().unwrap().len(), 2);
+
+        assert!(create_directory(dir.path().to_str().unwrap(), "../escape").is_err());
+        assert!(create_directory(dir.path().to_str().unwrap(), "a/b").is_err());
+        assert!(create_directory(dir.path().to_str().unwrap(), "alpha").is_err());
+
+        let created = create_directory(dir.path().to_str().unwrap(), "new-project").unwrap();
+        assert_eq!(created["name"], "new-project");
+        assert!(dir.path().join("new-project").is_dir());
+    }
+
+    #[test]
+    fn merge_backend_projects_dedupes_by_canonical_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("existing");
+        let fresh = dir.path().join("fresh");
+        std::fs::create_dir(&existing).unwrap();
+        std::fs::create_dir(&fresh).unwrap();
+        let existing_str = std::fs::canonicalize(&existing)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let fresh_str = std::fs::canonicalize(&fresh)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let mut payload = json!({
+            "projects": [{ "id": "native-1", "name": "Existing", "count": 3 }]
+        });
+        let native_catalog = vec![json!({
+            "id": "native-1",
+            "name": "Existing",
+            "path": existing_str,
+        })];
+        let saved = vec![
+            ("dir:1111".into(), "Dup".into(), existing_str),
+            ("dir:2222".into(), "Fresh".into(), fresh_str.clone()),
+            ("dir:3333".into(), "Gone".into(), "/nonexistent/path/xyz".into()),
+        ];
+        merge_backend_projects(&mut payload, &saved, &native_catalog, true);
+        let rows = payload["projects"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1]["id"], "dir:2222");
+        assert_eq!(rows[1]["name"], "Fresh");
+        assert_eq!(rows[1]["path"], fresh_str);
+        assert_eq!(rows[1]["count"], 0);
     }
 }
