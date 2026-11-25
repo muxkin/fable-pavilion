@@ -108,13 +108,26 @@ impl Snapshot {
             if text.is_empty() {
                 text = input.response;
             }
+            let has_attachments = text.trim().is_empty();
+            let display = if has_attachments {
+                "[附件消息]"
+            } else {
+                &text[..text.floor_char_boundary(text.len().min(12_000))]
+            };
             let mut row = json!({
                 "id": id,
-                "text": &text[..text.floor_char_boundary(text.len().min(12_000))],
+                "text": display,
                 "status": if running { "queued" } else { "paused" },
             });
+            if has_attachments {
+                row["hasAttachments"] = json!(true);
+            }
             if !running {
-                row["reason"] = json!("Antigravity 已暂停自动派发，可立即发送或移除");
+                row["reason"] = json!(if has_attachments {
+                    "Antigravity 已暂停自动派发，此条包含附件，请在桌面端查看或移除"
+                } else {
+                    "Antigravity 已暂停自动派发，可立即发送或移除"
+                });
             }
             rows.push(row);
         }

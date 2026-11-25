@@ -897,7 +897,7 @@ pub fn asynchronous(turns: &[&Value]) -> Vec<Value> {
 }
 
 #[cfg(feature = "official-plugins")]
-pub fn rollout_async_questions(mut reader: impl std::io::BufRead) -> Vec<Value> {
+pub fn rollout_async_questions(thread: &str, mut reader: impl std::io::BufRead) -> Vec<Value> {
     let mut pending: BTreeMap<String, (String, Vec<Value>)> = BTreeMap::new();
     let mut answered: HashSet<String> = HashSet::new();
     let mut seen_turns: HashSet<String> = HashSet::new();
@@ -925,6 +925,8 @@ pub fn rollout_async_questions(mut reader: impl std::io::BufRead) -> Vec<Value> 
         if !raw.contains("\"questions\"")
             && !raw.contains("send_user_message_question_reply")
             && !raw.contains("\"UserMessage\"")
+            && !raw.contains("\"FunctionCallOutput\"")
+            && !raw.contains("codex_delegation")
         {
             continue;
         }
@@ -965,6 +967,18 @@ pub fn rollout_async_questions(mut reader: impl std::io::BufRead) -> Vec<Value> 
                     && seen_turns.insert(turn_id.to_owned())
                 {
                     pending.clear();
+                }
+            }
+            Some("FunctionCallOutput") => {
+                if let Some(text) = crate::codex_live::delegated_input(item, thread) {
+                    let had_reply = record(&text);
+                    if !had_reply
+                        && !text.trim().is_empty()
+                        && !turn_id.is_empty()
+                        && seen_turns.insert(turn_id.to_owned())
+                    {
+                        pending.clear();
+                    }
                 }
             }
             Some("AgentMessage") => {
@@ -1066,7 +1080,7 @@ mod rollout_question_tests {
             }
         });
         let pending_rollout = format!("{ask}\n{steer_same_turn}\n");
-        let found = rollout_async_questions(pending_rollout.as_bytes());
+        let found = rollout_async_questions("thread-1", pending_rollout.as_bytes());
         assert_eq!(found.len(), 1);
         assert_eq!(found[0]["id"], "async:call_abc");
         assert_eq!(found[0]["kind"], "async-question");
@@ -1097,7 +1111,27 @@ mod rollout_question_tests {
             }
         });
         let answered_rollout = format!("{ask}\n{reply}\n");
-        assert!(rollout_async_questions(answered_rollout.as_bytes()).is_empty());
+        assert!(rollout_async_questions("thread-1", answered_rollout.as_bytes()).is_empty());
+
+        let escaped_reply = reply_text
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let delegated_reply = json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "turn-1",
+                "item": {
+                    "type": "FunctionCallOutput",
+                    "namespace": "codex_app",
+                    "name": "send_message_to_thread",
+                    "output": format!("<codex_delegation><source_thread_id>thread-1</source_thread_id><input>{escaped_reply}</input></codex_delegation>")
+                }
+            }
+        });
+        let delegated_answered = format!("{ask}\n{delegated_reply}\n");
+        assert!(rollout_async_questions("thread-1", delegated_answered.as_bytes()).is_empty());
 
         let next_turn = json!({
             "type": "event_msg",
@@ -1111,6 +1145,22 @@ mod rollout_question_tests {
             }
         });
         let next_turn_rollout = format!("{ask}\n{next_turn}\n");
-        assert!(rollout_async_questions(next_turn_rollout.as_bytes()).is_empty());
+        assert!(rollout_async_questions("thread-1", next_turn_rollout.as_bytes()).is_empty());
+
+        let delegated_next_turn = json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "turn-2",
+                "item": {
+                    "type": "FunctionCallOutput",
+                    "namespace": "codex_app",
+                    "name": "send_message_to_thread",
+                    "output": "<codex_delegation><source_thread_id>thread-1</source_thread_id><input>follow-up task</input></codex_delegation>"
+                }
+            }
+        });
+        let delegated_next_rollout = format!("{ask}\n{delegated_next_turn}\n");
+        assert!(rollout_async_questions("thread-1", delegated_next_rollout.as_bytes()).is_empty());
     }
 }

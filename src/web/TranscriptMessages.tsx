@@ -25,7 +25,10 @@ export const TranscriptMessages = tsxComponent(function TranscriptMessages(_prop
     for (const original of messages) {
       let message = original;
       const question = requests.find(
-        (request) => request.kind === 'async-question' && request.id === `async:${message.id}`,
+        (request) =>
+          request.kind === 'async-question' &&
+          (request.id === `async:${message.id}` ||
+            (!!message.nativeItemId && request.id === `async:${message.nativeItemId}`)),
       );
       if (question) {
         const suffix = question.questions!.map((q) => q.question).join('\n\n');

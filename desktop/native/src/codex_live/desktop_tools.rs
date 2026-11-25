@@ -12,7 +12,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::Arc,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use tokio::{
     sync::{mpsc, watch},
@@ -45,8 +45,8 @@ pub(super) async fn run(
     let mut previous = None;
     let mut last_active = false;
     let mut force_refresh = false;
-    let mut pending_settings: Option<(String, String)> = None;
-    let mut pending_controls: Option<Value> = None;
+    let mut pending_settings: Option<(String, String, Option<Instant>)> = None;
+    let mut pending_controls: Option<(Value, Option<Instant>)> = None;
     loop {
         tokio::select! {
             _ = refresh.tick() => {
@@ -62,15 +62,17 @@ pub(super) async fn run(
                 let store = history.clone();
                 let prior = previous.take();
                 let force = std::mem::take(&mut force_refresh);
-                let override_settings = pending_settings.clone();
-                let override_controls = pending_controls.clone();
-                let (view, stamp) = tokio::task::spawn_blocking(move || {
+                let active_settings = pending_settings.as_ref().map(|(m, e, _)| (m.clone(), e.clone()));
+                let active_controls = pending_controls.as_ref().map(|(c, _)| c.clone());
+                let (view, stamp, defaults_snapshot) = tokio::task::spawn_blocking(move || {
+                    let defaults = store.thread_session_defaults(id);
                     let stamp = rollout_stamp(&store, id).map(|file| {
                         (
                             activity.clone(),
                             app_server,
-                            override_settings.clone(),
-                            override_controls.clone(),
+                            active_settings.clone(),
+                            active_controls.clone(),
+                            defaults.clone(),
                             file,
                         )
                     });
@@ -82,13 +84,32 @@ pub(super) async fn run(
                             id,
                             activity,
                             app_server,
-                            override_settings.as_ref(),
-                            override_controls.as_ref(),
+                            defaults.as_ref(),
+                            active_settings.as_ref(),
+                            active_controls.as_ref(),
                             epoch,
                         )?)
                     };
-                    Ok::<_, anyhow::Error>((view, stamp))
+                    Ok::<_, anyhow::Error>((view, stamp, defaults))
                 }).await??;
+                if let Some((model, effort, Some(sent_at))) = &pending_settings {
+                    let matched = defaults_snapshot.as_ref().is_some_and(|d| {
+                        d["model"].as_str() == Some(model.as_str())
+                            && d["reasoningEffort"].as_str() == Some(effort.as_str())
+                    });
+                    if matched || sent_at.elapsed() >= Duration::from_secs(15) {
+                        pending_settings = None;
+                    }
+                }
+                if let Some((controls, Some(sent_at))) = &pending_controls {
+                    let matched = defaults_snapshot.as_ref().is_some_and(|d| {
+                        app_server_tools::permission_from_resume(d)["permission"]
+                            == controls["permission"]
+                    });
+                    if matched || sent_at.elapsed() >= Duration::from_secs(15) {
+                        pending_controls = None;
+                    }
+                }
                 previous = stamp;
                 let Some(mut view) = view else { continue };
                 view.thread["revision"] = json!(revision);
@@ -127,19 +148,24 @@ pub(super) async fn run(
                         )
                         .await
                     }
-                    Some(view) => {
-                        let capability = if matches!(&command.kind, Action::Steer { .. }) {
-                            "canSteer"
-                        } else {
-                            "canSend"
-                        };
-                        if view.thread[capability] == true {
-                            send(&mut stream, &anchor, id, command.request, command.kind, None)
+                    Some(view) => match command.kind {
+                        Action::Respond { response } => {
+                            respond_async(&mut stream, &anchor, id, view, command.request, response)
                                 .await
-                        } else {
-                            Outcome::Rejected("当前 Codex 会话暂不可发送".into())
                         }
-                    }
+                        kind => {
+                            let capability = if matches!(&kind, Action::Steer { .. }) {
+                                "canSteer"
+                            } else {
+                                "canSend"
+                            };
+                            if view.thread[capability] == true {
+                                send(&mut stream, &anchor, id, command.request, kind, None).await
+                            } else {
+                                Outcome::Rejected("当前 Codex 会话暂不可发送".into())
+                            }
+                        }
+                    },
                     None => Outcome::Rejected("当前 Codex 会话暂不可发送".into()),
                 };
                 let _ = command.reply.send(outcome);
@@ -244,11 +270,13 @@ fn rollout_stamp(history: &History, id: Uuid) -> Option<(PathBuf, u64, SystemTim
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn read_view(
     history: &History,
     id: Uuid,
     activity: Activity,
     app_server: bool,
+    defaults: Option<&Value>,
     pending_settings: Option<&(String, String)>,
     pending_controls: Option<&Value>,
     epoch: Uuid,
@@ -261,7 +289,7 @@ fn read_view(
     let mut thread = page["thread"].clone();
     ensure!(thread["id"] == json!(id), "历史会话与桌面会话不匹配");
     let requests = history.rollout_async_questions(id);
-    let owner = app_server && (activity.status != "notLoaded" || !requests.is_empty());
+    let owner = (app_server && activity.status != "notLoaded") || !requests.is_empty();
     thread["owner"] = json!(owner);
     thread["synchronized"] = json!(true);
     thread["runtimeStatus"] = json!(activity.status);
@@ -284,17 +312,15 @@ fn read_view(
         thread["reasoningEffort"] = Value::Null;
     }
     let controls = if app_server {
-        let defaults = history.thread_session_defaults(id);
         let controls = pending_controls.cloned().unwrap_or_else(|| {
             defaults
-                .as_ref()
                 .map(app_server_tools::permission_from_resume)
                 .unwrap_or_else(|| settings::permission(&Value::Null))
         });
         if let Some((model, effort)) = pending_settings {
             thread["model"] = json!(model);
             thread["reasoningEffort"] = json!(effort);
-        } else if let Some(defaults) = defaults.as_ref() {
+        } else if let Some(defaults) = defaults {
             if let Some(model) = defaults["model"].as_str() {
                 thread["model"] = json!(model);
             }
@@ -304,10 +330,20 @@ fn read_view(
         }
         controls
     } else {
+        if let Some(defaults) = defaults {
+            if let Some(model) = defaults["model"].as_str() {
+                thread["model"] = json!(model);
+            }
+            if let Some(effort) = defaults["reasoningEffort"].as_str() {
+                thread["reasoningEffort"] = json!(effort);
+            }
+        }
         settings::permission(&Value::Null)
     };
     thread["controls"] = controls;
-    if !activity.can_send && !activity.can_steer() {
+    if activity.pending {
+        thread["reason"] = json!("电脑上的 Codex 正在等待审批或交互确认，请先在本机处理。");
+    } else if !activity.can_send && !activity.can_steer() {
         thread["reason"] = json!("请等待 Codex 当前操作结束，或在本机查看会话状态。");
     }
     let messages = page["messages"].as_array().cloned().unwrap_or_default();
@@ -337,8 +373,8 @@ async fn execute_app_server(
     view: &View,
     request: Uuid,
     action: Action,
-    pending_settings: &mut Option<(String, String)>,
-    pending_controls: &mut Option<Value>,
+    pending_settings: &mut Option<(String, String, Option<Instant>)>,
+    pending_controls: &mut Option<(Value, Option<Instant>)>,
 ) -> Outcome {
     let first_send = matches!(action, Action::FirstSend { .. });
     match action {
@@ -355,7 +391,7 @@ async fn execute_app_server(
             }
             let (outcome, updated) = app_server_tools::set_permission(home, id, view, &input).await;
             if let Some(controls) = updated {
-                *pending_controls = Some(controls);
+                *pending_controls = Some((controls, None));
             }
             outcome
         }
@@ -380,7 +416,7 @@ async fn execute_app_server(
             else {
                 return Outcome::Rejected("模型设置无效".into());
             };
-            *pending_settings = Some((model.to_owned(), effort.to_owned()));
+            *pending_settings = Some((model.to_owned(), effort.to_owned(), None));
             Outcome::Completed(None)
         }
         Action::Interrupt { expected } => {
@@ -391,18 +427,26 @@ async fn execute_app_server(
             }
         }
         Action::Send { text, files, tools } if tools.is_empty() => {
+            let model_override = pending_settings
+                .as_ref()
+                .map(|(m, e, _)| (m.clone(), e.clone()));
             let outcome = send(
                 stream,
                 anchor,
                 id,
                 request,
                 Action::Send { text, files, tools },
-                pending_settings.as_ref(),
+                model_override.as_ref(),
             )
             .await;
             if matches!(outcome, Outcome::Completed(_)) {
-                *pending_settings = None;
-                *pending_controls = None;
+                let now = Instant::now();
+                if let Some((_, _, sent_at)) = pending_settings {
+                    *sent_at = Some(now);
+                }
+                if let Some((_, sent_at)) = pending_controls {
+                    *sent_at = Some(now);
+                }
             }
             outcome
         }
@@ -410,23 +454,7 @@ async fn execute_app_server(
             send(stream, anchor, id, request, action, None).await
         }
         Action::Respond { response } => {
-            let reply_text = match response.async_reply_text(view) {
-                Ok(text) => text,
-                Err(error) => return Outcome::Rejected(error.to_string()),
-            };
-            let Ok(activity) = read_status(stream, anchor, id, true).await else {
-                return Outcome::Rejected("未确认 Codex 当前会话可以回复，请刷新后重试".into());
-            };
-            if activity.pending || (!activity.can_send && !activity.can_steer()) {
-                return Outcome::Rejected("当前 Codex 会话暂不可回复问题，请刷新后重试".into());
-            }
-            let args = json!({"threadId": id, "hostId": "local", "prompt": reply_text});
-            let result = app_tools::call(stream, anchor, request, Tool::SendMessage, args).await;
-            if result.is_ok_and(|value| value["threadId"] == json!(id)) {
-                Outcome::Completed(None)
-            } else {
-                Outcome::Uncertain
-            }
+            respond_async(stream, anchor, id, view, request, response).await
         }
         Action::Send { text, files, tools } | Action::FirstSend { text, files, tools } => {
             if first_send && (!view.turns.is_empty() || !view.messages.is_empty()) {
@@ -450,7 +478,7 @@ async fn execute_app_server(
             }
             let model_override = pending_settings
                 .as_ref()
-                .map(|(m, e)| (m.as_str(), e.as_str()));
+                .map(|(m, e, _)| (m.as_str(), e.as_str()));
             let outcome = app_server_tools::send_turn(
                 home,
                 id,
@@ -462,12 +490,44 @@ async fn execute_app_server(
             )
             .await;
             if matches!(outcome, Outcome::Accepted(_)) {
-                *pending_settings = None;
-                *pending_controls = None;
+                let now = Instant::now();
+                if let Some((_, _, sent_at)) = pending_settings {
+                    *sent_at = Some(now);
+                }
+                if let Some((_, sent_at)) = pending_controls {
+                    *sent_at = Some(now);
+                }
             }
             outcome
         }
         _ => Outcome::Rejected("Codex 桌面接口不支持此操作".into()),
+    }
+}
+
+async fn respond_async(
+    stream: &mut Stream,
+    anchor: &str,
+    id: Uuid,
+    view: &View,
+    request: Uuid,
+    response: crate::requests::Response,
+) -> Outcome {
+    let reply_text = match response.async_reply_text(view) {
+        Ok(text) => text,
+        Err(error) => return Outcome::Rejected(error.to_string()),
+    };
+    let Ok(activity) = read_status(stream, anchor, id, true).await else {
+        return Outcome::Rejected("未确认 Codex 当前会话可以回复，请刷新后重试".into());
+    };
+    if activity.pending || (!activity.can_send && !activity.can_steer()) {
+        return Outcome::Rejected("当前 Codex 会话暂不可回复问题，请刷新后重试".into());
+    }
+    let args = json!({"threadId": id, "hostId": "local", "prompt": reply_text});
+    let result = app_tools::call(stream, anchor, request, Tool::SendMessage, args).await;
+    if result.is_ok_and(|value| value["threadId"] == json!(id)) {
+        Outcome::Completed(None)
+    } else {
+        Outcome::Uncertain
     }
 }
 

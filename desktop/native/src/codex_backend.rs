@@ -830,7 +830,7 @@ pub(crate) fn status(available: Availability, transport: Option<LiveTransport>) 
         "writesEnabled":connected,"reason":reason,
         "capabilities":{
             "send":online,"steer":steer,"interrupt":interrupt,"modelSettings":model_settings,
-            "questions":full_control || app_server,"approvals":full_control,"permissionRequests":full_control,
+            "questions":online,"approvals":full_control,"permissionRequests":full_control,
             "openThread":open,"elicitationForms":full_control,
             "newThread":available.create,"queue":full_control,
             "renameThread":available.rename,"forkThread":available.fork,"forkFromTurn":available.fork_reply,

@@ -150,7 +150,13 @@ export interface ThreadView extends ThreadSummary {
   requests?: ConversationRequest[];
   boundedQuestionAvailable?: boolean;
   mode?: string;
-  queuedMessages?: { id: string; text: string; status: string; reason?: string }[];
+  queuedMessages?: {
+    id: string;
+    text: string;
+    status: string;
+    reason?: string;
+    hasAttachments?: boolean;
+  }[];
   queueFingerprint?: string;
   canSend: boolean;
   canResumeForSend?: boolean;

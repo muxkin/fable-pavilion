@@ -878,6 +878,9 @@ impl Backend {
                 && requests.is_empty()
         );
         view["canInterrupt"] = json!(!self.read_only && active && execution.is_some());
+        if let Some(permission) = permissions::preset_id(&summary["annotations"]["permissionPreset"]) {
+            view["controls"] = json!({"permission": permission});
+        }
         if let Ok(queue) = queue::read(self, daemon, id).await {
             queue.display(&mut view);
         }

@@ -63,6 +63,7 @@ export const ModelSettings = tsxComponent(function ModelSettings(initialProps: {
   response?: Operation;
   onApplied: () => void;
   creation?: boolean;
+  supportsServiceTier?: boolean;
 }) {
   const { view } = initialProps;
 
@@ -103,7 +104,17 @@ export const ModelSettings = tsxComponent(function ModelSettings(initialProps: {
   const watchModels = watchRender();
   const watchModel = watchRender();
   const watchSubmitted = watchRender();
-  return ({ view, disabled, onSave, onDirtyChange, response, onApplied, onSelectForMessage, creation = false }) => {
+  return ({
+    view,
+    disabled,
+    onSave,
+    onDirtyChange,
+    response,
+    onApplied,
+    onSelectForMessage,
+    creation = false,
+    supportsServiceTier = true,
+  }) => {
     const key = deviceSession.modelCatalogKey();
     const cached = modelsState.value.key === key ? modelsState.value.models : undefined;
     const models = cached ?? [];
@@ -157,7 +168,7 @@ export const ModelSettings = tsxComponent(function ModelSettings(initialProps: {
     const ownResponse = response?.id === submitted ? response : undefined;
     const choice = models.find((m) => m.id === model);
     const stale =
-      view.model !== initial.expectedModel ||
+      (view.model ?? null) !== initial.expectedModel ||
       (view.reasoningEffort ?? null) !== initial.expectedEffort ||
       (view.serviceTier ?? null) !== initial.expectedServiceTier ||
       (view.mode === 'plan' ? 'plan' : 'default') !== initial.expectedMode;
@@ -249,7 +260,7 @@ export const ModelSettings = tsxComponent(function ModelSettings(initialProps: {
                   </div>
                 </div>
               )}
-              {!creation && !onSelectForMessage && (
+              {!creation && !onSelectForMessage && supportsServiceTier && (
                 <div class="setting-section">
                   <h3>速度</h3>
                   <div class="speed-options" role="radiogroup" aria-label="速度">

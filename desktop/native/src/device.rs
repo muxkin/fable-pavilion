@@ -332,7 +332,7 @@ impl DeviceSession {
                                 self.plugin_watch(&request)
                             }
                         },
-                        Some("offer") if bytes.is_empty() && self.signaling.is_some() => self.offer(&request).await.map(Some),
+                        Some("offer") if bytes.is_empty() && self.signaling.is_some() => self.offer(&request, &mut direct_rx).await.map(Some),
                         Some("candidate") if bytes.is_empty() && self.signaling.is_some() => {
                             match &self.connection {
                                 Some(connection) => crate::direct::candidate(connection.peer(), request["candidate"].clone()).await.map(|()| Some(json!({"ok":true}))),
@@ -446,13 +446,18 @@ impl DeviceSession {
         Ok(json!({"ok":true}))
     }
 
-    async fn offer(&mut self, request: &Value) -> Result<Value> {
+    async fn offer(
+        &mut self,
+        request: &Value,
+        direct_rx: &mut mpsc::UnboundedReceiver<Value>,
+    ) -> Result<Value> {
         let direct = self.backends.direct.clone().context("直连未启用")?;
         let session = self.signaling.context("此通道不能协商直连")?;
         let sdp = request["sdp"].as_str().context("WebRTC offer 无效")?;
         if let Some(previous) = self.connection.take() {
             previous.close().await;
         }
+        while direct_rx.try_recv().is_ok() {}
         let (connection, answer) = direct
             .answer(
                 sdp.to_owned(),

@@ -242,10 +242,15 @@ impl PeerConnectionEventHandler for Handler {
         let session = self.session;
         let backends = self.backends.clone();
         let lanes = self.lanes.clone();
+        let state = self.state.clone();
         tokio::spawn(async move {
+            let mut is_control = false;
             let result = async {
                 let (lane, bit) = match channel.label().await?.as_str() {
-                    "pocket-control-v2" => (Lane::Control, 1),
+                    "pocket-control-v2" => {
+                        is_control = true;
+                        (Lane::Control, 1)
+                    }
                     "pocket-bulk-v2" => (Lane::Bulk, 2),
                     _ => anyhow::bail!("WebRTC 通道名称无效"),
                 };
@@ -260,6 +265,9 @@ impl PeerConnectionEventHandler for Handler {
             }.await;
             let _ = result;
             let _ = channel.close().await;
+            if is_control {
+                state.send_replace(RTCPeerConnectionState::Closed);
+            }
         });
     }
 }

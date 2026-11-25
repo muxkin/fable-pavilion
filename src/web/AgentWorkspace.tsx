@@ -1017,7 +1017,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
         threadId: selected.id,
         kind,
         state: 'received',
-        turnId: kind === 'interrupt' ? (view?.activeTurnId ?? null) : null,
+        turnId: kind === 'interrupt' || kind === 'steer' ? (view?.activeTurnId ?? null) : null,
         error: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -1433,7 +1433,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
     const composerStatus =
       openingActivity ||
       sendPreparationError.value ||
-      (textOnlySend && !canCompose && view?.reason) ||
+      (!canCompose && !canOpenForSend && view?.reason) ||
       (unsupportedSendDraft && (fileReferences ? fileReferenceExtrasHint : textOnlySendHint));
     const latestMessageAt = messages.reduce((max, m) => Math.max(max, m.createdAt ?? 0), 0);
     const staleFailedDelivery =
@@ -1874,6 +1874,8 @@ export default tsxComponent(function AgentWorkspace(_props: {
                           !view.activeTurnId &&
                           view.canSend &&
                           !!view.queueFingerprint &&
+                          !item.hasAttachments &&
+                          !!item.text.trim() &&
                           !busy &&
                           !pending &&
                           stream;
@@ -1984,7 +1986,9 @@ export default tsxComponent(function AgentWorkspace(_props: {
                         : `给 ${agentName} 发消息…`
                       : view?.requests?.length
                         ? '请先处理上方的审批或交互请求…'
-                        : '此会话当前只读'
+                        : view?.pendingRequests
+                          ? '请先在电脑端处理审批或交互确认…'
+                          : '此会话当前只读'
                   }
                   uploading={uploading}
                   uploadItems={uploadThread === selected.id ? uploadJobs : []}
@@ -2201,6 +2205,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                         key={backendId + ':' + view.id}
                         view={view}
                         disabled={busy || pending || !stream || textOnlySend || (!view.canSend && !view.canInterrupt)}
+                        supportsServiceTier={status?.capabilities.queue === true}
                         onSave={(settings) => act('settings', settings)}
                         onDirtyChange={setSettingsDirty}
                         response={operations.find((o) => o.kind === 'settings')}

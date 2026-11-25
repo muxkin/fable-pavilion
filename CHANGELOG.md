@@ -1,5 +1,18 @@
 # 更新记录
 
+## 1.0.9 — 2026-11-25
+
+- **前端新版本无感刷新**：检测到前端新版本时不再强制拦截或延迟正在进行的遥控任务，点击更新提示即可立即刷新，不影响电脑端任务继续执行。
+- **WebRTC 直连恢复与热连接池稳定性加固**：修复直连控制通道断开后未关闭旧连接导致停留在中继、主机切换时挂起未建连 `RTCPeerConnection` 造成热池死锁、以及远端 SDP 就绪前丢失 `end-of-candidates` 的问题。
+- **现代 Codex 桌面交互与状态同步完善**：支持在无共享 App Server（如 Windows 桌面端）下直接回复异步提问卡片并同步模型/推理强度；修复桌面仅更新 SQLite 配置时视图缓存不刷新的问题，并增加发送后配置回弹保护；桌面等待审批时在移动端给出清晰提示。
+- **工作台细节修复**：修复运行中追加指令被拒后缺少「重试」按钮的问题、支持按 `nativeItemId` 去重异步提问消息、隐藏纯队列不支持后端的无效「速度」设置项，以及为 Antigravity 暂停态纯附件队列消息展示 `[附件消息]` 并禁用误丢图的「立即发送」。
+
+## Rust 桌面适配器 1.0.9 — 2026-11-25
+
+- **WebRTC 直连状态机清理**：`device.rs` 替换连接时清空通道残留旧事件，防止陈旧 `direct-closed` 误杀新建直连；`direct.rs` 在控制数据通道退出时主动通知关闭 PeerConnection。
+- **Codex `desktop_tools` 完整适配**：`requests::rollout_async_questions` 识别通过 `send_message_to_thread` 发送的委派回复与新一轮消息，避免已回答卡片残留；`desktop_tools.rs` 将 SQLite 默认配置纳入视图刷新戳并增加 15 秒发送后宽限窗口，同时为无共享套接字的桌面端开放异步提问回复与模型/推理强度读取。
+- **Antigravity 视图与队列修复**：`antigravity.rs` 为 `full_view` 补齐 `thread.controls.permission` 避免权限选择器闪烁；`antigravity/queue.rs` 识别暂停态纯图片/附件消息并标记 `hasAttachments` 防止空白展示与附件丢失。
+
 ## 1.0.8 — 2026-11-25
 
 - **新版 Codex 异步提问（Question 卡片）接入**：新版 Codex 桌面发起 `request_user_input_async` 异步提问时，工作台完整展示问题卡片与选项，并支持直接点选或自定义回复提交给 Codex 桌面。
