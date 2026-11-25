@@ -1541,7 +1541,14 @@ export class DeviceSession {
       } as T;
     const cacheable =
       (init?.method ?? 'GET') === 'GET' &&
-      !['operation.read', 'operations.list', 'status.read', 'models.list', 'usage.read'].includes(call.method);
+      ![
+        'operation.read',
+        'operations.list',
+        'status.read',
+        'models.list',
+        'usage.read',
+        'backends.appearance.read',
+      ].includes(call.method);
     const key = this.key(`rpc:${contentVersion(call)}`, backendId),
       old = cacheable ? await this.cache.get<{ hash: string; value: T }>(key) : undefined;
     if (generation !== this.generation) throw new RpcError('电脑已切换，请重试', 0);

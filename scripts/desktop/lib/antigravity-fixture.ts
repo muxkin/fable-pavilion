@@ -572,7 +572,11 @@ export async function createAntigravityFixture(options: AntigravityFixtureOption
         if (expectedModel) {
           assert.deepEqual(body.cascadeConfig, { plannerConfig: { planModel: 'MODEL_FIXTURE_NEXT' } });
         } else if (text === 'fixture failed execution') {
-          assert.equal(body.cascadeConfig, undefined, 'A prior message model leaked into a later send');
+          assert.notEqual(
+            body.cascadeConfig?.plannerConfig?.planModel,
+            'MODEL_FIXTURE_NEXT',
+            'A prior message model leaked into a later send',
+          );
         }
         calls.send++;
         if (text === 'fixture unknown outcome') return {};

@@ -12,6 +12,12 @@ struct Target<'a> {
     trajectory_id: &'a str,
     step_index: u32,
     turn_id: &'a str,
+    subagent_id: Option<&'a str>,
+}
+
+pub(super) enum RequestTarget {
+    Main,
+    Subagent(String, usize),
 }
 
 impl<'a> Target<'a> {
@@ -20,6 +26,16 @@ impl<'a> Target<'a> {
         trajectory_id: Option<&'a str>,
         index: usize,
         step: &'a Value,
+    ) -> Option<Self> {
+        Self::read_with_subagent(thread, trajectory_id, index, step, None)
+    }
+
+    fn read_with_subagent(
+        thread: Option<&str>,
+        trajectory_id: Option<&'a str>,
+        index: usize,
+        step: &'a Value,
+        subagent_id: Option<&'a str>,
     ) -> Option<Self> {
         let trajectory_id = trajectory_id.filter(|id| valid_id(id).is_ok())?;
         let step_index = u32::try_from(index).ok()?;
@@ -42,11 +58,15 @@ impl<'a> Target<'a> {
             trajectory_id,
             step_index,
             turn_id,
+            subagent_id,
         })
     }
 
     fn id(&self) -> String {
-        format!("antigravity-{}", self.step_index)
+        match self.subagent_id {
+            Some(sub) => format!("antigravity-sub:{sub}:{}", self.step_index),
+            None => format!("antigravity-{}", self.step_index),
+        }
     }
 }
 
@@ -161,6 +181,95 @@ fn unsupported_view(index: usize, step: &Value) -> Value {
         "turnId": step["metadata"]["executionId"].as_str(),
         "actionable": false,
     })
+}
+
+pub(super) fn subagent_views(
+    sub_id: &str,
+    role: Option<&str>,
+    trajectory: &Value,
+    read_only: bool,
+) -> Vec<Value> {
+    let Some(steps) = trajectory["steps"].as_array() else {
+        return Vec::new();
+    };
+    let trajectory_id = trajectory["trajectoryId"].as_str();
+    let role = role
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.encode_utf16().count() <= 120 && !value.chars().any(char::is_control));
+    steps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| {
+            if !pending_interaction(step) && questions::asked(step).is_none() {
+                return None;
+            }
+            let mut view = if let Some(target) =
+                Target::read_with_subagent(Some(sub_id), trajectory_id, index, step, Some(sub_id))
+            {
+                if let Some(question) = questions::QuestionBatch::read(step) {
+                    question.view(&target, !read_only)
+                } else if let Some(approval) = approvals::Approval::read(step, &target) {
+                    approval.view(&target, !read_only)
+                } else {
+                    let mut v = unsupported_view(index, step);
+                    v["id"] = json!(target.id());
+                    v
+                }
+            } else {
+                let mut v = unsupported_view(index, step);
+                v["id"] = json!(format!("antigravity-sub:{sub_id}:{index}"));
+                v
+            };
+            if let Some(role) = role
+                && let Some(title) = view["title"].as_str()
+            {
+                view["title"] = json!(format!("{role} · {title}"));
+            }
+            Some(view)
+        })
+        .collect()
+}
+
+pub(super) fn subagent_response(
+    sub_id: &str,
+    index: usize,
+    trajectory: &Value,
+    answer: &Response,
+) -> Result<Value> {
+    ensure!(
+        trajectory["cascadeId"] == sub_id,
+        "Antigravity 子代理会话已变化"
+    );
+    let trajectory_id = trajectory["trajectoryId"]
+        .as_str()
+        .context("Antigravity 子代理会话版本不可用")?;
+    let step = trajectory["steps"]
+        .as_array()
+        .and_then(|steps| steps.get(index))
+        .context("Antigravity 请求已处理或过期")?;
+    let target = Target::read_with_subagent(Some(sub_id), Some(trajectory_id), index, step, Some(sub_id))
+        .context("Antigravity 请求已变化")?;
+    if let Some(question) = questions::QuestionBatch::read(step) {
+        return reply_to_question(&question, &target, answer);
+    }
+    let approval =
+        approvals::Approval::read(step, &target).context("Antigravity 请求已处理或过期")?;
+    verify(&approval.view(&target, true), answer)?;
+    approval.reply(&target, answer)
+}
+
+pub(super) fn request_target(answer: &Response) -> Result<RequestTarget> {
+    answer.validate()?;
+    if let Some(rest) = answer.target_request_id.strip_prefix("antigravity-sub:") {
+        let (sub_id, index) = rest
+            .rsplit_once(':')
+            .context("Antigravity 子代理请求标识无效")?;
+        valid_id(sub_id)?;
+        let index = index.parse::<usize>().context("Antigravity 请求标识无效")?;
+        return Ok(RequestTarget::Subagent(sub_id.to_owned(), index));
+    }
+    request_index(answer)?;
+    Ok(RequestTarget::Main)
 }
 
 pub(super) fn request_index(answer: &Response) -> Result<usize> {

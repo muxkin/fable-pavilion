@@ -986,3 +986,76 @@ fn disk_summaries_include_unloaded_top_level_conversations_and_filter_subagents_
         timestamp_ms("2026-11-22T12:32:52.000Z")
     );
 }
+
+#[test]
+fn subagent_url_permission_view_and_reply_preserve_subagent_target() {
+    let sub_id = "63e097b5-d5d1-4290-ad0e-59d798c8d092";
+    let traj_id = "f0a94efa-9471-40ea-8ca4-6c95828a700b";
+    let parent_steps = vec![json!({
+        "type": "CORTEX_STEP_TYPE_INVOKE_SUBAGENT",
+        "invokeSubagent": {
+            "subagents": [{"typeName": "browser", "role": "Visual Verifier"}],
+            "results": [{"conversationId": sub_id}]
+        }
+    })];
+    let children = child_subagents(&parent_steps);
+    assert_eq!(children, vec![(sub_id.to_owned(), Some("Visual Verifier".to_owned()))]);
+
+    let sub_trajectory = json!({
+        "cascadeId": sub_id,
+        "trajectoryId": traj_id,
+        "steps": [
+            {"type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE"},
+            {
+                "type": "CORTEX_STEP_TYPE_GENERIC",
+                "status": "CORTEX_STEP_STATUS_WAITING",
+                "metadata": {
+                    "executionId": "exec-sub-1",
+                    "sourceTrajectoryStepInfo": {
+                        "trajectoryId": traj_id,
+                        "cascadeId": sub_id,
+                        "stepIndex": 1
+                    }
+                },
+                "requestedInteraction": {
+                    "permission": {
+                        "resource": {"action": "execute_url", "target": "127.0.0.1:8799"},
+                        "reason": "Open http://127.0.0.1:8799/"
+                    }
+                }
+            }
+        ]
+    });
+    let views = interactions::subagent_views(sub_id, Some("Visual Verifier"), &sub_trajectory, false);
+    assert_eq!(views.len(), 1);
+    let shown = &views[0];
+    assert_eq!(shown["id"], format!("antigravity-sub:{sub_id}:1"));
+    assert_eq!(shown["title"], "Visual Verifier · 允许在网页执行操作");
+    assert_eq!(shown["actionable"], true);
+    assert_eq!(shown["decisions"], json!(["accept", "decline"]));
+
+    let answer: crate::requests::Response = serde_json::from_value(json!({
+        "requestId": Uuid::new_v4(),
+        "targetRequestId": shown["id"],
+        "expectedTurnId": shown["turnId"],
+        "expectedFingerprint": shown["fingerprint"],
+        "decision": "accept"
+    }))
+    .unwrap();
+    match interactions::request_target(&answer).unwrap() {
+        interactions::RequestTarget::Subagent(parsed_id, index) => {
+            assert_eq!(parsed_id, sub_id);
+            assert_eq!(index, 1);
+        }
+        _ => panic!("expected subagent target"),
+    }
+    let reply = interactions::subagent_response(sub_id, 1, &sub_trajectory, &answer).unwrap();
+    assert_eq!(
+        reply,
+        json!({
+            "trajectoryId": traj_id,
+            "stepIndex": 1,
+            "permission": {"allow": true, "scope": "PERMISSION_SCOPE_ONCE"}
+        })
+    );
+}

@@ -721,6 +721,7 @@ impl Backend {
             let execution = active_execution(steps);
             let mut requests =
                 interactions::views_slice(Some(id), Some(trajectory), page.start(), steps, self.read_only);
+            requests.extend(self.subagent_requests(&daemon, id, steps).await);
             self.apply_question_capabilities(&mut requests);
             let bounded_trajectory = json!({"generatorMetadata": page.generator_metadatas()});
             let model = current_model(&bounded_trajectory, steps).or_else(|| {
@@ -864,6 +865,7 @@ impl Backend {
         let messages = messages(steps, 0, false);
         let execution = active_execution(steps);
         let mut requests = interactions::views(&data["trajectory"], self.read_only);
+        requests.extend(self.subagent_requests(daemon, id, steps).await);
         self.apply_question_capabilities(&mut requests);
         let model = current_model(&data["trajectory"], steps);
         view["revision"] = json!(0);
@@ -957,6 +959,82 @@ impl Backend {
         interactions::step_response(thread, trajectory, index, step, answer)
     }
 
+    async fn subagent_requests(
+        &self,
+        daemon: &Daemon,
+        thread: &str,
+        steps: &[Value],
+    ) -> Vec<Value> {
+        let mut children = child_subagents(steps);
+        let home = self.home.clone();
+        let parent = thread.to_owned();
+        if let Ok(disk_children) =
+            tokio::task::spawn_blocking(move || read_disk_subagents(&home, &parent)).await
+        {
+            for sub_id in disk_children {
+                if !children.iter().any(|(existing, _)| existing == &sub_id) {
+                    children.push((sub_id, None));
+                }
+            }
+        }
+        if children.is_empty() {
+            return Vec::new();
+        }
+        let Ok(all) = self
+            .call_at(daemon, "GetAllCascadeTrajectories", &json!({}), false)
+            .await
+        else {
+            return Vec::new();
+        };
+        let Some(summaries) = all["trajectorySummaries"].as_object() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut inspected = 0usize;
+        for (sub_id, role) in children.into_iter().rev() {
+            let Some(summary) = summaries.get(&sub_id) else {
+                continue;
+            };
+            if summary["status"].as_str() == Some("CASCADE_RUN_STATUS_IDLE") {
+                continue;
+            }
+            inspected += 1;
+            if inspected > 8 {
+                break;
+            }
+            if let Ok(Some(data)) = self.readable_trajectory(daemon, &sub_id).await {
+                out.extend(interactions::subagent_views(
+                    &sub_id,
+                    role.as_deref(),
+                    &data["trajectory"],
+                    self.read_only,
+                ));
+            }
+        }
+        out
+    }
+
+    async fn is_child_subagent(&self, daemon: &Daemon, thread: &str, sub_id: &str) -> bool {
+        if let Ok(Some(data)) = self.readable_trajectory(daemon, thread).await
+            && let Some(steps) = data["trajectory"]["steps"].as_array()
+            && child_subagents(steps)
+                .iter()
+                .any(|(existing, _)| existing == sub_id)
+        {
+            return true;
+        }
+        let home = self.home.clone();
+        let parent = thread.to_owned();
+        let target = sub_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            read_disk_subagents(&home, &parent)
+                .into_iter()
+                .any(|existing| existing == target)
+        })
+        .await
+        .unwrap_or(false)
+    }
+
     async fn respond_to_interaction(
         &self,
         thread: &str,
@@ -968,19 +1046,37 @@ impl Backend {
         let Ok(daemon) = self.daemon().await else {
             return Delivery::Rejected("Antigravity 本地服务不可用");
         };
-        let result = match self.readable_trajectory(&daemon, thread).await {
-            Ok(Some(data)) => {
-                let trajectory = &data["trajectory"];
-                if trajectory["cascadeId"] != thread {
-                    return Delivery::Rejected("Antigravity 会话已变化");
+        let (target_cascade, result) = match interactions::request_target(answer) {
+            Ok(interactions::RequestTarget::Subagent(sub_id, index)) => {
+                if !self.is_child_subagent(&daemon, thread, &sub_id).await {
+                    return Delivery::Rejected("Antigravity 子代理请求不属于当前会话");
                 }
-                interactions::response(trajectory, answer)
+                let res = match self.readable_trajectory(&daemon, &sub_id).await {
+                    Ok(Some(data)) => {
+                        interactions::subagent_response(&sub_id, index, &data["trajectory"], answer)
+                    }
+                    _ => return Delivery::Rejected("Antigravity 子代理会话尚未同步"),
+                };
+                (sub_id, res)
             }
-            Ok(None) => {
-                self.paged_interaction_response(&daemon, thread, answer)
-                    .await
+            Ok(interactions::RequestTarget::Main) => {
+                let res = match self.readable_trajectory(&daemon, thread).await {
+                    Ok(Some(data)) => {
+                        let trajectory = &data["trajectory"];
+                        if trajectory["cascadeId"] != thread {
+                            return Delivery::Rejected("Antigravity 会话已变化");
+                        }
+                        interactions::response(trajectory, answer)
+                    }
+                    Ok(None) => {
+                        self.paged_interaction_response(&daemon, thread, answer)
+                            .await
+                    }
+                    _ => return Delivery::Rejected("Antigravity 会话尚未同步"),
+                };
+                (thread.to_owned(), res)
             }
-            _ => return Delivery::Rejected("Antigravity 会话尚未同步"),
+            Err(_) => return Delivery::Rejected("Antigravity 请求标识无效"),
         };
         let Ok(interaction) = result else {
             return Delivery::Rejected("Antigravity 请求已变化或答复无效");
@@ -989,7 +1085,7 @@ impl Backend {
             self.call_at(
                 &daemon,
                 "HandleCascadeUserInteraction",
-                &json!({"cascadeId":thread,"interaction":interaction}),
+                &json!({"cascadeId":target_cascade,"interaction":interaction}),
                 true,
             )
             .await,
@@ -998,7 +1094,7 @@ impl Backend {
         if matches!(result, Delivery::Uncertain)
             && interaction["askQuestion"].is_object()
             && self
-                .confirm_question(&daemon, thread, &interaction, answer)
+                .confirm_question(&daemon, &target_cascade, &interaction, answer)
                 .await
         {
             return Delivery::Completed(None);
@@ -1299,5 +1395,61 @@ fn read_disk_summaries(home: &std::path::Path) -> BTreeMap<String, Value> {
         out.insert(id, summary);
     }
     out
+}
+
+fn child_subagents(steps: &[Value]) -> Vec<(String, Option<String>)> {
+    let mut seen = HashSet::new();
+    let mut children = Vec::new();
+    for step in steps {
+        if step["type"].as_str() != Some("CORTEX_STEP_TYPE_INVOKE_SUBAGENT") {
+            continue;
+        }
+        let Some(results) = step["invokeSubagent"]["results"].as_array() else {
+            continue;
+        };
+        let specs = step["invokeSubagent"]["subagents"].as_array();
+        for (idx, result) in results.iter().enumerate() {
+            let Some(id) = result["conversationId"].as_str() else {
+                continue;
+            };
+            if valid_id(id).is_err() || !seen.insert(id.to_owned()) {
+                continue;
+            }
+            let role = specs
+                .and_then(|rows| rows.get(idx))
+                .and_then(|spec| spec["role"].as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            children.push((id.to_owned(), role));
+        }
+    }
+    children
+}
+
+fn read_disk_subagents(home: &std::path::Path, parent_id: &str) -> Vec<String> {
+    let db_path = home.join("conversation_summaries.db");
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return Vec::new();
+    };
+    let _ = conn.busy_timeout(Duration::from_millis(300));
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT conversation_id FROM conversation_summaries
+         WHERE parent_conversation_id = ?1 AND killed = 0
+         ORDER BY last_modified_time DESC
+         LIMIT 32",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map([parent_id], |row| row.get::<_, String>(0))
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|id| valid_id(id).is_ok())
+        .collect()
 }
 

@@ -400,12 +400,19 @@ impl<'a> GenericPermissionApproval<'a> {
         .find_map(|value| visible_text(value, 4_096, true));
 
         let bypass = bypass_sandbox(step);
+        let is_url = action == Some("execute_url");
         let mut lines = Vec::new();
-        if let Some(action) = action {
+        if let Some(action) = action
+            && !is_url
+        {
             lines.push(format!("操作：{action}"));
         }
         if let Some(target) = target {
-            lines.push(format!("目标：{}", decode_file_path(target)));
+            lines.push(format!(
+                "{}{}",
+                if is_url { "网址：" } else { "目标：" },
+                decode_file_path(target)
+            ));
         }
         if let Some(reason) = reason {
             lines.push(format!("说明：{reason}"));
@@ -418,6 +425,8 @@ impl<'a> GenericPermissionApproval<'a> {
         }
         let title = if bypass {
             "Antigravity 权限审批（绕过沙箱）"
+        } else if is_url {
+            "允许在网页执行操作"
         } else {
             "Antigravity 权限审批"
         };

@@ -418,7 +418,9 @@ mod tests {
         let body = request.into_body().collect().await.unwrap().to_bytes();
         let mut fixture = fixture.lock().unwrap();
         let response = match method.as_str() {
-            "GetCapabilities" | "ListProjects" | "ReadProjects" => data(json!({})),
+            "GetCapabilities" | "ListProjects" | "ReadProjects" | "GetCascadeModelConfigData" => {
+                data(json!({}))
+            }
             "GetAllCascadeTrajectories" => data(json!({"trajectorySummaries": {
                 THREAD:{"summary":"Synthetic large conversation","trajectoryId":fixture.trajectory,"stepCount":fixture.total},
             }})),

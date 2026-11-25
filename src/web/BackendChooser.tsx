@@ -1,10 +1,11 @@
-import { defineAsyncComponent, shallowRef, Suspense } from 'vue';
+import { shallowRef } from 'vue';
 import { tsxComponent } from './tsx-component';
 import { watchRender } from './render-effects';
 import { ComputerSetupGuide, WorkbenchAccountAccess } from './shell/ComputerSetup';
 import { PageHeader } from './shell/PageHeader';
 import { Icon } from './Icon';
 import { BackendIcon } from './BackendIcon';
+import BackendAppearanceEditor from './BackendAppearanceEditor';
 import { deviceSession, type DeviceOverview } from './device-session';
 import { messaging, useMessaging } from './messaging/context';
 import { syncAccountHosts } from './account-session';
@@ -17,7 +18,6 @@ import type { AccountDesktop } from '../shared/desktop-authorization';
 import { backendAppearanceDefaults } from '../shared/backend-appearance';
 import './shell/workbench.css';
 
-const BackendAppearanceEditor = defineAsyncComponent(() => import('./BackendAppearanceEditor'));
 type Action = 'rename' | 'details' | 'remove';
 const empty: DeviceOverview = { online: null, toolsChecked: false, backends: [], recent: [] };
 
@@ -461,10 +461,11 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
                         <button
                           class="icon-button computer-tool-settings"
                           aria-label={`编辑 ${appearance.name}`}
+                          title={`编辑 ${appearance.name} 外观`}
                           disabled={busy || working.value}
                           onClick={() =>
                             void run(async () => {
-                              if (deviceSession.host?.hostId !== hostId)
+                              if (deviceSession.host?.hostId !== hostId || !deviceSession.online)
                                 await deviceSession.select(host, true);
                               if (deviceSession.host?.hostId === hostId)
                                 editing.value = { hostId, backendId: backend.id, product: backend.product };
@@ -571,25 +572,17 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
           </p>
         )}
         {editing.value && editing.value.hostId === deviceSession.host?.hostId && (
-          <Suspense timeout={0}>
-            {{
-              fallback: () => <p role="status">正在打开设置…</p>,
-              default: () =>
-                editing.value ? (
-                  <BackendAppearanceEditor
-                    key={JSON.stringify(editing.value)}
-                    id={editing.value.backendId}
-                    product={editing.value.product}
-                    onClose={() => {
-                      editing.value = undefined;
-                    }}
-                    onSaved={() => {
-                      refresh.value++;
-                    }}
-                  />
-                ) : null,
+          <BackendAppearanceEditor
+            key={JSON.stringify(editing.value)}
+            id={editing.value.backendId}
+            product={editing.value.product}
+            onClose={() => {
+              editing.value = undefined;
             }}
-          </Suspense>
+            onSaved={() => {
+              refresh.value++;
+            }}
+          />
         )}
       </main>
     );

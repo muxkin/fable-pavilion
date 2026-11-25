@@ -245,7 +245,25 @@ impl Adapter for Backend {
                     };
                     Some(model)
                 } else {
-                    None
+                    // Always send an explicit planModel so Antigravity never rejects
+                    // execution after compaction with "plan model not specified".
+                    let current = view.thread["model"]
+                        .as_str()
+                        .filter(|id| !id.is_empty());
+                    match current {
+                        Some(id) => self.native_model(id).await.ok(),
+                        None => None,
+                    }
+                    .or_else(|| None)
+                };
+                let native_model = match native_model {
+                    Some(model) => Some(model),
+                    None => self
+                        .model_catalog()
+                        .await
+                        .into_iter()
+                        .next()
+                        .map(|m| json!(m.native)),
                 };
                 let Ok(staged) = media::stage_uploads(&files).await else {
                     return Delivery::Rejected("Antigravity 附件无效、已变化或超过限制");
@@ -412,6 +430,8 @@ impl Adapter for Backend {
                         return Delivery::Rejected("模型不在 Antigravity 目录中");
                     };
                     config = json!({"plannerConfig":{"planModel":model}});
+                } else if let Some(default_model) = self.model_catalog().await.into_iter().next() {
+                    config = json!({"plannerConfig":{"planModel":default_model.native}});
                 }
                 let Ok(staged) = media::stage_uploads(&files).await else {
                     return Delivery::Rejected("Antigravity 附件无效、已变化或超过限制");

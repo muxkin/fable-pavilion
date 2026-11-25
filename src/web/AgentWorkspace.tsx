@@ -1897,8 +1897,25 @@ export default tsxComponent(function AgentWorkspace(_props: {
                                   type="button"
                                   class="composer-queue-send"
                                   onClick={() => {
-                                    void act('queue-remove', { messageId: item.id }).then((opId) => {
-                                      if (opId && operationSnapshots.current.get(opId)?.state === 'completed') {
+                                    void (async () => {
+                                      const opId = await act('queue-remove', { messageId: item.id });
+                                      if (!opId) return;
+                                      let state = operationSnapshots.current.get(opId)?.state;
+                                      const deadline = Date.now() + 5000;
+                                      while (
+                                        (state === 'received' || state === 'dispatching' || state === 'accepted') &&
+                                        Date.now() < deadline
+                                      ) {
+                                        await new Promise((resolve) => setTimeout(resolve, 180));
+                                        try {
+                                          const fresh = await api<Operation>(`/operations/${opId}`);
+                                          receiveOperation(fresh);
+                                          state = fresh.state;
+                                        } catch {
+                                          state = operationSnapshots.current.get(opId)?.state;
+                                        }
+                                      }
+                                      if (state === 'completed') {
                                         void act('send', undefined, {
                                           text: item.text,
                                           uploads: [],
@@ -1906,7 +1923,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
                                           plugins: [],
                                         });
                                       }
-                                    });
+                                    })();
                                   }}
                                 >
                                   立即发送

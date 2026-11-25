@@ -1,5 +1,15 @@
 # 更新记录
 
+## 1.0.12 — 2026-11-25
+
+- **Antigravity 发消息卡暂停队列与「立即发送」修复**：修复未手动切换模型时 `SendUserCascadeMessage` 未携带 `planModel` 导致 Antigravity 上下文压缩后报 `plan model not specified` 并将消息滞留在「排队消息 · 队列已暂停待发」的问题；同步修复点击「立即发送」在 `queue-remove` 尚处 `dispatching` 时误判未完成而丢弃后续发送的缺陷。
+- **Antigravity 子代理权限审批透出**：支持在父会话中透出活跃子代理（如浏览器子代理）的待处理权限请求（含 `execute_url` 网页操作审批）并带子代理角色前缀展示，批准或拒绝时校验父子归属并直接回传至对应子代理执行。
+- **工作台工具外观编辑按钮修复**：移除包裹 `<Dialog>` 的 `<Suspense>` 异步壳并在打开前校验主机连接状态，补齐按钮悬浮提示与工具行右侧按钮对齐，同时取消 `backends.appearance.read` 的陈旧缓存。
+
+## Rust 桌面适配器 1.0.12 — 2026-11-25
+
+- **Antigravity 必传模型参数与子代理交互路由**：`antigravity/adapter.rs` 在 `Write::Send` 与 `Write::Create` 未显式指定模型时自动回退至当前会话模型或模型目录首项；`antigravity.rs`、`antigravity/interactions.rs` 与 `antigravity/interactions/approvals.rs` 新增子代理待审批请求聚合（`antigravity-sub:{sub_id}:{step_index}`）、父子归属校验及 `execute_url` 清晰文案展示。
+
 ## 1.0.11 — 2026-11-25
 
 - **Antigravity 历史会话与项目计数完整恢复**：修复 Antigravity 桌面端重启后仅返回内存已打开会话，导致「最近」会话缺失且多个已有项目错误显示 `0`（此项目暂无会话）的问题；同步按最近会话活动时间排序项目列表，并支持点击任意历史会话即时加载。
