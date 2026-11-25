@@ -376,6 +376,28 @@ impl Response {
     }
 
     #[cfg(feature = "official-plugins")]
+    pub fn async_reply_text(&self, view: &View) -> Result<String> {
+        let shown = view.thread["requests"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|request| request["id"] == self.target_request_id)
+            .context("此请求已处理或过期")?;
+        ensure!(
+            shown["kind"] == "async-question"
+                && shown["turnId"] == self.expected_turn_id
+                && shown["fingerprint"] == self.expected_fingerprint
+                && shown["actionable"] == true,
+            "请求内容已变化，请重新核对"
+        );
+        ensure!(
+            view.thread["pendingRequests"] == 0,
+            "桌面正在等待另一项交互"
+        );
+        self.async_reply(shown)
+    }
+
+    #[cfg(feature = "official-plugins")]
     fn async_reply(&self, shown: &Value) -> Result<String> {
         let answers = self.checked_answers(shown)?;
         ensure!(
@@ -872,4 +894,223 @@ pub fn asynchronous(turns: &[&Value]) -> Vec<Value> {
         Some(json!({"id":format!("async:{item}"),"turnId":turn,"kind":"async-question","title":"Codex 需要你的回答",
             "description":"","actionable":true,"questions":questions,"fingerprint":hash(&json!([turn,item,questions]).to_string())}))
     }).collect()
+}
+
+#[cfg(feature = "official-plugins")]
+pub fn rollout_async_questions(mut reader: impl std::io::BufRead) -> Vec<Value> {
+    let mut pending: BTreeMap<String, (String, Vec<Value>)> = BTreeMap::new();
+    let mut answered: HashSet<String> = HashSet::new();
+    let mut seen_turns: HashSet<String> = HashSet::new();
+    let mut record = |text: &str| {
+        let rows = replies(text);
+        for row in &rows {
+            if let Some(id) = row["questionItemId"].as_str() {
+                answered.insert(id.to_owned());
+            }
+        }
+        !rows.is_empty()
+    };
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let Ok(read) = reader.read_until(b'\n', &mut line) else {
+            break;
+        };
+        if read == 0 {
+            break;
+        }
+        let Ok(raw) = std::str::from_utf8(&line) else {
+            continue;
+        };
+        if !raw.contains("\"questions\"")
+            && !raw.contains("send_user_message_question_reply")
+            && !raw.contains("\"UserMessage\"")
+        {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(raw) else {
+            continue;
+        };
+        if entry["type"] == "response_item"
+            && entry["payload"]["type"] == "message"
+            && entry["payload"]["role"] == "user"
+        {
+            if let Some(parts) = entry["payload"]["content"].as_array() {
+                for part in parts {
+                    if let Some(text) = part["text"].as_str() {
+                        record(text);
+                    }
+                }
+            }
+            continue;
+        }
+        if entry["type"] != "event_msg" || entry["payload"]["type"] != "item_completed" {
+            continue;
+        }
+        let turn_id = entry["payload"]["turn_id"].as_str().unwrap_or_default();
+        let item = &entry["payload"]["item"];
+        match item["type"].as_str() {
+            Some("UserMessage") => {
+                let text = item["content"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|part| part["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let had_reply = record(&text);
+                if !had_reply
+                    && !text.trim().is_empty()
+                    && !turn_id.is_empty()
+                    && seen_turns.insert(turn_id.to_owned())
+                {
+                    pending.clear();
+                }
+            }
+            Some("AgentMessage") => {
+                if !turn_id.is_empty() {
+                    seen_turns.insert(turn_id.to_owned());
+                }
+                let Some(item_id) = item["id"].as_str() else {
+                    continue;
+                };
+                let Some(rows) = item["questions"]
+                    .as_array()
+                    .filter(|rows| (1..=20).contains(&rows.len()))
+                else {
+                    continue;
+                };
+                let questions: Vec<_> = rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, row)| {
+                        let title = row["title"].as_str().filter(|text| bounded(text, 16_000))?;
+                        let options: Vec<_> = row["options"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(|label| json!({"label":label,"description":""}))
+                            .collect();
+                        Some(json!({
+                            "id": json!(["request_user_input_async", item_id, index]).to_string(),
+                            "header": format!("问题 {}", index + 1),
+                            "question": title,
+                            "options": options,
+                        }))
+                    })
+                    .collect();
+                if questions.len() == rows.len() {
+                    pending.insert(item_id.to_owned(), (turn_id.to_owned(), questions));
+                }
+            }
+            _ => {}
+        }
+    }
+    pending
+        .into_iter()
+        .filter_map(|(item, (turn, mut questions))| {
+            questions.retain(|question| {
+                question["id"]
+                    .as_str()
+                    .is_some_and(|id| !answered.contains(id))
+            });
+            if questions.is_empty() || json!(questions).to_string().len() > 100_000 {
+                return None;
+            }
+            Some(json!({
+                "id": format!("async:{item}"),
+                "turnId": turn,
+                "kind": "async-question",
+                "title": "Codex 需要你的回答",
+                "description": "",
+                "actionable": true,
+                "questions": questions,
+                "fingerprint": hash(&json!([turn, item, questions]).to_string()),
+            }))
+        })
+        .collect()
+}
+
+#[cfg(all(test, feature = "official-plugins"))]
+mod rollout_question_tests {
+    use super::*;
+
+    #[test]
+    fn rollout_async_questions_surfaces_unanswered_and_clears_on_reply_or_new_turn() {
+        let ask = json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "turn-1",
+                "item": {
+                    "type": "AgentMessage",
+                    "id": "call_abc",
+                    "delivery": "async",
+                    "questions": [{
+                        "title": "Include hard queue?",
+                        "options": ["Keep to standard steps", "Include hard problems"]
+                    }]
+                }
+            }
+        });
+        let steer_same_turn = json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "turn-1",
+                "item": {
+                    "type": "UserMessage",
+                    "content": [{"type": "text", "text": "still running?"}]
+                }
+            }
+        });
+        let pending_rollout = format!("{ask}\n{steer_same_turn}\n");
+        let found = rollout_async_questions(pending_rollout.as_bytes());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0]["id"], "async:call_abc");
+        assert_eq!(found[0]["kind"], "async-question");
+        assert_eq!(found[0]["turnId"], "turn-1");
+        assert_eq!(found[0]["questions"][0]["question"], "Include hard queue?");
+        assert_eq!(
+            found[0]["questions"][0]["id"],
+            json!(["request_user_input_async", "call_abc", 0]).to_string()
+        );
+
+        let reply_text = format!(
+            "{PREFIX}{}{SUFFIX}",
+            json!([{
+                "questionItemId": json!(["request_user_input_async", "call_abc", 0]).to_string(),
+                "question": "Include hard queue?",
+                "answer": "Keep to standard steps"
+            }])
+        );
+        let reply = json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "turn-1",
+                "item": {
+                    "type": "UserMessage",
+                    "content": [{"type": "text", "text": reply_text}]
+                }
+            }
+        });
+        let answered_rollout = format!("{ask}\n{reply}\n");
+        assert!(rollout_async_questions(answered_rollout.as_bytes()).is_empty());
+
+        let next_turn = json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "turn-2",
+                "item": {
+                    "type": "UserMessage",
+                    "content": [{"type": "text", "text": "new task"}]
+                }
+            }
+        });
+        let next_turn_rollout = format!("{ask}\n{next_turn}\n");
+        assert!(rollout_async_questions(next_turn_rollout.as_bytes()).is_empty());
+    }
 }

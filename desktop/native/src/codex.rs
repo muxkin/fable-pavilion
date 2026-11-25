@@ -572,6 +572,17 @@ impl History {
         }))
     }
 
+    #[cfg(feature = "official-plugins")]
+    pub(crate) fn rollout_async_questions(&self, thread: Uuid) -> Vec<Value> {
+        let Ok((_, path)) = self.media_context(thread) else {
+            return Vec::new();
+        };
+        let Ok(file) = self.open_rollout(&path) else {
+            return Vec::new();
+        };
+        crate::requests::rollout_async_questions(BufReader::new(file))
+    }
+
     pub fn open_rollout(&self, path: &Path) -> Result<File> {
         use crate::history_media::HistoryUnavailable;
 

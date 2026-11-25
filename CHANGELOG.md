@@ -1,5 +1,16 @@
 # 更新记录
 
+## 1.0.8 — 2026-11-25
+
+- **新版 Codex 异步提问（Question 卡片）接入**：新版 Codex 桌面发起 `request_user_input_async` 异步提问时，工作台完整展示问题卡片与选项，并支持直接点选或自定义回复提交给 Codex 桌面。
+- **Antigravity 即时追加与排队消息区分**：修复运行中发送即时追加指令（`NEXT_INVOCATION`）被误显示为「排队消息 · 当前任务结束后自动发送」的问题，运行期间仅真正的 `WHEN_IDLE` 排队消息会出现在排队栏。
+- **侧栏会话标题实时同步**：工作台实时同步回传真实会话标题后，自动回写左侧会话列表，不再停留在「未命名会话」。
+
+## Rust 桌面适配器 1.0.8 — 2026-11-25
+
+- **Codex `desktop_tools` 异步提问解析与回复**：新增 `requests::rollout_async_questions` 从会话 rollout 提取未回答的 `AgentMessage.questions`，在 `desktop_tools` 通道开放 `questions`/`respond` 能力并通过官方 `send_message_to_thread` 回传 `<send_user_message_question_reply>`。
+- **Antigravity 队列快照策略过滤**：`antigravity/queue.rs` 在任务运行中过滤非 `WHEN_IDLE` 的即时追加消息，空闲/暂停状态仍完整保留未消费消息以免遗漏。
+
 ## 1.0.7 — 2026-11-24
 
 - **Antigravity 运行中带图/附件追加**：解除任务运行期间对图片与附件的发送拦截（不再提示「请等待当前任务结束后发送已添加的照片」），支持直接携带图片或附件向当前执行中的 Antigravity 会话追加指令。

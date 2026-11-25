@@ -260,7 +260,8 @@ fn read_view(
         .context("找不到本机会话")?;
     let mut thread = page["thread"].clone();
     ensure!(thread["id"] == json!(id), "历史会话与桌面会话不匹配");
-    let owner = app_server && activity.status != "notLoaded";
+    let requests = history.rollout_async_questions(id);
+    let owner = app_server && (activity.status != "notLoaded" || !requests.is_empty());
     thread["owner"] = json!(owner);
     thread["synchronized"] = json!(true);
     thread["runtimeStatus"] = json!(activity.status);
@@ -271,6 +272,7 @@ fn read_view(
     thread["textOnlySend"] = json!(!app_server);
     thread["canSendFileReferences"] = json!(true);
     thread["pendingRequests"] = json!(usize::from(activity.pending));
+    thread["requests"] = json!(requests);
     thread["canInterrupt"] = json!(app_server && activity.active_turn.is_some());
     if thread.get("mode").is_none_or(Value::is_null) {
         thread["mode"] = json!("default");
@@ -406,6 +408,25 @@ async fn execute_app_server(
         }
         Action::Steer { .. } => {
             send(stream, anchor, id, request, action, None).await
+        }
+        Action::Respond { response } => {
+            let reply_text = match response.async_reply_text(view) {
+                Ok(text) => text,
+                Err(error) => return Outcome::Rejected(error.to_string()),
+            };
+            let Ok(activity) = read_status(stream, anchor, id, true).await else {
+                return Outcome::Rejected("未确认 Codex 当前会话可以回复，请刷新后重试".into());
+            };
+            if activity.pending || (!activity.can_send && !activity.can_steer()) {
+                return Outcome::Rejected("当前 Codex 会话暂不可回复问题，请刷新后重试".into());
+            }
+            let args = json!({"threadId": id, "hostId": "local", "prompt": reply_text});
+            let result = app_tools::call(stream, anchor, request, Tool::SendMessage, args).await;
+            if result.is_ok_and(|value| value["threadId"] == json!(id)) {
+                Outcome::Completed(None)
+            } else {
+                Outcome::Uncertain
+            }
         }
         Action::Send { text, files, tools } | Action::FirstSend { text, files, tools } => {
             if first_send && (!view.turns.is_empty() || !view.messages.is_empty()) {

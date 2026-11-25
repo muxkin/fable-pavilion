@@ -78,6 +78,9 @@ impl Snapshot {
             if message["recipient"] != thread {
                 continue;
             }
+            if running && message["deliveryStrategy"] != WHEN_IDLE {
+                continue;
+            }
             let Some(encoded) = message["stepPayload"].as_str() else {
                 continue;
             };

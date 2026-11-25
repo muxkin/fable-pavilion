@@ -810,3 +810,51 @@ fn queue_snapshot_retains_paused_non_when_idle_user_messages() {
     assert_eq!(queued[0]["status"], "paused");
     assert!(queued[0]["reason"].as_str().is_some());
 }
+
+#[test]
+fn queue_snapshot_excludes_running_immediate_steer_messages() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let encode = |text: &str| {
+        let b = text.as_bytes();
+        let mut item = vec![0x0a, b.len() as u8];
+        item.extend_from_slice(b);
+        let mut user_input = vec![0x1a, item.len() as u8];
+        user_input.extend_from_slice(&item);
+        let mut step = vec![0x9a, 0x01, user_input.len() as u8];
+        step.extend_from_slice(&user_input);
+        STANDARD.encode(&step)
+    };
+    let frame = json!({
+        "update": {
+            "conversationId": "thread-1",
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "mainTrajectoryUpdate": {},
+            "pendingAgentMessagesUpdate": {
+                "totalLength": 2,
+                "indices": [0, 1],
+                "pendingAgentMessages": [
+                    {
+                        "id": "steer-1",
+                        "recipient": "thread-1",
+                        "deliveryStrategy": "MESSAGE_DELIVERY_STRATEGY_NEXT_INVOCATION",
+                        "stepPayload": encode("立即追加"),
+                    },
+                    {
+                        "id": "queue-1",
+                        "recipient": "thread-1",
+                        "deliveryStrategy": "MESSAGE_DELIVERY_STRATEGY_WHEN_IDLE",
+                        "stepPayload": encode("排队消息"),
+                    }
+                ]
+            }
+        }
+    });
+    let snapshot = queue::Snapshot::from_frame(&frame, "thread-1").unwrap();
+    let mut view = json!({});
+    snapshot.display(&mut view);
+    let queued = view["queuedMessages"].as_array().unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0]["id"], "queue-1");
+    assert_eq!(queued[0]["text"], "排队消息");
+    assert_eq!(queued[0]["status"], "queued");
+}

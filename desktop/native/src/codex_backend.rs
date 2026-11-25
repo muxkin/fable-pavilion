@@ -830,7 +830,7 @@ pub(crate) fn status(available: Availability, transport: Option<LiveTransport>) 
         "writesEnabled":connected,"reason":reason,
         "capabilities":{
             "send":online,"steer":steer,"interrupt":interrupt,"modelSettings":model_settings,
-            "questions":full_control,"approvals":full_control,"permissionRequests":full_control,
+            "questions":full_control || app_server,"approvals":full_control,"permissionRequests":full_control,
             "openThread":open,"elicitationForms":full_control,
             "newThread":available.create,"queue":full_control,
             "renameThread":available.rename,"forkThread":available.fork,"forkFromTurn":available.fork_reply,
@@ -866,7 +866,7 @@ pub(crate) fn info(available: Availability, transport: Option<LiveTransport>) ->
         ("send", online),
         ("steer", status["capabilities"]["steer"] == true),
         ("interrupt", status["capabilities"]["interrupt"] == true),
-        ("respond", full_control),
+        ("respond", full_control || status["capabilities"]["questions"] == true),
         ("settings", status["capabilities"]["modelSettings"] == true),
         ("queue", full_control),
         ("create", available.create),
@@ -946,6 +946,14 @@ mod connection_tests {
         assert_eq!(
             status(available, Some(app_server))["capabilities"]["modelSettings"],
             true
+        );
+        assert_eq!(
+            status(available, Some(app_server))["capabilities"]["questions"],
+            true
+        );
+        assert_eq!(
+            info(available, Some(app_server)).unwrap()["capabilities"]["respond"]["state"],
+            "supported"
         );
         assert_eq!(
             [app_tools, app_server, LiveTransport::Follower]

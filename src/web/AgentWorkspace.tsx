@@ -808,6 +808,28 @@ export default tsxComponent(function AgentWorkspace(_props: {
                   }
                   viewRef.current = data.thread;
                   setView(data.thread);
+                  if (data.thread.title && data.thread.title !== '未命名会话') {
+                    const liveTitle = data.thread.title;
+                    const liveUpdated = data.thread.updatedAt;
+                    setThreads((old) => {
+                      const idx = old.findIndex((item) => item.id === data.thread.id);
+                      if (idx < 0) return old;
+                      const current = old[idx];
+                      if (current.title === liveTitle && current.updatedAt >= liveUpdated) return old;
+                      const next = old.slice();
+                      next[idx] = {
+                        ...current,
+                        title: liveTitle,
+                        updatedAt: Math.max(current.updatedAt, liveUpdated),
+                      };
+                      return next;
+                    });
+                    updateSelected((old) =>
+                      old?.id === data.thread.id && old.title !== liveTitle
+                        ? { ...old, title: liveTitle, updatedAt: Math.max(old.updatedAt, liveUpdated) }
+                        : old,
+                    );
+                  }
                   setThreadError('');
                 } else if (data.type === 'error') setThreadError(data.message);
                 else if (data.type === 'operation') receiveOperation(data.operation);
