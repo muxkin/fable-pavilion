@@ -27,7 +27,6 @@ const TerminalWorkspace = lazy(() => import('../terminal/TerminalWorkspace'));
 const MessagingPages = lazy(() => import('../messaging/MessagingPages'));
 import MePages from './MePages';
 import { useSoftwareUpdates } from './software-updates';
-import { hasMessagingDrafts, subscribeDrafts } from '../messaging/drafts';
 import { PageBoundary, PageLoading } from './PageBoundary';
 import { AccountSecurity } from '../messaging/AccountSecurity';
 import { TrustedInvitationReceiver } from '../messaging/TrustedLogin';
@@ -111,7 +110,6 @@ export default tsxComponent(function AuthenticatedShell() {
   const setBusy = writeRef(busyState);
   const workbenchUpdateBlocked = shallowRef(false);
   const setWorkbenchUpdateBlocked = writeRef(workbenchUpdateBlocked);
-  const messagingUpdateBlocked = useExternalSnapshot(subscribeDrafts, hasMessagingDrafts);
   const readSoftwareUpdates = useSoftwareUpdates();
   const errorState = shallowRef('');
   const setError = writeRef(errorState);
@@ -589,7 +587,7 @@ export default tsxComponent(function AuthenticatedShell() {
                                   navigate={navigate}
                                   back={back}
                                   software={software}
-                                  updateBlocked={workbenchUpdateBlocked.value || messagingUpdateBlocked.value}
+                                  updateBlocked={workbenchUpdateBlocked.value}
                                 />
                               </>
                             )}
@@ -612,7 +610,7 @@ export default tsxComponent(function AuthenticatedShell() {
                 <WebsiteUpdateNotice
                   available={software.website}
                   buildId={software.websiteBuildId}
-                  blocked={workbenchUpdateBlocked.value || messagingUpdateBlocked.value}
+                  blocked={workbenchUpdateBlocked.value}
                   hidden={route.page === 'downloads'}
                 />
                 {user && <TrustedLoginNotice openSecurity={() => navigate({ page: 'login-security' })} />}

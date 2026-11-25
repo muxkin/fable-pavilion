@@ -223,8 +223,27 @@ jobs:
         run: |
           set -euo pipefail
           mount=$(mktemp -d)
-          hdiutil attach dist/desktop-native-preview/*.dmg -readonly -nobrowse -mountpoint "$mount"
-          trap 'hdiutil detach "$mount"; rmdir "$mount"' EXIT
+          attach_ok=0
+          for attempt in 1 2 3 4 5; do
+            if hdiutil attach dist/desktop-native-preview/*.dmg -readonly -nobrowse -mountpoint "$mount"; then
+              attach_ok=1
+              break
+            fi
+            sleep "$attempt"
+          done
+          test "$attach_ok" -eq 1
+          cleanup_mount() {
+            for attempt in 1 2 3 4 5; do
+              if hdiutil detach "$mount"; then
+                rmdir "$mount" 2>/dev/null || true
+                return 0
+              fi
+              sleep "$attempt"
+            done
+            hdiutil detach -force "$mount" || true
+            rmdir "$mount" 2>/dev/null || true
+          }
+          trap cleanup_mount EXIT
           app="$mount/Agent Space Adapter.app"
           test -L "$mount/Applications"
           codesign --verify --deep --strict "$app"

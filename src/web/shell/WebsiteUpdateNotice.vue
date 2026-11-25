@@ -22,10 +22,10 @@ function dismiss() {
 <template>
   <aside v-if="visible" class="website-update-notice" aria-label="网页版本更新提示">
     <span role="status">
-      {{ blocked ? '发现新版本，完成当前操作后可刷新' : '发现新版本，刷新即可生效' }}
+      {{ blocked ? '发现新版本，刷新会中断当前上传或语音' : '发现新版本，刷新即可生效' }}
     </span>
     <div class="website-update-actions">
-      <button type="button" class="website-update-primary" :disabled="blocked" @click="refreshWebsite">
+      <button type="button" class="website-update-primary" @click="refreshWebsite">
         立即刷新
       </button>
       <button type="button" class="website-update-dismiss" @click="dismiss">稍后</button>

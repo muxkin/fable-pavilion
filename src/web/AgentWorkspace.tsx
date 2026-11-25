@@ -1452,18 +1452,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
     watchBusy(() => {
       onBusy(busy || uploading || pending);
     }, [busy, uploading, pending, onBusy]);
-    const updateBlocked =
-      newDirty ||
-      drafts.hasDraft ||
-      !!questionDrafts.size ||
-      !!selectedSkills.length ||
-      !!selectedPlugins.length ||
-      settingsDirty ||
-      pickerDirty ||
-      busy ||
-      uploading ||
-      pending ||
-      voiceOpen;
+    const updateBlocked = uploading || voiceOpen;
     watchUpdateBlocked(() => onUpdateBlocked(updateBlocked), [updateBlocked, onUpdateBlocked]);
     if (loading)
       return (

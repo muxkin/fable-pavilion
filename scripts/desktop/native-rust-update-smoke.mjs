@@ -56,12 +56,32 @@ async function digest(path) {
 }
 
 async function mountedMacApp(image, mount, action) {
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await mkdir(mount);
-  await run('hdiutil', ['attach', image, '-readonly', '-nobrowse', '-mountpoint', mount]);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await run('hdiutil', ['attach', image, '-readonly', '-nobrowse', '-mountpoint', mount]);
+      break;
+    } catch (error) {
+      if (attempt >= 5) throw error;
+      await delay(attempt * 1000);
+    }
+  }
   try {
     return await action(join(mount, 'Agent Space Adapter.app'));
   } finally {
-    await run('hdiutil', ['detach', mount]);
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        await run('hdiutil', ['detach', mount]);
+        break;
+      } catch {
+        if (attempt === 5) {
+          await run('hdiutil', ['detach', '-force', mount]).catch(() => {});
+        } else {
+          await delay(attempt * 1000);
+        }
+      }
+    }
   }
 }
 

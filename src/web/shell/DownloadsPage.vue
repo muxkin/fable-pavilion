@@ -89,9 +89,9 @@ onUnmounted(() => installerRequests.abort());
     <section v-if="websiteUpdate" class="software-update" aria-labelledby="website-update-title">
       <div class="installer-info">
         <strong id="website-update-title">网页有更新</strong>
-        <small>{{ updateBlocked ? '请先处理草稿或完成正在进行的操作。' : '刷新后使用最新页面。' }}</small>
+        <small>{{ updateBlocked ? '当前有正在进行的上传或语音，仍可直接刷新。' : '刷新后使用最新页面，不影响电脑端任务执行。' }}</small>
       </div>
-      <button type="button" class="installer-download" :disabled="updateBlocked" @click="refreshWebsite">
+      <button type="button" class="installer-download" @click="refreshWebsite">
         刷新页面
       </button>
     </section>
