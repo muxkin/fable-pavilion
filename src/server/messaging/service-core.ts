@@ -429,6 +429,16 @@ export async function registerMessaging(app: MessagingHttp, config: MessagingCon
       return { ready: await desktops.ready(account, hostId, ticket) };
     });
     app.get('/desktop-devices', async (req) => ({ devices: await desktops.list(human(req).id) }));
+    app.patch('/desktop-devices/:id', async (req) => {
+      const { id } = z.object({ id: hostIdSchema }).parse(req.params);
+      const { accountId, name } = z
+        .object({ accountId: userId, name: desktopAuthorizationSchema.shape.name })
+        .parse(req.body);
+      const account = owner(req, accountId);
+      if (desktops.rename && !(await desktops.rename(account, id, name)))
+        throw new ChatError(404, '找不到这台电脑');
+      return { ok: true };
+    });
     app.delete('/desktop-devices/:id', async (req) => {
       const { id } = z.object({ id: hostIdSchema }).parse(req.params);
       const { accountId } = z.object({ accountId: userId }).parse(req.body);

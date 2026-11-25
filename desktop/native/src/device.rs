@@ -56,6 +56,8 @@ pub struct DeviceSession {
     backends: Backends,
     watches: HashMap<(String, Uuid), Watch>,
     plugin_watches: HashMap<(String, String), PluginWatch>,
+    usage_watches: HashMap<String, u64>,
+    usage_refresh_backends: std::collections::HashSet<String>,
     terminal_tasks: HashMap<String, tokio::task::JoinHandle<()>>,
     terminal_tx: mpsc::UnboundedSender<(Value, Vec<u8>)>,
     terminal_rx: Option<mpsc::UnboundedReceiver<(Value, Vec<u8>)>>,
@@ -101,6 +103,7 @@ struct Watch {
     published: Option<(Uuid, u64, Option<String>)>,
     versions: HashMap<String, [u8; 32]>,
     operations: HashMap<String, Value>,
+    was_running: bool,
 }
 
 struct PluginWatch {
@@ -109,6 +112,7 @@ struct PluginWatch {
     revision: Option<u64>,
     versions: HashMap<String, [u8; 32]>,
     operations: HashMap<String, Value>,
+    was_running: bool,
 }
 
 // Accepted storage jobs outlive a closed read connection, holding their update lease
@@ -165,6 +169,8 @@ impl DeviceSession {
             backends,
             watches: HashMap::new(),
             plugin_watches: HashMap::new(),
+            usage_watches: HashMap::new(),
+            usage_refresh_backends: std::collections::HashSet::new(),
             terminal_tasks: HashMap::new(),
             terminal_tx,
             terminal_rx: Some(terminal_rx),
@@ -188,7 +194,10 @@ impl DeviceSession {
         let mut storage_jobs = StorageJobs(JoinSet::new());
         let mut upload_expiry = interval(Duration::from_secs(1));
         let mut desktop_probe = interval(Duration::from_secs(10));
+        let mut usage_tick = interval(Duration::from_secs(60));
+        usage_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut probing = JoinSet::new();
+        let mut usage_jobs: JoinSet<(String, Option<Value>)> = JoinSet::new();
         let mut terminal_rx = self
             .terminal_rx
             .take()
@@ -235,6 +244,29 @@ impl DeviceSession {
                     self.ensure_device()?;
                     self.publish(io).await?;
                     self.publish_plugins(io).await?;
+                    for backend in self.usage_refresh_backends.drain().collect::<Vec<_>>() {
+                        if self.usage_watches.contains_key(&backend) {
+                            self.spawn_usage_fetch(&mut usage_jobs, backend, true);
+                        }
+                    }
+                }
+                _ = usage_tick.tick(), if !self.bulk && !self.usage_watches.is_empty() => {
+                    for backend in self.usage_watches.keys().cloned().collect::<Vec<_>>() {
+                        self.spawn_usage_fetch(&mut usage_jobs, backend, false);
+                    }
+                }
+                Some(result) = usage_jobs.join_next(), if !usage_jobs.is_empty() => {
+                    if let Ok((backend, Some(value))) = result
+                        && self.usage_watches.contains_key(&backend)
+                    {
+                        self.ensure_device()?;
+                        let state = if value["available"] == true { "current" } else { "unavailable" };
+                        reply(io, json!({
+                            "type": "usage",
+                            "backendId": backend,
+                            "snapshot": { "state": state, "value": value },
+                        })).await?;
+                    }
                 }
                 event = async {
                     let voice = self.voice.as_mut().expect("voice session");
@@ -344,6 +376,24 @@ impl DeviceSession {
                                 self.watches.remove(&(id.to_owned(), thread_id(&request["threadId"])?));
                             } else if let (Some(backend), Some(thread)) = (request["backendId"].as_str(), request["threadId"].as_str()) {
                                 self.plugin_watches.remove(&(backend.to_owned(), thread.to_owned()));
+                            }
+                            Ok(Some(json!({"ok": true})))
+                        }
+                        Some("usage-watch") if !self.bulk && bytes.is_empty() => {
+                            let backend = request["backendId"]
+                                .as_str()
+                                .filter(|id| !id.is_empty() && id.len() <= 128)
+                                .unwrap_or(CODEX)
+                                .to_owned();
+                            let watching = request["watching"].as_bool().unwrap_or(false);
+                            let version = request["version"].as_u64().unwrap_or(0);
+                            if watching {
+                                if self.usage_watches.get(&backend).copied().unwrap_or(0) <= version {
+                                    self.usage_watches.insert(backend.clone(), version);
+                                    self.spawn_usage_fetch(&mut usage_jobs, backend, false);
+                                }
+                            } else if self.usage_watches.get(&backend).copied().unwrap_or(0) <= version {
+                                self.usage_watches.remove(&backend);
                             }
                             Ok(Some(json!({"ok": true})))
                         }
@@ -482,6 +532,47 @@ impl DeviceSession {
             "设备已撤销"
         );
         Ok(())
+    }
+
+    fn spawn_usage_fetch(
+        &self,
+        jobs: &mut JoinSet<(String, Option<Value>)>,
+        backend: String,
+        refresh: bool,
+    ) {
+        if jobs.len() >= 6 {
+            return;
+        }
+        let query = if refresh {
+            json!({"refresh": "1"})
+        } else {
+            json!({})
+        };
+        if let Some(connector) = self.backends.codex.get(&backend) {
+            let connector = connector.clone();
+            let watched = self
+                .watches
+                .keys()
+                .find(|(id, _)| id == &backend)
+                .map(|(_, thread)| *thread);
+            jobs.spawn(async move {
+                let value = connector
+                    .read("usage.read", &json!({"id": watched}), &query, None)
+                    .await
+                    .ok()
+                    .flatten();
+                (backend, value)
+            });
+        } else if let Some(plugin) = self.backends.plugins.get(&backend) {
+            jobs.spawn(async move {
+                let value = plugin
+                    .read("usage.read", &Value::Null, &query)
+                    .await
+                    .ok()
+                    .flatten();
+                (backend, value)
+            });
+        }
     }
 
     fn live_transport(&self, backend: &str) -> Option<LiveTransport> {

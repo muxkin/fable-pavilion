@@ -31,6 +31,10 @@ impl ResetProofVerifier {
         })
     }
 
+    pub(crate) fn origin(&self) -> String {
+        self.endpoint.origin().ascii_serialization()
+    }
+
     pub(crate) fn admit(&self) -> Result<OwnedMutexGuard<()>, ResetError> {
         self.reset
             .clone()
@@ -58,7 +62,8 @@ impl ResetProofVerifier {
             .map_err(|_| ResetError::VerificationUnavailable)?;
         match result.status().as_u16() {
             204 => Ok(()),
-            400 | 401 | 403 | 404 | 409 | 410 => Err(ResetError::InvalidProof),
+            404 => Err(ResetError::Unavailable),
+            400 | 401 | 403 | 409 | 410 => Err(ResetError::InvalidProof),
             429 => Err(ResetError::RateLimited),
             _ => Err(ResetError::VerificationUnavailable),
         }
@@ -93,8 +98,8 @@ impl ResetError {
 impl std::fmt::Display for ResetError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidProof => "密码确认无效或已过期，请重新确认",
-            Self::VerificationUnavailable => "暂时无法验证密码确认，请重试",
+            Self::InvalidProof => "重置确认无效或已过期，请重新确认",
+            Self::VerificationUnavailable => "暂时无法验证重置确认，请重试",
             Self::Unavailable => "当前 Codex 实例不支持重置用量",
             Self::Disabled => "请先在 Codex 桌面的用量设置中允许 Codex 使用重置次数",
             Self::ChatGptRequired => "此操作需要 Codex 桌面登录 ChatGPT 账号",
@@ -120,8 +125,8 @@ pub(crate) enum ResetOutcome {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct ResetResult {
-    outcome: ResetOutcome,
-    usage: Option<Value>,
+    pub(crate) outcome: ResetOutcome,
+    pub(crate) usage: Option<Value>,
 }
 
 impl crate::state::Store {
@@ -186,18 +191,23 @@ impl Usage {
         }
     }
 
-    pub async fn read(&self, anchor: Uuid) -> Value {
+    pub async fn read(&self, anchor: Uuid, force_refresh: bool) -> Value {
         let mut cache = self.cached.lock().await;
-        if let Some((time, value)) = &*cache {
-            if time.elapsed() < Duration::from_secs(30) {
-                return value.clone();
-            }
+        if !force_refresh
+            && let Some((time, value)) = &*cache
+            && time.elapsed() < Duration::from_secs(30)
+        {
+            return value.clone();
         }
-        let value = match timeout(Duration::from_secs(5), self.fetch(anchor)).await {
+        let value = match timeout(Duration::from_secs(15), self.fetch(anchor)).await {
             Ok(Ok(value)) => value,
             _ => unavailable("本机桌面用量暂不可用"),
         };
-        *cache = Some((Instant::now(), value.clone()));
+        if value["available"] == true {
+            *cache = Some((Instant::now(), value.clone()));
+        } else {
+            *cache = None;
+        }
         value
     }
 

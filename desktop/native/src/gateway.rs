@@ -527,7 +527,7 @@ async fn serve(
         json!({
             "type": "ready", "protocol": 2, "sessionId": session,
             "device": {"id": device.id, "name": device.name}, "ticket": device.ticket,
-            "hostName": "Agent 空间 · 原生", "status": backends.codex.main().status(None),
+            "hostName": "子虚亭电脑", "status": backends.codex.main().status(None),
             "p2p": {"enabled": backends.direct.is_some(), "stunUrls": stun},
         }),
     )

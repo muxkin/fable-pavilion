@@ -3,7 +3,8 @@ import { tsxComponent } from '../tsx-component';
 import { Icon } from '../Icon';
 import type { IconName } from '../icon-paths';
 import { messaging } from './context';
-import { Confirm, Notice, errorText } from './ui';
+import { trustedDevices, type TrustedDevicesState } from '../trusted-login';
+import { Confirm, Notice, errorText, type Navigate } from './ui';
 
 type Device = {
   id: string;
@@ -66,8 +67,9 @@ function recentlyActive(device: Device): boolean {
   return !!device.lastActiveAt && Date.now() - device.lastActiveAt <= 10 * 60_000;
 }
 
-export const LoginDevices = tsxComponent(function LoginDevices() {
+export const LoginDevices = tsxComponent(function LoginDevices(_props: { navigate?: Navigate }) {
   const devices = shallowRef<Device[]>();
+  const trusted = shallowRef<TrustedDevicesState | null>(null);
   const target = shallowRef<Device | 'others'>();
   const editingId = shallowRef<string | null>(null);
   const editValue = shallowRef('');
@@ -110,8 +112,15 @@ export const LoginDevices = tsxComponent(function LoginDevices() {
     }
   }
 
-  onMounted(() => void reload());
-  return () => {
+  onMounted(() => {
+    void reload();
+    void trustedDevices(controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) trusted.value = result;
+      })
+      .catch(() => {});
+  });
+  return ({ navigate }) => {
     const list = devices.value ?? [];
     const othersCount = list.filter((d) => !d.current).length;
     return (
@@ -194,8 +203,13 @@ export const LoginDevices = tsxComponent(function LoginDevices() {
                       <div class="login-device-heading">
                         <strong>{title}</strong>
                         {device.current && <span class="login-device-badge current">当前设备</span>}
+                        {device.current && trusted.value?.passkeysHere && (
+                          <span class="login-device-badge verified">通行密钥已启用</span>
+                        )}
                         {isRecent && <span class="login-device-badge active">刚刚活跃</span>}
-                        {device.verifiedAt && <span class="login-device-badge verified">安全已验</span>}
+                        {device.verifiedAt && !trusted.value?.passkeysHere && (
+                          <span class="login-device-badge verified">安全已验</span>
+                        )}
                       </div>
                     )}
                     <div class="login-device-meta">
@@ -217,6 +231,21 @@ export const LoginDevices = tsxComponent(function LoginDevices() {
                         {device.createdAt ? ` · 登录于 ${formatDateTime(device.createdAt)}` : ''}
                         {device.expiresAt ? ` · ${formatExpiry(device.expiresAt)}` : ''}
                       </span>
+                      {device.current &&
+                        trusted.value?.passkeyAvailable &&
+                        !trusted.value.passkeysHere &&
+                        navigate && (
+                          <span>
+                            此设备尚未添加通行密钥 ·{' '}
+                            <button
+                              type="button"
+                              class="text-button"
+                              onClick={() => navigate({ page: 'trusted-devices' })}
+                            >
+                              去添加
+                            </button>
+                          </span>
+                        )}
                     </div>
                   </div>
                   {!isEditing && (

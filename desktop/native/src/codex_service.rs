@@ -269,11 +269,10 @@ impl Local {
                 Ok(Some(json!({"projects":projects})))
             }
             "usage.read" => {
+                let refresh = query["refresh"].as_str() == Some("1");
                 let value = if let Some(desktop) = &self.desktop {
-                    match self.usage_anchor(&params["id"]).await? {
-                        Some(id) => desktop.usage.read(id).await,
-                        None => crate::usage::unavailable("暂无可用于查询用量的 Codex 会话"),
-                    }
+                    let anchor = self.usage_anchor(&params["id"]).await?.unwrap_or_else(Uuid::nil);
+                    desktop.usage.read(anchor, refresh).await
                 } else {
                     crate::usage::unavailable("本机桌面用量暂不可用")
                 };
@@ -308,7 +307,7 @@ impl Local {
             .usage_anchor(thread)
             .await
             .map_err(|_| ResetError::Unavailable)?
-            .ok_or(ResetError::Unavailable)?;
+            .unwrap_or_else(Uuid::nil);
         desktop.usage.reset(anchor, request).await
     }
 

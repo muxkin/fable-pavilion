@@ -45,6 +45,7 @@ export class MessagingHub extends DurableObject<Env> {
         list: (...args) => relay().listDesktops(...args),
         ready: (...args) => relay().desktopReady(...args),
         revoke: (...args) => relay().revokeDesktop(...args),
+        rename: (...args) => relay().renameDesktop(...args),
         listAll: () => relay().listAllDesktops(),
         revokeAny: (hostId) => relay().revokeAnyDesktop(hostId),
         migrateAccount: (fromId, toId) => relay().migrateDesktopAccount(fromId, toId),

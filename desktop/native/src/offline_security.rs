@@ -39,7 +39,8 @@ pub(crate) struct Document {
     pub(crate) origin: String,
     pub(crate) account: Account,
     pub(crate) revision: u64,
-    pub(crate) totp_secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) totp_secret: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) recovery_code: Option<String>,
 }
@@ -47,7 +48,9 @@ pub(crate) struct Document {
 impl Drop for Document {
     fn drop(&mut self) {
         use zeroize::Zeroize;
-        self.totp_secret.zeroize();
+        if let Some(secret) = self.totp_secret.as_mut() {
+            secret.zeroize();
+        }
         if let Some(code) = self.recovery_code.as_mut() {
             code.zeroize();
         }
@@ -84,7 +87,9 @@ impl Document {
                 "备份账号名称无效"
             );
         }
-        decode_secret(&document.totp_secret)?;
+        if let Some(secret) = &document.totp_secret {
+            decode_secret(secret)?;
+        }
         if let Some(code) = &document.recovery_code {
             ensure!(
                 code.len() == 44 && STANDARD.decode(code).is_ok_and(|b| b.len() == 32),
@@ -110,9 +115,15 @@ struct Summary {
     account: Account,
     revision: u64,
     updated_at: i64,
+    #[serde(default = "default_has_totp")]
+    has_totp: bool,
     recovery_backed_up: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     recovery_source: Option<String>,
+}
+
+fn default_has_totp() -> bool {
+    true
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -278,7 +289,7 @@ impl Vault {
                 .iter()
                 .find(|r| r.summary.key == account_key(origin, account))
         });
-        json!({"version":1,"supported":true,"saved":record.is_some(),"hasTotp":record.is_some(),
+        json!({"version":1,"supported":true,"saved":record.is_some(),"hasTotp":record.is_some_and(|r|r.summary.has_totp),
             "revision":record.map(|r|r.summary.revision),"hasRecovery":record.is_some_and(|r|r.summary.recovery_backed_up),
             "needsLocalUnlock":self.file.as_ref().is_some_and(|file|matches!(file.protection,Protection::Passphrase{..})) && self.unlocked.as_ref().is_none_or(|(_,until)|*until <= Instant::now())})
     }
@@ -447,6 +458,7 @@ impl Vault {
             account: document.account.clone(),
             revision: document.revision,
             updated_at: crate::state::now(),
+            has_totp: persisted.totp_secret.is_some(),
             recovery_backed_up: persisted.recovery_code.is_some(),
             recovery_source,
         };
@@ -484,7 +496,11 @@ impl Vault {
         let document = self.read(key)?;
         let now = crate::state::now();
         let counter = u64::try_from(now / 30_000)?;
-        let seed = decode_secret(&document.totp_secret)?;
+        let secret = document
+            .totp_secret
+            .as_deref()
+            .context("当前账号使用设备登录，未启用登录动态码")?;
+        let seed = decode_secret(secret)?;
         Ok(
             json!({"code":totp(&seed,counter,6),"expiresAt":(counter+1)*30_000,"account":document.account,"origin":document.origin}),
         )
@@ -690,7 +706,7 @@ mod tests {
         let key = document.key();
         vault.import(&document)?;
         let file = fs::read_to_string(directory.join(FILE))?;
-        assert!(!file.contains(&document.totp_secret));
+        assert!(!file.contains(document.totp_secret.as_deref().unwrap()));
         assert!(!file.contains(document.recovery_code.as_ref().unwrap()));
         drop(vault);
         let mut vault = Vault::with_credentials(&directory, Box::new(Memory(secret)))?;
@@ -716,7 +732,7 @@ mod tests {
         assert_eq!(vault.status()["protection"], "device");
         assert_eq!(vault.status()["locked"], false);
         let file = fs::read_to_string(directory.join(FILE))?;
-        assert!(!file.contains(&document.totp_secret));
+        assert!(!file.contains(document.totp_secret.as_deref().unwrap()));
         assert!(!file.contains(document.recovery_code.as_ref().unwrap()));
         let path = vault.device_key_path(vault.file.as_ref().unwrap().key_id);
         // This validates the actual owner-only ACL on Windows as well as POSIX modes.
@@ -967,6 +983,34 @@ mod tests {
         assert!(vault.code(&key).is_err());
         assert!(vault.code(&two.key()).is_ok());
         assert_eq!(vault.status()["accounts"].as_array().unwrap().len(), 1);
+        Ok(())
+    }
+    #[test]
+    fn device_only_document_without_totp_imports_and_backs_up_recovery() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut vault = Vault::with_credentials(
+            &temp.path().join("vault"),
+            Box::new(Memory(Default::default())),
+        )?;
+        let recovery = STANDARD.encode([77u8; 32]);
+        let raw = json!({
+            "version": 1,
+            "origin": "https://service.example",
+            "account": {"id": "10000000", "username": "owner", "displayName": "Owner"},
+            "revision": 2,
+            "recoveryCode": recovery,
+        })
+        .to_string();
+        let doc = Document::parse(&raw)?;
+        assert!(doc.totp_secret.is_none());
+        let key = doc.key();
+        vault.import(&doc)?;
+        let status = vault.remote_status(&doc.origin, &doc.account.id);
+        assert_eq!(status["saved"], true);
+        assert_eq!(status["hasTotp"], false);
+        assert_eq!(status["hasRecovery"], true);
+        assert!(vault.code(&key).is_err());
+        assert_eq!(vault.recovery(&key)?["recoveryCode"], recovery);
         Ok(())
     }
     #[test]

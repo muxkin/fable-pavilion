@@ -67,7 +67,16 @@ const envelope = z
     data: z.string().regex(/^[A-Za-z0-9+/]{64}$/),
   })
   .strict();
-const action = z.enum(['qr', 'revoke', 'enroll', 'totp-display', 'totp-provision', 'totp-add']);
+const action = z.enum([
+  'qr',
+  'revoke',
+  'enroll',
+  'totp-display',
+  'totp-provision',
+  'totp-add',
+  'usage-reset',
+  'recovery-rotate',
+]);
 const MAX_DEVICES = 12;
 const MAX_EVENTS = 100;
 const MAX_APPROVED_INVITES = 4;
@@ -189,6 +198,11 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
       credential_id TEXT NOT NULL, revision INTEGER NOT NULL, expires_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS im_trusted_enroll_grants_expiry ON im_trusted_enroll_grants(expires_at);
+    CREATE TABLE IF NOT EXISTS im_trusted_action_grants (
+      hash TEXT PRIMARY KEY, action TEXT NOT NULL, user_id TEXT NOT NULL, session_hash TEXT NOT NULL,
+      credential_id TEXT NOT NULL, revision INTEGER NOT NULL, expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS im_trusted_action_grants_expiry ON im_trusted_action_grants(expires_at);
     CREATE TABLE IF NOT EXISTS im_trusted_totp_grants (
       hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_hash TEXT NOT NULL,
       credential_id TEXT NOT NULL, revision INTEGER NOT NULL, expires_at INTEGER NOT NULL
@@ -227,6 +241,7 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
     ['invite', 'im_trusted_qr_invites', 'id'],
     ['ceremony', 'im_trusted_ceremonies', 'id'],
     ['enroll-grant', 'im_trusted_enroll_grants', 'hash'],
+    ['action-grant', 'im_trusted_action_grants', 'hash'],
     ['totp-grant', 'im_trusted_totp_grants', 'hash'],
   ] as const;
   type OriginKind = (typeof originTables)[number][0];
@@ -337,6 +352,7 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
     db.prepare('DELETE FROM im_trusted_logins WHERE expires_at<=?').run(now);
     db.prepare('DELETE FROM im_trusted_ceremonies WHERE expires_at<=?').run(now);
     db.prepare('DELETE FROM im_trusted_enroll_grants WHERE expires_at<=?').run(now);
+    db.prepare('DELETE FROM im_trusted_action_grants WHERE expires_at<=?').run(now);
     db.prepare('DELETE FROM im_trusted_totp_grants WHERE expires_at<=?').run(now);
     db.prepare('DELETE FROM im_authenticator_setups WHERE expires_at<=?').run(now);
     db.prepare('DELETE FROM im_external_setup_grants WHERE expires_at<=?').run(now);
@@ -722,6 +738,7 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
       passkeysHere: devices(user.id).some((row) => row.rp_id === originContext(req).rpId),
       totpAvailable,
       totpEnabled: totpAvailable && totp.enabled(user.id),
+      deviceOnly: d.deviceLoginOnly === true || !usesServerTotp(account),
       ...(d.deviceLoginOnly && { deviceLoginOnly: true }),
       devices: devices(user.id).map((row) => ({
         id: row.id,
@@ -745,14 +762,24 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
     if (!hasCredentials(user.id) && usesServerTotp(account)) requireTotpConfigured();
     take(`trusted-enroll:${user.id}`, 6);
     const body = z
-      .object({ name, auth: passwordProof.optional(), approval: tokenValue.optional() })
+      .object({
+        name,
+        auth: passwordProof.optional(),
+        recoveryAuth: passwordProof.optional(),
+        approval: tokenValue.optional(),
+      })
       .strict()
       .parse(req.body);
+    const deviceOnly = d.deviceLoginOnly === true || !usesServerTotp(account);
     const passwordHash = store.credentials(user.id)?.passwordHash;
-    const recent = !body.auth && !body.approval && store.recentlyVerified(user.id, sessionHash);
+    const recoveryHash = String(d.account(user.id)?.recovery_hash ?? '') || undefined;
+    const recent = !body.auth && !body.recoveryAuth && !body.approval && store.recentlyVerified(user.id, sessionHash);
+    const firstDeviceOnly = deviceOnly && !hasCredentials(user.id) && !body.auth && !body.recoveryAuth && !body.approval;
     if (body.auth && !(await d.verifyPassword(body.auth, passwordHash)))
       throw new ChatError(403, '密码不正确');
-    if (!recent && !body.auth && (!body.approval || !hasCredentials(user.id)))
+    if (body.recoveryAuth && !(await d.verifyPassword(body.recoveryAuth, recoveryHash)))
+      throw new ChatError(403, '恢复码不正确');
+    if (!recent && !firstDeviceOnly && !body.auth && !body.recoveryAuth && (!body.approval || !hasCredentials(user.id)))
       throw new ChatError(403, '请重新验证身份');
     const existing = devices(user.id);
     if (existing.length >= MAX_DEVICES) throw new ChatError(409, '可信设备数量已达上限');
@@ -774,7 +801,7 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
       stillActor(req, user.id, account.revision);
       if (store.credentials(user.id)?.passwordHash !== passwordHash) throw stale();
       let approvedBy: string | undefined;
-      if (hasCredentials(user.id) && (!recent || body.approval)) {
+      if (hasCredentials(user.id) && ((!recent && !body.recoveryAuth) || body.approval)) {
         if (!body.approval) throw new ChatError(403, '请先用已有可信设备批准添加设备');
         const hashed = digest(body.approval);
         const approval = db
@@ -792,8 +819,8 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
         approvedBy = String(approval.credential_id);
         db.prepare('DELETE FROM im_trusted_enroll_grants WHERE hash=?').run(hashed);
       }
-      if (!approvedBy && recent) {
-        if (!store.recentlyVerified(user.id, sessionHash)) throw stale();
+      if (!approvedBy && (recent || body.recoveryAuth)) {
+        if (recent && !store.recentlyVerified(user.id, sessionHash)) throw stale();
         approvedBy = devices(user.id)[0]?.credential_id as string | undefined;
       }
       const registration = startCeremony(req, current, 'register', options.challenge, approvedBy, body.name);
@@ -956,6 +983,20 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
       }
       if (verb === 'qr') {
         return approveQr(current, target, body.envelope!);
+      }
+      if (verb === 'usage-reset' || verb === 'recovery-rotate') {
+        const approval = secret();
+        db.prepare('INSERT INTO im_trusted_action_grants VALUES (?,?,?,?,?,?,?)').run(
+          digest(approval),
+          verb,
+          user.id,
+          sessionHash,
+          saved.credential_id,
+          account.revision,
+          Date.now() + APPROVAL_TTL,
+        );
+        bindOrigin('action-grant', digest(approval), origin);
+        return { approval };
       }
       if (verb === 'enroll') {
         const approval = secret();
@@ -1251,6 +1292,7 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
     db.prepare('DELETE FROM im_trusted_qr_invites WHERE user_id=?').run(userId);
     db.prepare('DELETE FROM im_trusted_ceremonies WHERE user_id=?').run(userId);
     db.prepare('DELETE FROM im_trusted_enroll_grants WHERE user_id=?').run(userId);
+    db.prepare('DELETE FROM im_trusted_action_grants WHERE user_id=?').run(userId);
     db.prepare('DELETE FROM im_trusted_totp_grants WHERE user_id=?').run(userId);
     if (recovery) {
       if (!deviceOnly) requireTotpConfigured();
@@ -1261,9 +1303,44 @@ export function registerTrustedDevices(app: MessagingHttp, d: Dependencies) {
     }
   }
 
+  function hasOriginPasskey(req: MessagingRequest, userId: string) {
+    const { rpId } = originContext(req);
+    return devices(userId).some((row) => row.rp_id === rpId);
+  }
+
+  function consumeActionGrant(
+    req: MessagingRequest,
+    userId: string,
+    revision: number,
+    sessionHash: string,
+    expectedAction: 'usage-reset' | 'recovery-rotate',
+    grant: string,
+  ) {
+    const { origin } = originCheck(req, true);
+    const hashed = digest(grant);
+    const row = db
+      .prepare(
+        `SELECT credential_id FROM im_trusted_action_grants
+        WHERE hash=? AND action=? AND user_id=? AND session_hash=? AND revision=? AND expires_at>?`,
+      )
+      .get(hashed, expectedAction, userId, sessionHash, revision, Date.now());
+    if (
+      !row ||
+      boundOrigin('action-grant', hashed) !== origin ||
+      !credential(userId, String(row.credential_id))
+    )
+      throw new ChatError(403, '通行密钥确认已失效，请重新确认');
+    const deleted = db
+      .prepare('DELETE FROM im_trusted_action_grants WHERE hash=? AND action=?')
+      .run(hashed, expectedAction);
+    if (!deleted.changes) throw new ChatError(403, '通行密钥确认已失效，请重新确认');
+  }
+
   return {
     required,
     hasCredentials,
+    hasOriginPasskey,
+    consumeActionGrant,
     passwordChallenge,
     clear,
     requireConfigured: requireTotpConfigured,

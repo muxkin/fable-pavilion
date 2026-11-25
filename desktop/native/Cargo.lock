@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agent-space-native"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "anyhow",
  "ar",

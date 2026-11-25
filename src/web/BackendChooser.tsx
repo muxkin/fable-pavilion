@@ -8,6 +8,7 @@ import { BackendIcon } from './BackendIcon';
 import { deviceSession, type DeviceOverview } from './device-session';
 import { messaging, useMessaging } from './messaging/context';
 import { syncAccountHosts } from './account-session';
+import { queueAdapterBackup } from './adapter-security-backup';
 import type { PairedHost } from './sync-store';
 import type { AppRoute } from './shell/routes';
 import { recentWorkbenchDevices } from './shell/workbench-recency';
@@ -43,6 +44,8 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
   const refresh = shallowRef(0);
   const watchDesktops = watchRender();
   const watchHosts = watchRender();
+  const watchAutoClaim = watchRender();
+  const autoClaimed = new Set<string>();
   return ({ hosts, pairingStorageError, busy, navigate, refreshHosts, manage, back }) => {
     const { user } = useMessaging();
     const signature = JSON.stringify(
@@ -100,6 +103,53 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
     }, [signature, refresh.value]);
     const devices = new Map(accountDesktops.value.map((device) => [device.hostId, device]));
     const paired = new Map(hosts.map((host) => [host.hostId, host]));
+    const onlineLegacyIds =
+      user?.kind === 'human' && authorizationsKnown.value
+        ? hosts
+            .filter(
+              (host) =>
+                !devices.has(host.hostId) &&
+                overview.value.get(host.hostId)?.online === true &&
+                !autoClaimed.has(`${user.id}:${host.hostId}`),
+            )
+            .map((host) => host.hostId)
+            .sort()
+            .join(',')
+        : '';
+    watchAutoClaim(() => {
+      if (!onlineLegacyIds || user?.kind !== 'human') return;
+      const accountId = user.id;
+      const controller = new AbortController();
+      for (const hostId of onlineLegacyIds.split(',').filter(Boolean)) {
+        const host = paired.get(hostId);
+        if (!host) continue;
+        autoClaimed.add(`${accountId}:${hostId}`);
+        void deviceSession
+          .claimDesktop(host, controller.signal)
+          .then(async (authorization) => {
+            if (controller.signal.aborted || messaging.account.user?.id !== accountId) return;
+            await messaging.request(
+              '/desktop-devices/approve',
+              'POST',
+              { accountId, authorization },
+              controller.signal,
+            );
+            if (controller.signal.aborted || messaging.account.user?.id !== accountId) return;
+            accountDesktops.value = [
+              ...accountDesktops.value.filter((d) => d.hostId !== hostId),
+              { hostId, name: host.name || authorization.name },
+            ];
+            if (host.name && host.name !== authorization.name) {
+              void messaging
+                .request(`/desktop-devices/${hostId}`, 'PATCH', { accountId, name: host.name })
+                .catch(() => {});
+            }
+            queueAdapterBackup(messaging.account, messaging.raw.bind(messaging), host, authorization);
+          })
+          .catch(() => {});
+      }
+      return () => controller.abort();
+    }, [onlineLegacyIds, user?.id]);
     const recent = recentWorkbenchDevices(user?.id ?? '').filter((id) => paired.has(id));
     const computers = [...new Set([...recent, ...paired.keys(), ...devices.keys()])];
     const filter = manage ? '' : query.value.trim().toLocaleLowerCase();
@@ -303,6 +353,17 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
                       if (!value) return;
                       void run(async () => {
                         await deviceSession.renameHost(host, value);
+                        if (authorized && user) {
+                          await messaging
+                            .request(`/desktop-devices/${host.hostId}`, 'PATCH', {
+                              accountId: user.id,
+                              name: value,
+                            })
+                            .catch(() => {});
+                          accountDesktops.value = accountDesktops.value.map((d) =>
+                            d.hostId === host.hostId ? { ...d, name: value } : d,
+                          );
+                        }
                         await refreshHosts();
                         action.value = undefined;
                       });
@@ -357,6 +418,7 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
                         onClick={() =>
                           void run(async () => {
                             if (authorized && user) {
+                              if (host) await deviceSession.forgetHost(host).catch(() => {});
                               await messaging.request(`/desktop-devices/${hostId}`, 'DELETE', {
                                 accountId: user.id,
                               });

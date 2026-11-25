@@ -127,6 +127,15 @@ export function desktopAuthorizationContract(
     await expect(owner.request('/desktop-devices')).resolves.toEqual({
       devices: [{ hostId, name: authorization.name }],
     });
+    await expect(
+      other.request(`/desktop-devices/${hostId}`, 'PATCH', { accountId: stranger.id, name: 'Hijack' }),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      owner.request(`/desktop-devices/${hostId}`, 'PATCH', { accountId: user.id, name: 'Workstation' }),
+    ).resolves.toEqual({ ok: true });
+    await expect(owner.request('/desktop-devices')).resolves.toEqual({
+      devices: [{ hostId, name: 'Workstation' }],
+    });
     await expect(other.request('/desktop-devices')).resolves.toEqual({ devices: [] });
     const scope = { hostId, deviceId: randomUUID(), backendId: 'codex-local', requestId: randomUUID() };
     const redeem = (proof: string, target = scope) =>
@@ -186,5 +195,13 @@ export function desktopAuthorizationContract(
     await expect(host('control', enrollment)).rejects.toThrow('1008');
     await expect(owner.request(approve, 'POST', data)).rejects.toMatchObject({ status: 410 });
     await expect(owner.request('/desktop-devices')).resolves.toEqual({ devices: [] });
+    const freshOther = await signed(Date.now() + 1000);
+    await expect(
+      other.request(approve, 'POST', { accountId: stranger.id, authorization: freshOther }),
+    ).resolves.toEqual({ ok: true });
+    await expect(other.request('/desktop-devices')).resolves.toEqual({
+      devices: [{ hostId, name: freshOther.name }],
+    });
+    await expect(other.request(path, 'DELETE', { accountId: stranger.id })).resolves.toEqual({ ok: true });
   });
 }

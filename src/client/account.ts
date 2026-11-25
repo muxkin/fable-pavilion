@@ -243,7 +243,27 @@ export class AccountClient {
       throw error;
     }
   }
-  async confirmUsageReset(user: ChatUser, password: string, scope: UsageResetScope) {
+  async confirmUsageReset(
+    user: ChatUser,
+    verification: string | { password?: string; approval?: string; sessionConfirm?: boolean },
+    scope: UsageResetScope,
+  ) {
+    const mode = typeof verification === 'string' ? { password: verification } : verification;
+    if (mode.approval) {
+      return this.request<{ proof: string }>('/crypto/usage-reset/confirm', 'POST', {
+        ...scope,
+        accountId: user.id,
+        approval: mode.approval,
+      });
+    }
+    if (mode.sessionConfirm) {
+      return this.request<{ proof: string }>('/crypto/usage-reset/confirm', 'POST', {
+        ...scope,
+        accountId: user.id,
+        sessionConfirm: true,
+      });
+    }
+    const password = mode.password ?? '';
     const { salt } = await this.request<{ salt: string }>('/crypto/parameters', 'POST', {
       identifier: user.username,
     });
@@ -285,21 +305,34 @@ export class AccountClient {
     this.recoveredSecurity = recovery;
     this.changed();
   }
-  async rotateRecovery(password: string) {
+  async rotateRecovery(
+    verification: string | { password?: string; approval?: string; sessionConfirm?: boolean },
+  ) {
     const { user, secrets } = this;
     if (!user || !secrets) throw Error('请先解锁账号');
     const latest = await this.request<{ vault: AccountVault; revision: number }>('/crypto/account');
-    const verified = latest.vault.password
-      ? await unlockAccount(latest.vault, password)
-      : { auth: (await passwordKeys(password, latest.vault.salt)).auth, secrets };
-    if (verified.secrets.root !== secrets.root || this.user !== user) throw Error('账号状态已变化');
+    const mode = typeof verification === 'string' ? { password: verification } : verification;
+    let authPayload: Record<string, unknown>;
+    if (mode.approval) {
+      authPayload = { approval: mode.approval };
+    } else if (mode.sessionConfirm) {
+      authPayload = { sessionConfirm: true };
+    } else {
+      const password = mode.password ?? '';
+      const verified = latest.vault.password
+        ? await unlockAccount(latest.vault, password)
+        : { auth: (await passwordKeys(password, latest.vault.salt)).auth, secrets };
+      if (verified.secrets.root !== secrets.root || this.user !== user) throw Error('账号状态已变化');
+      authPayload = { auth: verified.auth };
+    }
+    if (this.user !== user || this.secrets !== secrets) throw Error('账号状态已变化');
     const { recoveryCode, recoveryAuth, recovery } = await replaceAccountRecovery(secrets);
     const { revision, deviceOnly } = await this.request<{ revision: number; deviceOnly?: boolean }>(
       '/crypto/recovery/rotate',
       'POST',
       {
         revision: latest.revision,
-        auth: verified.auth,
+        ...authPayload,
         recoveryAuth,
         recovery,
       },

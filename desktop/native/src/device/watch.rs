@@ -48,6 +48,7 @@ impl DeviceSession {
                 published: None,
                 versions: HashMap::new(),
                 operations: HashMap::new(),
+                was_running: false,
             },
         );
         Ok(json!({"ok": true}))
@@ -136,6 +137,12 @@ impl DeviceSession {
                 }
             };
             if let Some((mark, thread, messages)) = changed {
+                let now_running = thread["runtimeStatus"].as_str() == Some("running")
+                    || thread["activeTurnId"].as_str().is_some();
+                if watch.was_running && !now_running {
+                    self.usage_refresh_backends.insert(backend.clone());
+                }
+                watch.was_running = now_running;
                 let (order, changed) = diff_messages(messages.iter(), &mut watch.versions)?;
                 reply(io, json!({"type":"sync","backendId":backend,"threadId":id,"updates":[{
                     "kind":"manifest","epoch":mark.0,"thread":thread,"order":order,"changed":changed,
@@ -190,6 +197,7 @@ impl DeviceSession {
                     revision: None,
                     versions: HashMap::new(),
                     operations: HashMap::new(),
+                    was_running: false,
                 },
             );
         }
@@ -212,6 +220,12 @@ impl DeviceSession {
                         view.messages.iter().chain(view.streamed.iter()),
                         &mut watch.versions,
                     )?;
+                    let now_running = view.thread["runtimeStatus"].as_str() == Some("running")
+                        || view.thread["activeTurnId"].as_str().is_some();
+                    if watch.was_running && !now_running {
+                        self.usage_refresh_backends.insert(backend.clone());
+                    }
+                    watch.was_running = now_running;
                     reply(io, json!({"type":"sync","backendId":backend,"threadId":thread,"updates":[{
                         "kind":"manifest","epoch":watch.epoch,"thread":view.thread,"order":order,"changed":changed,
                     }]})).await?;

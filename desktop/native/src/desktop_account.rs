@@ -152,7 +152,7 @@ mod tests {
         )?;
         state.confirm(&doc)?;
         let bytes = fs::read_to_string(directory.join(FILE))?;
-        assert!(!bytes.contains(&doc.totp_secret));
+        assert!(!bytes.contains(doc.totp_secret.as_deref().unwrap()));
         assert!(!bytes.contains("recoveryCode"));
         drop(state);
         let mut state = Store::open(&directory)?;

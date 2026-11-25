@@ -11,6 +11,46 @@ pub(crate) struct AuthorizationLink {
     completion: Option<Url>,
 }
 
+fn default_computer_name() -> String {
+    let name: String = ["COMPUTERNAME", "HOSTNAME"]
+        .iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "子虚亭电脑".into())
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(40)
+        .collect();
+    if name.is_empty() {
+        "子虚亭电脑".into()
+    } else {
+        name
+    }
+}
+
+pub(crate) fn sign_claim(
+    origin: &str,
+    identity: &libp2p_identity::Keypair,
+) -> Result<serde_json::Value> {
+    let name = default_computer_name();
+    let issued_at = now();
+    let host = identity.public().to_peer_id().to_string();
+    let nonce = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let ticket = hash(&nonce);
+    let proof = format!(
+        "codex-pocket/desktop-enrollment/1\n{origin}\n{host}\n{name}\n{ticket}\n{issued_at}"
+    );
+    let signature = STANDARD.encode(identity.sign(proof.as_bytes())?);
+    Ok(serde_json::json!({
+        "hostId": host,
+        "name": name,
+        "ticket": ticket,
+        "issuedAt": issued_at,
+        "signature": signature,
+    }))
+}
+
 impl AuthorizationLink {
     pub(crate) fn open(
         pending: &mut Option<Self>,
@@ -24,21 +64,8 @@ impl AuthorizationLink {
         {
             return Ok(link.start.to_string());
         }
-        let name: String = ["COMPUTERNAME", "HOSTNAME"]
-            .iter()
-            .filter_map(|key| std::env::var(key).ok())
-            .find(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "Agent 空间电脑".into())
-            .trim()
-            .chars()
-            .filter(|ch| !ch.is_control())
-            .take(40)
-            .collect();
-        let name = if name.is_empty() {
-            "Agent 空间电脑"
-        } else {
-            &name
-        };
+        let name = default_computer_name();
+        let name = name.as_str();
         let issued_at = now();
         let host = db.identity.public().to_peer_id().to_string();
         let pairing = db.mint_pairing(pending.as_ref().map(|link| &link.pairing))?;
@@ -118,6 +145,20 @@ mod tests {
         let query = format!("state={}", params["state"]);
         let redirect = link.complete(&query).context("callback rejected")?;
         assert_eq!(redirect.origin().ascii_serialization(), origin);
+        let claim = sign_claim(origin, &db.identity)?;
+        assert_eq!(
+            claim["hostId"],
+            db.identity.public().to_peer_id().to_string()
+        );
+        let proof = format!(
+            "codex-pocket/desktop-enrollment/1\n{origin}\n{}\n{}\n{}\n{}",
+            claim["hostId"].as_str().unwrap(),
+            claim["name"].as_str().unwrap(),
+            claim["ticket"].as_str().unwrap(),
+            claim["issuedAt"].as_i64().unwrap(),
+        );
+        let sig = STANDARD.decode(claim["signature"].as_str().unwrap())?;
+        assert!(db.identity.public().verify(proof.as_bytes(), &sig));
         assert!(redirect.fragment().unwrap().contains("signature="));
         assert!(redirect.fragment().unwrap().contains("code="));
         assert!(link.complete(&query).is_none());

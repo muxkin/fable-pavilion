@@ -165,7 +165,7 @@ export const TrustedDevices = tsxComponent(function TrustedDevices(props: {
   });
 
   return ({ accountId, view = 'devices', action, navigate }) => {
-    async function enroll(password?: string) {
+    async function enroll(password?: string, recoveryCode?: string) {
       const current = state.value;
       if (enrolling.value || !current) return;
       enrolling.value = true;
@@ -176,7 +176,8 @@ export const TrustedDevices = tsxComponent(function TrustedDevices(props: {
           accountId,
           password,
           defaultTrustedDeviceName,
-          !current.recentlyVerified && Boolean(current.hasCredentials),
+          !current.recentlyVerified && !recoveryCode && Boolean(current.hasCredentials),
+          recoveryCode,
         );
         enrollOpen.value = false;
         status.value = '通行密钥已创建';
@@ -277,22 +278,25 @@ export const TrustedDevices = tsxComponent(function TrustedDevices(props: {
                   <span>登录设备</span>
                   <Icon name="chevron" size={18} />
                 </button>
-                <button onClick={() => navigate?.({ page: 'authenticators' })}>
-                  <Icon name="key" size={23} />
-                  <span>第三方验证器</span>
-                  <small>
-                    {current.authenticators?.length ? `已添加 ${current.authenticators.length} 个` : '未添加'}
-                  </small>
-                  <Icon name="chevron" size={18} />
-                </button>
+                {(current.totpAvailable || (current.authenticators?.length ?? 0) > 0) && (
+                  <button onClick={() => navigate?.({ page: 'authenticators' })}>
+                    <Icon name="key" size={23} />
+                    <span>第三方验证器</span>
+                    <small>
+                      {current.authenticators?.length ? `已添加 ${current.authenticators.length} 个` : '未添加'}
+                    </small>
+                    <Icon name="chevron" size={18} />
+                  </button>
+                )}
                 <button onClick={() => navigate?.({ page: 'account-credentials' })}>
                   <Icon name="key" size={23} />
-                  <span>密码与恢复码</span>
+                  <span>{current.deviceOnly ? '恢复码' : '密码与恢复码'}</span>
                   <Icon name="chevron" size={18} />
                 </button>
                 <button onClick={() => navigate?.({ page: 'trusted-devices' })}>
                   <Icon name="shield" size={23} />
                   <span>通行密钥</span>
+                  <small>{current.passkeysHere ? '本设备已启用' : current.hasCredentials ? '未在本设备启用' : '未添加'}</small>
                   <Icon name="chevron" size={18} />
                 </button>
               </div>
@@ -327,7 +331,12 @@ export const TrustedDevices = tsxComponent(function TrustedDevices(props: {
                   aria-expanded={enrollOpen.value}
                   disabled={enrolling.value}
                   onClick={() => {
-                    if (current.recentlyVerified || current.passkeysHere) void enroll();
+                    if (
+                      current.recentlyVerified ||
+                      current.passkeysHere ||
+                      (current.deviceOnly && !current.hasCredentials)
+                    )
+                      void enroll();
                     else enrollOpen.value = !enrollOpen.value;
                   }}
                 >
@@ -339,15 +348,23 @@ export const TrustedDevices = tsxComponent(function TrustedDevices(props: {
                     onSubmit={(event) => {
                       event.preventDefault();
                       const form = event.currentTarget as HTMLFormElement;
-                      const password = String(new FormData(form).get('password'));
+                      const data = new FormData(form);
                       form.reset();
-                      void enroll(password);
+                      if (current.deviceOnly) void enroll(undefined, String(data.get('recoveryCode') ?? '').trim());
+                      else void enroll(String(data.get('password') ?? ''));
                     }}
                   >
-                    <label>
-                      当前密码
-                      <input name="password" type="password" autocomplete="current-password" required />
-                    </label>
+                    {current.deviceOnly ? (
+                      <label>
+                        账号恢复码
+                        <input name="recoveryCode" type="password" autocomplete="off" required />
+                      </label>
+                    ) : (
+                      <label>
+                        当前密码
+                        <input name="password" type="password" autocomplete="current-password" required />
+                      </label>
+                    )}
                     <button class="primary" disabled={enrolling.value}>
                       继续
                     </button>

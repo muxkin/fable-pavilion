@@ -35,6 +35,7 @@ export const vaultSchema = z
   })
   .strict();
 const credential = b64.length(44);
+const actionGrant = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const usageResetScope = z.object({
   hostId: hostIdSchema,
   deviceId: z.string().uuid(),
@@ -275,13 +276,36 @@ export async function registerAccounts(app: MessagingHttp, d: Dependencies) {
     const body = z
       .object({
         revision: z.number().int().positive(),
-        auth: credential,
+        auth: credential.optional(),
+        approval: actionGrant.optional(),
+        sessionConfirm: z.literal(true).optional(),
         recoveryAuth: credential,
         recovery: encryptedValue,
       })
       .strict()
       .parse(req.body);
-    if (!previous || !(await verify(body.auth, passwordHash))) throw new ChatError(403, '当前密码不正确');
+    if (!previous) throw new ChatError(403, '请登录并解锁子虚亭账号');
+    const previousVault = JSON.parse(String(previous.vault)) as AccountVault;
+    const isDeviceOnly = d.deviceLoginOnly === true || !previousVault.password;
+    const sessionHash = digest(token(req));
+    if (body.approval) {
+      trusted.consumeActionGrant(
+        req,
+        user.id,
+        Number(previous.revision),
+        sessionHash,
+        'recovery-rotate',
+        body.approval,
+      );
+    } else if (body.auth) {
+      if (!(await verify(body.auth, passwordHash))) throw new ChatError(403, '当前密码不正确');
+    } else if (body.sessionConfirm) {
+      if (!isDeviceOnly) throw new ChatError(403, '请输入当前密码');
+      if (trusted.hasOriginPasskey(req, user.id))
+        throw new ChatError(403, '请使用本设备的通行密钥确认更换恢复码');
+    } else {
+      throw new ChatError(403, '请先完成身份确认');
+    }
     const recoveryHash = await hashed(body.recoveryAuth);
     return store.transaction(() => {
       if (
@@ -318,20 +342,47 @@ export async function registerAccounts(app: MessagingHttp, d: Dependencies) {
     `);
     app.post('/crypto/usage-reset/confirm', { bodyLimit: 1024 }, async (req) => {
       const user = human(req);
-      const { accountId, auth, hostId, deviceId, backendId, requestId } = usageResetScope
-        .extend({ accountId: z.string().regex(USER_ID_PATTERN), auth: credential })
-        .strict()
-        .parse(req.body);
-      if (user.id !== accountId || !user.encrypted) throw new ChatError(403, '请登录对应的 Agent Space 账号');
+      const { accountId, auth, approval, sessionConfirm, hostId, deviceId, backendId, requestId } =
+        usageResetScope
+          .extend({
+            accountId: z.string().regex(USER_ID_PATTERN),
+            auth: credential.optional(),
+            approval: actionGrant.optional(),
+            sessionConfirm: z.literal(true).optional(),
+          })
+          .strict()
+          .parse(req.body);
+      if (user.id !== accountId || !user.encrypted) throw new ChatError(403, '请登录对应的子虚亭账号');
       take(`usage-reset-account:${accountId}`, 5);
       take(`usage-reset-ip:${req.clientAddress()}`, 15);
       const current = account(accountId);
       const passwordHash = store.credentials(user.username)?.passwordHash;
-      if (!current || !(await verify(auth, passwordHash))) throw new ChatError(403, 'Agent Space 密码不正确');
+      if (!current) throw new ChatError(403, '请登录对应的子虚亭账号');
+      const currentVault = JSON.parse(String(current.vault)) as AccountVault;
+      const isDeviceOnly = d.deviceLoginOnly === true || !currentVault.password;
+      const sessionHash = digest(token(req));
+      if (approval) {
+        trusted.consumeActionGrant(
+          req,
+          accountId,
+          Number(current.revision),
+          sessionHash,
+          'usage-reset',
+          approval,
+        );
+      } else if (auth) {
+        if (!(await verify(auth, passwordHash))) throw new ChatError(403, '子虚亭密码不正确');
+      } else if (sessionConfirm) {
+        if (!isDeviceOnly) throw new ChatError(403, '请先完成身份确认');
+        if (trusted.hasOriginPasskey(req, accountId))
+          throw new ChatError(403, '请使用本设备的通行密钥确认重置');
+      } else {
+        throw new ChatError(403, '请先完成身份确认');
+      }
       if (!(await ownsDesktop(accountId, hostId)))
         throw new ChatError(
           403,
-          '请使用登记这台电脑的 Agent Space 账号。尚未登记时，请在电脑适配器中选择「登录并连接」。',
+          '这台电脑尚未关联当前子虚亭账号，请刷新页面后重试或在子虚亭适配器中重新授权。',
         );
       if (
         human(req).id !== accountId ||
@@ -352,7 +403,7 @@ export async function registerAccounts(app: MessagingHttp, d: Dependencies) {
           .run(
             digest(proof),
             accountId,
-            digest(token(req)),
+            sessionHash,
             Number(current.revision),
             hostId,
             deviceId,
@@ -376,7 +427,7 @@ export async function registerAccounts(app: MessagingHttp, d: Dependencies) {
         .prepare(`SELECT account_id FROM im_usage_reset_proofs WHERE ${scoped}`)
         .get(...scope, Date.now());
       if (!row || !(await ownsDesktop(String(row.account_id), hostId)))
-        throw new ChatError(403, '重置确认已失效，请重新输入密码');
+        throw new ChatError(403, '重置确认已失效，请重新确认');
       const now = Date.now();
       const deleted = store.db
         .prepare(
@@ -387,7 +438,7 @@ export async function registerAccounts(app: MessagingHttp, d: Dependencies) {
             WHERE a.user_id=account_id AND a.revision=im_usage_reset_proofs.revision)`,
         )
         .run(...scope, now, now);
-      if (!deleted.changes) throw new ChatError(403, '重置确认已失效，请重新输入密码');
+      if (!deleted.changes) throw new ChatError(403, '重置确认已失效，请重新确认');
       reply.code(204).send();
     });
   }

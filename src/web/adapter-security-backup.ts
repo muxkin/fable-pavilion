@@ -27,7 +27,7 @@ type BackupDocument = {
   origin: string;
   account: { id: string; username: string; displayName: string };
   revision: number;
-  totpSecret: string;
+  totpSecret?: string;
   recoveryCode?: string;
 };
 type Request = <T>(path: string, method?: string, body?: unknown, signal?: AbortSignal) => Promise<T>;

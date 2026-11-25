@@ -3,6 +3,7 @@ export const RPC_ROUTES = {
   'security.backup.status': ['GET', '/api/security/backup'],
   'security.backup.import': ['POST', '/api/security/backup'],
   'security.backup.challenge': ['POST', '/api/security/backup/challenge'],
+  'desktop.claim': ['POST', '/api/desktop/claim'],
   'controls.read': ['GET', '/api/threads/:id/controls'],
   'control.execute': ['POST', '/api/threads/:id/control'],
   'log.export': ['POST', '/api/threads/:id/export'],

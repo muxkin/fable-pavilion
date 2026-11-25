@@ -27,7 +27,7 @@ export const OtherConnectionMethods = tsxComponent(function OtherConnectionMetho
 export const WorkbenchAccountAccess = tsxComponent(function WorkbenchAccountAccess(_props: {
   navigate: Navigate;
 }) {
-  return ({ navigate }) => {
+  return () => {
     const { connectionError, refresh } = useMessaging();
     return (
       <div class="workbench-account-access">
@@ -39,7 +39,6 @@ export const WorkbenchAccountAccess = tsxComponent(function WorkbenchAccountAcce
               重新连接
             </button>
           )}
-          <OtherConnectionMethods navigate={navigate} />
         </div>
       </div>
     );
@@ -61,7 +60,6 @@ export const ComputerSetupGuide = tsxComponent(function ComputerSetupGuide(_prop
         <Icon name="download" size={22} />
         下载电脑适配器
       </button>
-      <OtherConnectionMethods navigate={navigate} />
     </section>
   );
 });

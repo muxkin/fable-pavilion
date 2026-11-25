@@ -267,6 +267,9 @@ export function createGatewayCore(config: Config, deps: { store: Store } & Backe
         reason: '此实例尚未提供用量信息',
       },
   );
+  app.post('/api/usage/reset', async (_req, reply) =>
+    reply.code(409).send({ error: '当前实例不支持重置用量' }),
+  );
   app.get('/api/threads/:id/skills', async (req) => ({
     skills: await desktop.skills(params.parse(req.params).id),
   }));

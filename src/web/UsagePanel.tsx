@@ -6,8 +6,11 @@ import type { UsageResetResult, UsageSnapshot } from '../shared/usage';
 type UsageBucket = NonNullable<NonNullable<UsageSnapshot['value']>['buckets']>[number];
 type UsageWindow = UsageBucket['windows'][number];
 import { RpcError } from '../shared/rpc';
+import type { AccountDesktop } from '../shared/desktop-authorization';
 import { messaging, useMessaging } from './messaging/context';
 import { deviceSession } from './device-session';
+import { queueAdapterBackup } from './adapter-security-backup';
+import { trustedDevices, verifyTrustedAction, type TrustedDevicesState } from './trusted-login';
 import { Icon } from './Icon';
 import { Dialog } from './shell/Dialog';
 import { appRect, appViewport } from './shell/app-zoom';
@@ -135,12 +138,15 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
   const resetError = shallowRef('');
   const resetNotice = shallowRef('');
   const pendingRequest = shallowRef('');
+  const trustedState = shallowRef<TrustedDevicesState | null>(null);
+  const trustedLoading = shallowRef(false);
   const id = useId();
   const watchSnapshot = watchRender();
   const watchRefresh = watchRender();
   const watchMobileOpen = watchRender();
   const watchResize = watchRender();
   const watchResetScope = watchRender();
+  const watchResetAuth = watchRender();
   return ({ backendId, name, active, online, refreshOnOpen, currentModel, currentModelName }) => {
     const snapshot = snapshotState.value;
     const mobileOpen = mobileOpenState.value;
@@ -165,9 +171,27 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
     }, [resetKey]);
 
     watchSnapshot(() => {
+      snapshotState.value = { state: 'loading' };
       if (!active) return;
       return deviceSession.watchUsage(backendId, setSnapshot);
-    }, [active, backendId]);
+    }, [active, backendId, host?.hostId]);
+
+    watchResetAuth(() => {
+      if (!resetOpen.value || !user?.encrypted) return;
+      trustedLoading.value = true;
+      const controller = new AbortController();
+      void trustedDevices(controller.signal)
+        .then((result) => {
+          if (!controller.signal.aborted) trustedState.value = result;
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) trustedState.value = null;
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) trustedLoading.value = false;
+        });
+      return () => controller.abort();
+    }, [resetOpen.value, user?.id]);
 
     const panelOpen = mobileOpen || desktopOpen;
     watchRefresh(() => {
@@ -221,8 +245,21 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
     const resetCount = value?.rateLimitResetCredits?.availableCount;
     const eligible = codexBucket?.windows.some(
       (window) =>
-        (window.durationMinutes === 300 || window.durationMinutes === 10080) && window.usedPercent >= 90,
+        (window.durationMinutes === 300 ||
+          window.durationMinutes === 10080 ||
+          window.durationMinutes === undefined) &&
+        remaining(window.usedPercent) <= 10,
     );
+    const trusted = trustedState.value;
+    const isDeviceOnly =
+      trusted?.deviceOnly === true ||
+      trusted?.deviceLoginOnly === true ||
+      !messaging.account.vault?.password;
+    const resetAuthMode: 'passkey' | 'session' | 'password' = trusted?.passkeysHere
+      ? 'passkey'
+      : isDeviceOnly
+        ? 'session'
+        : 'password';
     const retrying = !!pendingRequest.value;
     const resetLabel = retrying ? '核对上次重置' : '使用一次重置';
     const resetReasonId = `${id}-reset-reason`;
@@ -262,10 +299,11 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
     };
     const submitReset = async (event: Event) => {
       event.preventDefault();
+      if (!user || !host || resetBusy.value || trustedLoading.value) return;
       const input = passwordInput.value;
-      const password = input?.value;
-      if (!user || !host || !input || !password || resetBusy.value) return;
-      input.value = '';
+      const password = resetAuthMode === 'password' ? input?.value : undefined;
+      if (resetAuthMode === 'password' && (!input || !password)) return;
+      if (input) input.value = '';
       resetBusy.value = true;
       resetError.value = '';
       resetNotice.value = '';
@@ -274,7 +312,30 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
       let sent = false;
       const sameTarget = () => account.user?.id === user.id && deviceSession.host === host;
       try {
-        const { proof } = await messaging.account.confirmUsageReset(user, password, {
+        // Ensure legacy QR-paired computers are smoothly enrolled into desktop_enrollments before verification.
+        try {
+          const { devices } = await messaging.request<{ devices: AccountDesktop[] }>('/desktop-devices');
+          if (sameTarget() && !devices.some((d) => d.hostId === host.hostId)) {
+            const authorization = await deviceSession.claimDesktop(host);
+            if (!sameTarget()) throw Error('账号或电脑已切换，请重新确认');
+            await messaging.request('/desktop-devices/approve', 'POST', {
+              accountId: user.id,
+              authorization,
+            });
+            queueAdapterBackup(messaging.account, messaging.raw.bind(messaging), host, authorization);
+          }
+        } catch {
+          // If auto-claim fails (e.g. older adapter), continue so the server returns the exact status.
+        }
+        if (!sameTarget()) throw Error('账号或电脑已切换，请重新确认');
+        const verification =
+          resetAuthMode === 'passkey'
+            ? { approval: await verifyTrustedAction('usage-reset') }
+            : resetAuthMode === 'session'
+              ? { sessionConfirm: true }
+              : { password };
+        if (!sameTarget()) throw Error('账号或电脑已切换，请重新确认');
+        const { proof } = await messaging.account.confirmUsageReset(user, verification, {
           hostId: host.hostId,
           deviceId: host.deviceId,
           backendId,
@@ -295,7 +356,7 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
           setSnapshot({ state: result.usage.available ? 'current' : 'unavailable', value: result.usage });
         } else {
           void deviceSession
-            .api<NonNullable<UsageSnapshot['value']>>('/usage', undefined, backendId)
+            .api<NonNullable<UsageSnapshot['value']>>('/usage?refresh=1', undefined, backendId)
             .then((latest) => {
               if (sameTarget())
                 setSnapshot({ state: latest.available ? 'current' : 'unavailable', value: latest });
@@ -312,7 +373,7 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
           const message = error instanceof Error ? error.message : '重置请求失败';
           resetError.value =
             sent && (!rejected || previousRequest)
-              ? `上次重置结果未确认。重新输入密码可核对同一次请求。 ${message}`
+              ? `上次重置结果未确认。再次确认可核对同一次请求。 ${message}`
               : message;
           void nextTick(() => passwordInput.value?.focus());
         }
@@ -482,7 +543,7 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
           data-current={state === 'current'}
           data-loading={state === 'loading'}
           data-low={displayedPercent !== undefined && displayedPercent <= 15}
-          data-empty={state !== 'loading' && !displayedPercent}
+          data-empty={state !== 'loading' && displayedPercent === undefined}
           onClick={(event) => {
             if (appViewport().windowWidth <= 640) {
               event.preventDefault();
@@ -549,17 +610,25 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
           >
             <form class="usage-reset-form" onSubmit={submitReset}>
               <p>{retrying ? '核对之前提交的同一次重置请求。' : '此操作将消耗 1 次重置次数。'}</p>
-              <label>
-                重新输入子虚亭账号密码
-                <input
-                  ref={passwordInput}
-                  type="password"
-                  autocomplete="current-password"
-                  required
-                  autofocus
-                  disabled={resetBusy.value}
-                />
-              </label>
+              {resetAuthMode === 'password' ? (
+                <label>
+                  重新输入子虚亭账号密码
+                  <input
+                    ref={passwordInput}
+                    type="password"
+                    autocomplete="current-password"
+                    required
+                    autofocus
+                    disabled={resetBusy.value || trustedLoading.value}
+                  />
+                </label>
+              ) : resetAuthMode === 'passkey' ? (
+                <p class="usage-reset-hint">将使用本设备的通行密钥完成身份确认。</p>
+              ) : (
+                <p class="usage-reset-hint">
+                  当前设备尚未添加通行密钥，将使用当前已登录的子虚亭会话直接确认。可在「登录与安全 → 通行密钥」为此设备添加通行密钥。
+                </p>
+              )}
               {resetError.value && (
                 <p class="usage-reset-error" role="alert">
                   {resetError.value}
@@ -569,8 +638,14 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
                 <button type="button" class="secondary" onClick={closeReset} disabled={resetBusy.value}>
                   取消
                 </button>
-                <button type="submit" class="primary" disabled={resetBusy.value}>
-                  {resetBusy.value ? '正在确认…' : retrying ? '确认核对' : '确认使用'}
+                <button type="submit" class="primary" disabled={resetBusy.value || trustedLoading.value}>
+                  {resetBusy.value
+                    ? '正在确认…'
+                    : retrying
+                      ? '确认核对'
+                      : resetAuthMode === 'passkey'
+                        ? '使用通行密钥确认'
+                        : '确认使用'}
                 </button>
               </div>
             </form>

@@ -164,8 +164,14 @@ impl Service {
             return Err(error.context("本机秘钥簿尚未保存，请重试"));
         }
         let hash = format!("{:x}", Sha256::digest(document_bytes.as_bytes()));
+        let totp_hash = document
+            .totp_secret
+            .as_deref()
+            .map(|secret| format!("{:x}", Sha256::digest(secret.as_bytes())))
+            .unwrap_or_default();
+        let has_totp = document.totp_secret.is_some();
         let mut request = json!({"proof":request.proof,"hostId":host,"deviceId":device,"payloadHash":hash,
-            "totpHash":format!("{:x}",Sha256::digest(document.totp_secret.as_bytes()))});
+            "totpHash":totp_hash});
         if let Some(code) = &document.recovery_code {
             request["recoveryAuth"] = json!(recovery_auth(code)?);
         }
@@ -209,7 +215,7 @@ impl Service {
             )
         })
         .await??;
-        Ok(json!({"ok":true,"revision":revision,"hasTotp":true,"hasRecovery":has_recovery}))
+        Ok(json!({"ok":true,"revision":revision,"hasTotp":has_totp,"hasRecovery":has_recovery}))
     }
 }
 

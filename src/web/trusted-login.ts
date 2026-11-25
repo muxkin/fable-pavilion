@@ -51,6 +51,8 @@ export type TrustedDevicesState = {
   devices: TrustedDevice[];
   totpAvailable: boolean;
   totpEnabled: boolean;
+  deviceOnly?: boolean;
+  deviceLoginOnly?: boolean;
   events: TrustedLoginEvent[];
 };
 export type TrustedLoginEvent = {
@@ -65,7 +67,14 @@ export const trustedLoginEventLabels = {
   revoked: '已撤销可信设备',
   recovered: '账号已通过恢复码重置',
 } as const;
-type DeviceAction = 'totp-display' | 'totp-add' | 'qr' | 'revoke' | 'enroll';
+type DeviceAction =
+  | 'totp-display'
+  | 'totp-add'
+  | 'qr'
+  | 'revoke'
+  | 'enroll'
+  | 'usage-reset'
+  | 'recovery-rotate';
 export type ExternalAuthenticator = { id: string; name: string; createdAt: number };
 type SetupGrant = { grant: string; expiresAt: number };
 async function accountPasswordProof(identifier: string, password: string) {
@@ -130,19 +139,27 @@ async function verifyDevice(action: DeviceAction, target?: string, envelope?: Tr
   });
 }
 
+export async function verifyTrustedAction(action: 'usage-reset' | 'recovery-rotate') {
+  const { approval } = await verifyDevice(action);
+  if (!approval) throw new Error('通行密钥验证未完成，请重试');
+  return approval;
+}
+
 export async function enrollTrustedDevice(
   identifier: string,
   password: string | undefined,
   name: string,
   needsApproval: boolean,
+  recoveryCode?: string,
 ) {
   requireWebAuthn();
   const auth = password ? await accountPasswordProof(identifier, password) : undefined;
+  const recoveryAuth = recoveryCode ? (await recoveryKeys(recoveryCode)).auth : undefined;
   const approval = needsApproval ? (await verifyDevice('enroll')).approval : undefined;
   const challenge = await messaging.request<{ id: string; options: PublicKeyCredentialCreationOptionsJSON }>(
     '/crypto/trusted/enroll/options',
     'POST',
-    { name, auth, approval },
+    { name, auth, recoveryAuth, approval },
   );
   const response = await startRegistration({ optionsJSON: challenge.options });
   await messaging.request('/crypto/trusted/enroll', 'POST', { id: challenge.id, response });

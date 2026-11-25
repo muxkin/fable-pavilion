@@ -52,6 +52,7 @@ window.__adapterManagementApi = request;
 const post = (path, body = {}) => request(path, { method: 'POST', body });
 
 function showPair(pair) {
+  if (!el('pair-code')) return;
   el('pair-code').hidden = !pair;
   el('pair').textContent = pair ? '重新生成' : '生成配对码';
   if (pair) {
@@ -118,9 +119,9 @@ function render(state) {
   el('connected').hidden = !ready;
   el('origin-value').textContent = state.origin || '';
   if (state.origin) el('workbench').href = state.origin;
-  el('other-connection-methods').hidden = ready && !online;
-  el('legacy-enrollment').hidden = ready;
-  el('pair-section').hidden = !online;
+  if (el('other-connection-methods')) el('other-connection-methods').hidden = ready && !online;
+  if (el('legacy-enrollment')) el('legacy-enrollment').hidden = ready;
+  if (el('pair-section')) el('pair-section').hidden = !online;
   el('check').disabled = !state.updateSettings || state.checking;
   el('check').textContent = state.checking ? '正在检查…' : '检查更新';
   el('install').hidden = !state.manualUpdate;
@@ -200,7 +201,7 @@ el('connect').addEventListener('submit', (event) => {
     notify();
   });
 });
-el('legacy-connect-form').addEventListener('submit', (event) => {
+if (el('legacy-connect-form')) el('legacy-connect-form').addEventListener('submit', (event) => {
   event.preventDefault();
   const origin = el('origin');
   if (!origin.reportValidity()) return;
@@ -218,14 +219,14 @@ for (const id of ['authorize', 'bind-paired-account']) {
     notify();
   }));
 }
-el('pair').addEventListener('click', () => action(el('pair'), async () => {
+if (el('pair')) el('pair').addEventListener('click', () => action(el('pair'), async () => {
   await post('/api/pair');
   notify('正在生成配对码…');
   setTimeout(() => {
     if (el('notice').textContent === '正在生成配对码…') notify();
   }, 2500);
 }));
-el('copy').addEventListener('click', () => action(el('copy'), async () => {
+if (el('copy')) el('copy').addEventListener('click', () => action(el('copy'), async () => {
   try {
     await navigator.clipboard.writeText(el('pair-link').value);
     notify('已复制配对链接');
@@ -443,7 +444,10 @@ function renderSecurity() {
   el('recovery-source').hidden = !entry.recoveryBackedUp;
   el('recovery-source').textContent = entry.recoverySource === 'manual' ? '恢复码来源：本机手动保存。' : '恢复码来源：账号同步。';
   el('edit-recovery').textContent = entry.recoveryBackedUp ? '替换恢复码' : '补充恢复码';
-  if (password && securityState.locked) {
+  const hasTotp = entry.hasTotp !== false;
+  if (el('offline-code-row')) el('offline-code-row').hidden = !hasTotp;
+  if (el('offline-code-help')) el('offline-code-help').hidden = !hasTotp;
+  if (hasTotp && password && securityState.locked) {
     el('offline-code').textContent = '已锁定';
     el('view-code').textContent = '解锁';
     el('view-code').setAttribute('aria-label', '解锁并查看动态码');
@@ -521,7 +525,8 @@ async function ensureSecurityUnlocked(action) {
   return true;
 }
 function maybeShowSecurityCode() {
-  if (!selectedSecurityAccount() || codeHidden || codeLoading || securityCode || document.hidden
+  const entry = selectedSecurityAccount();
+  if (!entry || entry.hasTotp === false || codeHidden || codeLoading || securityCode || document.hidden
     || currentTab !== 'security' || el('security-main').hidden || !el('manual-recovery-form').hidden
     || el('remove-entry-dialog').open || (securityState.protection === 'passphrase' && securityState.locked)) return;
   void revealSecurity('code');

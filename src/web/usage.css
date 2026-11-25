@@ -359,6 +359,10 @@
   width: 100%;
   min-height: 44px;
 }
+.usage-reset-hint {
+  font-size: 13px;
+  color: var(--muted);
+}
 .usage-reset-error {
   color: var(--danger, #a54230);
 }

@@ -118,6 +118,9 @@ export class RelayHub extends DurableObject<Env> {
     this.core.revokeDesktop(hostId);
     return true;
   }
+  renameDesktop(account: string, hostId: string, name: string) {
+    return this.desktops.rename(account, hostId, name);
+  }
   listAllDesktops() {
     return this.desktops.listAll();
   }

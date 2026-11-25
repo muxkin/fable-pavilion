@@ -4,6 +4,10 @@ import { DEFAULT_BACKEND, conversationKey, type BackendInfo, type ModelChoice } 
 import { CipherWire, SecureChannel, type Identity, type Lane } from '../shared/secure-channel';
 import { DeviceLink, type DeviceAuth } from '../shared/device-link';
 import { apiCall, RpcError, type RpcCall } from '../shared/rpc';
+import {
+  desktopAuthorizationSchema,
+  type DesktopAuthorization,
+} from '../shared/desktop-authorization';
 import { keybookSyncChallengeSchema, type KeybookSyncChallenge } from '../shared/keybook-sync';
 import { applySync, checkpoint, contentVersion, type CachedThread } from '../shared/sync';
 import { sha256 } from '@noble/hashes/sha2.js';
@@ -1458,6 +1462,14 @@ export class DeviceSession {
       signal,
     );
   }
+  async claimDesktop(host: PairedHost, signal?: AbortSignal): Promise<DesktopAuthorization> {
+    const value = await this.securityRequest<{ authorization: unknown }>(
+      host,
+      apiCall('/desktop/claim', 'POST', {}),
+      signal,
+    );
+    return desktopAuthorizationSchema.parse(value?.authorization);
+  }
   async securityBackupChallenge(
     host: PairedHost,
     accountId: string,
@@ -1529,7 +1541,7 @@ export class DeviceSession {
       } as T;
     const cacheable =
       (init?.method ?? 'GET') === 'GET' &&
-      !['operation.read', 'operations.list', 'status.read', 'models.list'].includes(call.method);
+      !['operation.read', 'operations.list', 'status.read', 'models.list', 'usage.read'].includes(call.method);
     const key = this.key(`rpc:${contentVersion(call)}`, backendId),
       old = cacheable ? await this.cache.get<{ hash: string; value: T }>(key) : undefined;
     if (generation !== this.generation) throw new RpcError('电脑已切换，请重试', 0);

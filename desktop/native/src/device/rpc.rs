@@ -126,6 +126,17 @@ impl DeviceSession {
             !rpc_activity(method) || self.backends.update_gate.connection_allowed(),
             "正在准备更新"
         );
+        if method == "desktop.claim" {
+            let origin = self.backends.usage_reset.origin();
+            let identity = self
+                .db
+                .lock()
+                .expect("database mutex poisoned")
+                .identity
+                .clone();
+            let authorization = crate::desktop_authorization::sign_claim(&origin, &identity)?;
+            return Ok(Some(json!({"authorization": authorization})));
+        }
         if matches!(
             method,
             "security.backup.status" | "security.backup.import" | "security.backup.challenge"
@@ -642,6 +653,10 @@ impl DeviceSession {
             ResetError::InvalidProof,
         );
         let active = self.backends.usage_reset.admit()?;
+        ensure!(connector.has_usage_reset(), ResetError::Unavailable);
+        let admission = connector
+            .admit_write()
+            .map_err(|_| ResetError::Unavailable)?;
         let host = self
             .db
             .lock()
@@ -656,6 +671,11 @@ impl DeviceSession {
             .redeem(proof, &host, &device, backend, request_id)
             .await?;
         self.ensure_device().map_err(|_| ResetError::InvalidProof)?;
+        let thread = self
+            .watches
+            .keys()
+            .find(|(id, _)| id == backend)
+            .map(|(_, thread)| *thread);
         let receipt = self
             .db
             .lock()
@@ -667,18 +687,19 @@ impl DeviceSession {
                     .copied()
                     .unwrap_or(ResetError::Uncertain)
             })?;
-        if let Some(receipt) = receipt {
+        if let Some(mut receipt) = receipt {
+            receipt.usage = connector
+                .read(
+                    "usage.read",
+                    &json!({"id": thread}),
+                    &json!({"refresh": "1"}),
+                    None,
+                )
+                .await
+                .ok()
+                .flatten();
             return Ok(serde_json::to_value(receipt)?);
         }
-        ensure!(connector.has_usage_reset(), ResetError::Unavailable);
-        let admission = connector
-            .admit_write()
-            .map_err(|_| ResetError::Unavailable)?;
-        let thread = self
-            .watches
-            .keys()
-            .find(|(id, _)| id == backend)
-            .map(|(_, thread)| *thread);
         let db = self.db.clone();
         let connector = connector.clone();
         let backend = backend.to_owned();

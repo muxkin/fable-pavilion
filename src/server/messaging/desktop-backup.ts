@@ -186,7 +186,9 @@ export function registerDesktopBackups(app: MessagingHttp, d: Dependencies) {
           challenge.issuedAt + keybookSyncLifetime,
         );
       }
-      const provisioning = d.totp.provision(current.user.id, current.user.username);
+      const provisioning = d.totp.configured
+        ? d.totp.provision(current.user.id, current.user.username)
+        : undefined;
       const ticket = randomBytes(32).toString('base64url'),
         expiresAt = Date.now() + lifetime;
       db.prepare(`INSERT INTO im_desktop_backup_grants VALUES (?,?,?,?,?,?,?,'prepared',NULL,?,?)`).run(
@@ -197,7 +199,7 @@ export function registerDesktopBackups(app: MessagingHttp, d: Dependencies) {
         current.origin,
         body.hostId,
         body.deviceId,
-        digest(provisioning.secret),
+        provisioning ? digest(provisioning.secret) : '',
         expiresAt,
       );
       return {
@@ -212,7 +214,7 @@ export function registerDesktopBackups(app: MessagingHttp, d: Dependencies) {
             displayName: current.user.displayName,
           },
           revision: current.revision,
-          totpSecret: provisioning.secret,
+          ...(provisioning ? { totpSecret: provisioning.secret } : {}),
         },
       };
     });
@@ -243,7 +245,7 @@ export function registerDesktopBackups(app: MessagingHttp, d: Dependencies) {
         hostId: hostIdSchema,
         deviceId,
         payloadHash,
-        totpHash: payloadHash,
+        totpHash: z.union([payloadHash, z.literal('')]).optional().default(''),
         recoveryAuth: z
           .string()
           .regex(/^[A-Za-z0-9+/]{43}=$/)

@@ -95,6 +95,7 @@ export async function buildRelay(config: RelayConfig) {
         core.revokeDesktop(id);
         return true;
       },
+      rename: (account, id, name) => desktops.rename(account, id, name),
       listAll: () => desktops.listAll(),
       revokeAny: (id) => {
         if (!desktops.revokeAny(id)) return false;

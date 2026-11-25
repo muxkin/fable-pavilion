@@ -25,7 +25,7 @@ export default tsxComponent(function LoginSecurity(_props: {
     if (route.page === 'login-devices')
       return (
         <div class="login-security-content">
-          <LoginDevices key={user.id} />
+          <LoginDevices key={user.id} navigate={navigate} />
         </div>
       );
     if (route.page === 'authenticators')
@@ -40,13 +40,13 @@ export default tsxComponent(function LoginSecurity(_props: {
         {recovery ? (
           <section class="security-recovery-content">
             <h3>没有已登录的设备？</h3>
-            <p>在登录页选择「恢复账号」，输入注册时保存的恢复码。恢复后设置新密码，并保存新恢复码。</p>
+            <p>在登录页选择「恢复账号」，输入注册时保存的恢复码，恢复后请妥善保存新恢复码。</p>
             <h3>需要重新保存恢复码？</h3>
-            <p>可在「密码与恢复码」更换恢复码。更换后请保存新码。</p>
+            <p>可在安全设置中随时更换恢复码。更换后请保存新码。</p>
             <button class="security-action-row" onClick={() => navigate({ page: 'account-credentials' })}>
               <Icon name="key" size={23} />
               <span>
-                <strong>管理密码与恢复码</strong>
+                <strong>管理恢复码</strong>
                 <small></small>
               </span>
               <Icon name="chevron" size={18} />

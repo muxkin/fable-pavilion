@@ -48,7 +48,7 @@
             <section id="adapter-account" class="connection-account" aria-label="电脑授权" hidden>
               <span class="connection-account-icon"><svg class="icon" aria-hidden="true"><use href="#icon-user"/></svg></span>
               <div class="connection-account-copy"><strong id="adapter-account-name"></strong><p id="adapter-account-identity" hidden></p></div>
-              <div class="connection-account-actions"><span id="adapter-account-state" class="account-state" role="status" hidden></span><button id="authorize" class="primary" type="button" hidden>授权电脑</button></div>
+              <div class="connection-account-actions"><span id="adapter-account-state" class="account-state" role="status" hidden></span><button id="authorize" class="primary" type="button" hidden>授权电脑</button><button id="bind-paired-account" class="primary" type="button" hidden>关联当前账号</button></div>
             </section>
             <form id="connect" hidden>
               <div id="service-address"><label for="origin">服务地址</label><input id="origin" name="origin" type="url" placeholder="https://…" autocomplete="url" spellcheck="false" maxlength="2048" required></div>
@@ -60,21 +60,6 @@
               <div class="actions"><a id="workbench" class="button" target="_blank" rel="noopener noreferrer">打开工作台</a><button id="change" class="text-action" type="button">切换服务</button></div>
             </div>
           </section>
-          <details id="other-connection-methods" class="panel-row">
-            <summary>其他连接方式</summary>
-            <div class="details-body">
-              <button id="bind-paired-account" type="button" hidden>关联账号</button>
-              <section id="legacy-enrollment" aria-labelledby="legacy-title" hidden>
-                <h3 id="legacy-title">使用接入密钥</h3>
-                <form id="legacy-connect-form"><label for="enrollment">接入密钥</label><input id="enrollment" name="enrollment" type="password" maxlength="512" autocomplete="off" required><button id="legacy-connect" type="submit">连接服务</button></form>
-              </section>
-              <section id="pair-section" aria-labelledby="pair-title" hidden>
-                <h3 id="pair-title">手机配对</h3><p>用手机扫描二维码，打开后连接这台电脑。</p>
-                <div id="pair-code" class="pair-code" hidden><img id="qr" width="184" height="184" alt="连接这台电脑的配对二维码" hidden><div><label for="pair-link">配对链接</label><input id="pair-link" class="break" readonly><p id="pair-expiry" class="muted"></p><button id="copy" type="button">复制链接</button></div></div>
-                <button id="pair" type="button" class="accent-outline">生成配对码</button>
-              </section>
-            </div>
-          </details>
         </div>
         <section id="security-view" class="offline-security" role="tabpanel" aria-labelledby="tab-security" hidden>
           <div id="security-main">
@@ -87,7 +72,7 @@
                 <div class="offline-account-details"><svg class="icon" aria-hidden="true"><use href="#icon-user"/></svg><div><strong id="security-name"></strong><p id="security-identity"></p></div><svg class="icon" aria-hidden="true"><use href="#icon-globe"/></svg><p id="security-origin" class="break"></p></div>
                 <div class="offline-protection"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg><span id="security-protection-label"></span></div>
               </section>
-              <section class="offline-secret-row" aria-labelledby="offline-code-title">
+              <section id="offline-code-row" class="offline-secret-row" aria-labelledby="offline-code-title">
                 <div class="offline-secret-label"><svg class="icon" aria-hidden="true"><use href="#icon-code"/></svg><h3 id="offline-code-title">登录动态码</h3></div>
                 <div class="offline-code-value"><span id="offline-code" class="secret-mask" aria-label="动态码已隐藏">••• •••</span><span id="offline-timer" class="offline-timer" hidden><svg viewBox="0 0 40 40" aria-hidden="true"><circle class="timer-track" cx="20" cy="20" r="17"/><circle id="offline-timer-ring" class="timer-progress" cx="20" cy="20" r="17" pathLength="100"/></svg><span id="offline-seconds"></span></span></div>
                 <div class="offline-secret-actions"><button id="view-code" class="accent-outline compact" type="button">查看</button><button id="copy-code" class="icon-action" type="button" aria-label="复制动态码" hidden><svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg></button></div>
@@ -97,7 +82,7 @@
                 <span id="offline-recovery" class="secret-mask" aria-label="恢复码已隐藏">••••••••</span>
                 <div class="offline-secret-actions"><button id="view-recovery" class="accent-outline compact" type="button">查看</button><button id="copy-recovery" class="icon-action" type="button" aria-label="复制恢复码" hidden><svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg></button></div>
               </section>
-              <div class="offline-help"><p><svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg><span>使用动态码时，请保持电脑时间准确。</span></p></div>
+              <div id="offline-code-help" class="offline-help"><p><svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg><span>使用动态码时，请保持电脑时间准确。</span></p></div>
               <footer class="offline-updated"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg><span>最近更新</span><time id="security-updated"></time></footer>
             </div>
             <div class="keybook-footer-actions"><button id="manage-backup" class="accent-outline compact" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#icon-stack"/></svg>管理秘钥簿</button></div>
