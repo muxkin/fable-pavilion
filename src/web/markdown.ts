@@ -27,6 +27,41 @@ export function defaultUrlTransform(url: string) {
   return colon === -1 || relative || /^(https?|ircs?|mailto|xmpp)$/i.test(url.slice(0, colon)) ? url : '';
 }
 
+const SAFE_IMG_ATTRS = new Set(['src', 'alt', 'title', 'width', 'height', 'align', 'loading']);
+
+function parseSafeHtmlImg(raw: string): Element | null {
+  const trimmed = raw.trim();
+  const match = /^(?:<p(?:\s+align\s*=\s*["']?(?:left|center|right)["']?)?>\s*)?<img\b([\s\S]*?)\/?>(?:\s*<\/p>)?$/i.exec(
+    trimmed,
+  );
+  if (!match) return null;
+  const attrSource = match[1].trim();
+  if (!attrSource) return null;
+  const attrs: Record<string, string> = {};
+  const attrRe = /([a-zA-Z_:][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let cursor = 0;
+  let found: RegExpExecArray | null;
+  while ((found = attrRe.exec(attrSource))) {
+    if (attrSource.slice(cursor, found.index).trim()) return null;
+    cursor = found.index + found[0].length;
+    const name = found[1].toLowerCase();
+    if (!SAFE_IMG_ATTRS.has(name)) return null;
+    const value = (found[2] ?? found[3] ?? found[4] ?? '').trim();
+    attrs[name] = value;
+  }
+  if (attrSource.slice(cursor).trim()) return null;
+  if (!attrs.src) return null;
+  const properties: Record<string, string> = { src: attrs.src };
+  if (attrs.alt) properties.alt = attrs.alt;
+  if (attrs.title) properties.title = attrs.title;
+  return {
+    type: 'element',
+    tagName: 'img',
+    properties,
+    children: [],
+  };
+}
+
 export function renderMarkdown(
   source: string,
   {
@@ -49,7 +84,13 @@ export function renderMarkdown(
   const tree = processor.runSync(processor.parse(source));
   visit(tree, (node, index, parent) => {
     if (node.type === 'raw' && parent && index !== undefined) {
-      // Render raw HTML as escaped text, including script or event-handler syntax.
+      const safeImg = parseSafeHtmlImg(node.value);
+      if (safeImg) {
+        safeImg.properties.src = urlTransform(String(safeImg.properties.src ?? ''));
+        parent.children[index] = safeImg;
+        return;
+      }
+      // Render all other raw HTML as escaped text, including script or event-handler syntax.
       parent.children[index] = { type: 'text', value: node.value };
     }
     if (node.type !== 'element') return;

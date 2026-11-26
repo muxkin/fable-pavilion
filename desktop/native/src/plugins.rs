@@ -35,7 +35,12 @@ pub(crate) trait Adapter: Send + Sync {
     async fn info(&self) -> Value;
     async fn status(&self) -> Value;
     async fn read(&self, method: &str, params: &Value, query: &Value) -> Result<Option<Value>>;
-    async fn media(&self, thread: &str, reference: &str) -> Result<Media>;
+    async fn media(
+        &self,
+        thread: &str,
+        reference: &str,
+        from_document: Option<&str>,
+    ) -> Result<Media>;
     async fn export_log(&self, thread: &str) -> Result<Source>;
     fn subscribe(self: Arc<Self>, thread: &str) -> Result<Arc<Subscription>>;
     async fn write(

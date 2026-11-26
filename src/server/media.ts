@@ -1,8 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { realpath, stat, mkdir, writeFile } from 'node:fs/promises';
-import { resolve, basename, extname } from 'node:path';
+import { open, readFile, realpath, stat, mkdir, writeFile } from 'node:fs/promises';
+import { dirname, resolve, basename, extname, sep } from 'node:path';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import type { Nodes, Root } from 'mdast';
@@ -104,6 +104,16 @@ const markdown = unified().use(remarkParse).use(remarkFileCitations);
 export function resolveAttachmentPath(reference: string, cwd: string): string {
   return resolve(cwd, referencePath(reference));
 }
+function extractHtmlImgSrcs(html: string): string[] {
+  const results: string[] = [];
+  for (const tag of html.matchAll(/<img\b[^>]*>/gi)) {
+    const src = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(tag[0]);
+    const value = (src?.[1] ?? src?.[2] ?? src?.[3] ?? '').trim();
+    if (value && !/^(?:https?:|data:|blob:|\/\/)/i.test(value)) results.push(value);
+  }
+  return results;
+}
+
 export function attachmentLinks(text: string): string[] {
   const tree = markdown.runSync(markdown.parse(text)) as Root;
   const definitions = new Map<string, string>();
@@ -111,6 +121,7 @@ export function attachmentLinks(text: string): string[] {
     references: string[] = [];
   function visit(node: Nodes) {
     if (node.type === 'link' || node.type === 'image') links.push(node.url);
+    if (node.type === 'html') links.push(...extractHtmlImgSrcs(node.value));
     if (node.type === 'definition') definitions.set(node.identifier, node.url);
     if (node.type === 'linkReference' || node.type === 'imageReference') references.push(node.identifier);
     if ('children' in node) for (const child of node.children) visit(child);
@@ -119,7 +130,78 @@ export function attachmentLinks(text: string): string[] {
   for (const id of references) if (definitions.has(id)) links.push(definitions.get(id)!);
   return links;
 }
-export async function authorizeFile(reference: string, cwd: string, messages: Message[]): Promise<string> {
+
+function markdownImageLinks(text: string): string[] {
+  const tree = markdown.runSync(markdown.parse(text)) as Root;
+  const definitions = new Map<string, string>();
+  const images: string[] = [],
+    references: string[] = [];
+  function visit(node: Nodes) {
+    if (node.type === 'image') images.push(node.url);
+    if (node.type === 'html') images.push(...extractHtmlImgSrcs(node.value));
+    if (node.type === 'definition') definitions.set(node.identifier, node.url);
+    if (node.type === 'imageReference') references.push(node.identifier);
+    if ('children' in node) for (const child of node.children) visit(child);
+  }
+  visit(tree);
+  for (const id of references) if (definitions.has(id)) images.push(definitions.get(id)!);
+  return images.filter((value) => value && !/^(?:https?:|data:|blob:|\/\/)/i.test(value));
+}
+
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.avif', '.ico', '.svg']);
+const MAX_MARKDOWN_DOC_BYTES = 2 * 1024 * 1024;
+
+function isSensitiveFilePath(file: string): boolean {
+  const parts = file.split(/[\\/]/).map((p) => p.toLowerCase());
+  if (parts.some((p) => ['.ssh', '.gnupg', '.aws', '.kube', 'native-uploads'].includes(p))) return true;
+  const name = parts.at(-1) ?? '';
+  return (
+    ['.env', 'id_rsa', 'id_ed25519', 'authorized_keys', 'known_hosts', 'shadow', 'passwd', '.netrc', '.npmrc'].includes(
+      name,
+    ) ||
+    name.startsWith('.env.') ||
+    /\.(?:pem|key|p12|pfx)$/.test(name)
+  );
+}
+
+async function isSafeImageFile(file: string): Promise<boolean> {
+  const ext = extname(file).toLowerCase();
+  if (!IMAGE_EXTENSIONS.has(ext)) return false;
+  const handle = await open(file, 'r');
+  try {
+    const buf = Buffer.alloc(1024);
+    const { bytesRead } = await handle.read(buf, 0, 1024, 0);
+    const head = buf.subarray(0, bytesRead);
+    if (bytesRead >= 8 && head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
+      return true;
+    if (bytesRead >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return true;
+    if (bytesRead >= 6 && (head.subarray(0, 6).toString('ascii') === 'GIF87a' || head.subarray(0, 6).toString('ascii') === 'GIF89a'))
+      return true;
+    if (bytesRead >= 12 && head.subarray(0, 4).toString('ascii') === 'RIFF' && head.subarray(8, 12).toString('ascii') === 'WEBP')
+      return true;
+    if (bytesRead >= 2 && head[0] === 0x42 && head[1] === 0x4d) return true;
+    if (bytesRead >= 4 && head[0] === 0 && head[1] === 0 && head[2] === 1 && head[3] === 0) return true;
+    if (bytesRead >= 12 && head.subarray(4, 8).toString('ascii') === 'ftyp') {
+      const brand = head.subarray(8, 12).toString('ascii');
+      if (['avif', 'avis', 'mif1', 'msf1'].includes(brand)) return true;
+    }
+    if (ext === '.svg' && !head.includes(0)) {
+      const text = head.toString('utf8').replace(/^\ufeff/, '').trimStart().toLowerCase();
+      if (text.startsWith('<svg') || ((text.startsWith('<?xml') || text.startsWith('<!--')) && text.includes('<svg')))
+        return true;
+    }
+    return false;
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function authorizeFile(
+  reference: string,
+  cwd: string,
+  messages: Message[],
+  fromDocument?: string,
+): Promise<string> {
   const requested = resolveAttachmentPath(reference, cwd);
   const matches = (value: string) => {
     try {
@@ -134,10 +216,48 @@ export async function authorizeFile(reference: string, cwd: string, messages: Me
         attachmentLinks(message.text).some(matches)) ||
       message.attachments?.some((attachment) => matches(attachment.path)),
   );
-  if (!mentioned) throw Error('文件未作为附件出现在当前会话中');
-  const file = await realpath(requested);
-  if (!(await stat(file)).isFile()) throw Error('Not a file');
-  return file;
+  if (mentioned) {
+    const file = await realpath(requested);
+    if (!(await stat(file)).isFile()) throw Error('Not a file');
+    return file;
+  }
+  if (!fromDocument || !/\.(?:md|markdown)$/i.test(fromDocument.replace(/[?#].*$/, ''))) {
+    throw Error('文件未作为附件出现在当前会话中');
+  }
+  const docFile = await authorizeFile(fromDocument, cwd, messages);
+  const docInfo = await stat(docFile);
+  if (!docInfo.isFile() || docInfo.size > MAX_MARKDOWN_DOC_BYTES) {
+    throw Error('Markdown 文档过大，无法解析关联图片');
+  }
+  const docDir = dirname(docFile);
+  const targetCandidate = resolveAttachmentPath(reference.replace(/[?#].*$/, ''), docDir);
+  const targetFile = await realpath(targetCandidate);
+  const allowedRoots = [await realpath(cwd).catch(() => cwd), docDir];
+  const insideRoot = allowedRoots.some(
+    (root) => targetFile === root || targetFile.startsWith(root.endsWith(sep) ? root : root + sep),
+  );
+  if (!insideRoot || isSensitiveFilePath(targetFile)) {
+    throw Error('Markdown 引用的图片超出允许访问范围');
+  }
+  const content = await readFile(docFile, 'utf8');
+  const refs = markdownImageLinks(content);
+  let referenced = false;
+  for (const imgRef of refs) {
+    try {
+      const resolvedRef = await realpath(resolveAttachmentPath(imgRef.replace(/[?#].*$/, ''), docDir));
+      if (resolvedRef === targetFile) {
+        referenced = true;
+        break;
+      }
+    } catch {
+      /* ignore missing refs */
+    }
+  }
+  if (!referenced) throw Error('图片未在当前 Markdown 文档中引用');
+  if (!(await stat(targetFile)).isFile() || !(await isSafeImageFile(targetFile))) {
+    throw Error('Markdown 关联引用仅允许图片文件');
+  }
+  return targetFile;
 }
 interface Grant {
   file: string;

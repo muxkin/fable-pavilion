@@ -84,7 +84,12 @@ impl Adapter for Backend {
         }
     }
 
-    async fn media(&self, thread: &str, reference: &str) -> Result<Media> {
+    async fn media(
+        &self,
+        thread: &str,
+        reference: &str,
+        from_document: Option<&str>,
+    ) -> Result<Media> {
         valid_id(thread)?;
         if reference.starts_with("antigravity-image:") {
             let (step, index) = media::reference(reference)?;
@@ -112,7 +117,15 @@ impl Adapter for Backend {
         } else {
             Vec::new()
         };
-        media::download_cited(&self.home, thread, &roots, &steps, reference).map(Media::Download)
+        media::download_cited_with_document(
+            &self.home,
+            thread,
+            &roots,
+            &steps,
+            reference,
+            from_document,
+        )
+        .map(Media::Download)
     }
 
     async fn export_log(&self, thread: &str) -> Result<crate::history_media::Source> {

@@ -1,9 +1,13 @@
+import { defineAsyncComponent, shallowRef, Suspense } from 'vue';
 import { tsxComponent } from './tsx-component';
-import { shallowRef } from 'vue';
 import { writeRef, watchRender } from './render-effects';
 
 import { attachmentInfo } from '../shared/attachments';
-import type { AttachmentResource } from './AttachmentAccess';
+import type {
+  AttachmentResource,
+  LocalAssetResolver,
+  SiblingAttachment,
+} from './AttachmentAccess';
 import { attachmentPreviewContent, type AttachmentPreviewContent } from './attachment-preview';
 import { downloadFile } from './file-client';
 import { Icon } from './Icon';
@@ -12,7 +16,37 @@ import { useAppearance } from './theme/use-appearance';
 import { highlightedCode } from './highlighted-code';
 import { ImagePreview } from './ImagePreview';
 import { Dialog } from './shell/Dialog';
+import type { NestedPreviewRequest } from './preview/ArchivePreview';
 import './file-preview.css';
+
+const RichMessage = defineAsyncComponent(() => import('./RichMessage'));
+const PdfPreview = defineAsyncComponent(() =>
+  import('./preview/PdfPreview').then((m) => m.PdfPreview),
+);
+const DocxPreview = defineAsyncComponent(() =>
+  import('./preview/DocxPreview').then((m) => m.DocxPreview),
+);
+const SpreadsheetPreview = defineAsyncComponent(() =>
+  import('./preview/SpreadsheetPreview').then((m) => m.SpreadsheetPreview),
+);
+const PresentationPreview = defineAsyncComponent(() =>
+  import('./preview/PresentationPreview').then((m) => m.PresentationPreview),
+);
+const NotebookPreview = defineAsyncComponent(() =>
+  import('./preview/NotebookPreview').then((m) => m.NotebookPreview),
+);
+const ArchivePreview = defineAsyncComponent(() =>
+  import('./preview/ArchivePreview').then((m) => m.ArchivePreview),
+);
+const StructuredTreeView = defineAsyncComponent(() =>
+  import('./preview/StructuredTreeView').then((m) => m.StructuredTreeView),
+);
+const SvgCanvasPreview = defineAsyncComponent(() =>
+  import('./preview/HtmlSvgPreview').then((m) => m.SvgCanvasPreview),
+);
+const HtmlSandboxPreview = defineAsyncComponent(() =>
+  import('./preview/HtmlSvgPreview').then((m) => m.HtmlSandboxPreview),
+);
 
 const HIGHLIGHT_LIMIT = 48 * 1024;
 
@@ -22,13 +56,16 @@ function fileSize(bytes: number) {
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
 
-export const AttachmentPreview = tsxComponent(function AttachmentPreview(_props: {
+export const AttachmentPreview = tsxComponent(function AttachmentPreviewSetup(_props: {
   path: string;
   name: string;
   load: (signal: AbortSignal) => Promise<AttachmentResource>;
   trigger: HTMLElement | null;
   onClose: () => void;
-  onCopyImage: () => Promise<void>;
+  onCopyImage?: () => Promise<void>;
+  threadId?: string;
+  siblingFiles?: ReadonlyArray<SiblingAttachment>;
+  resolveLocalAsset?: LocalAssetResolver;
 }) {
   const appearance = useAppearance();
   const fileState = shallowRef<AttachmentResource>();
@@ -41,25 +78,39 @@ export const AttachmentPreview = tsxComponent(function AttachmentPreview(_props:
   const setError = writeRef(errorState);
   const retryState = shallowRef(0);
   const setRetry = writeRef(retryState);
-  const sourceState = shallowRef(false);
-  const setSource = writeRef(sourceState);
+  const altViewState = shallowRef(false);
+  const setAltView = writeRef(altViewState);
   const wrapState = shallowRef(true);
   const setWrap = writeRef(wrapState);
   const copyStatusState = shallowRef('');
   const setCopyStatus = writeRef(copyStatusState);
+  const nestedState = shallowRef<NestedPreviewRequest | null>(null);
+  const setNested = writeRef(nestedState);
   const watchFile = watchRender();
   const watchHighlight = watchRender();
-  return ({ path, name, load, trigger, onClose, onCopyImage }) => {
+
+  return ({
+    path,
+    name,
+    load,
+    trigger,
+    onClose,
+    onCopyImage,
+    threadId = '',
+    siblingFiles,
+    resolveLocalAsset,
+  }) => {
     const file = fileState.value;
     const content = contentState.value;
     const error = errorState.value;
     const retry = retryState.value;
-    const source = sourceState.value;
+    const altView = altViewState.value;
     const wrap = wrapState.value;
     const copyStatus = copyStatusState.value;
 
     watchFile(() => {
       const controller = new AbortController();
+      setAltView(false);
       void (async () => {
         try {
           const resource = await load(controller.signal);
@@ -73,7 +124,13 @@ export const AttachmentPreview = tsxComponent(function AttachmentPreview(_props:
           if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : '文件读取失败');
         }
       })();
-      return () => controller.abort();
+      return () => {
+        controller.abort();
+        if (nestedState.value) {
+          nestedState.value.cleanup();
+          setNested(null);
+        }
+      };
     }, [load, path, retry]);
 
     function reload() {
@@ -81,25 +138,77 @@ export const AttachmentPreview = tsxComponent(function AttachmentPreview(_props:
       setRetry((value) => value + 1);
     }
 
-    const text = content?.kind === 'text' ? content : undefined;
-    const language = text?.syntax?.language;
+    function closeNested() {
+      nestedState.value?.cleanup();
+      setNested(null);
+    }
+
+    const rawText =
+      content?.kind === 'text'
+        ? content.text
+        : content?.kind === 'markdown' ||
+            content?.kind === 'svg' ||
+            content?.kind === 'html' ||
+            content?.kind === 'notebook'
+          ? content.text
+          : undefined;
+    const rawTruncated =
+      content?.kind === 'text' ||
+      content?.kind === 'markdown' ||
+      content?.kind === 'svg' ||
+      content?.kind === 'html' ||
+      content?.kind === 'notebook'
+        ? content.truncated
+        : false;
+    const sourceLanguage =
+      content?.kind === 'text'
+        ? content.syntax?.language
+        : content?.kind === 'markdown'
+          ? 'markdown'
+          : content?.kind === 'svg'
+            ? 'xml'
+            : content?.kind === 'html'
+              ? 'html'
+              : content?.kind === 'notebook'
+                ? 'json'
+                : undefined;
+
+    const showingSource =
+      content?.kind === 'text'
+        ? (!content.table?.rows.length && !content.structured) || altView
+        : content?.kind === 'markdown' || content?.kind === 'svg' || content?.kind === 'notebook'
+          ? altView
+          : content?.kind === 'html'
+            ? !altView
+            : false;
+
     const highlight = highlightState.value;
     watchHighlight(() => {
       setHighlight(undefined);
-      if (!text?.text || !language || text.truncated || text.text.length > HIGHLIGHT_LIMIT) return;
+      if (
+        !showingSource ||
+        !rawText ||
+        !sourceLanguage ||
+        rawTruncated ||
+        rawText.length > HIGHLIGHT_LIMIT
+      ) {
+        return;
+      }
       let disposed = false;
-      void highlightedCode(text.text, language)
+      void highlightedCode(rawText, sourceLanguage)
         .then((html) => {
-          if (html && !disposed) setHighlight({ text: text.text, language, html });
+          if (html && !disposed) setHighlight({ text: rawText, language: sourceLanguage, html });
         })
         .catch(() => {});
       return () => {
         disposed = true;
       };
-    }, [text, language]);
+    }, [showingSource, rawText, sourceLanguage, rawTruncated]);
+
     const title = file?.name || name;
     const info = attachmentInfo(path, title);
     const download = file ? () => downloadFile({ ...file, url: file.downloadUrl ?? file.url }) : undefined;
+
     if (file && content?.kind === 'image') {
       return (
         <ImagePreview
@@ -117,152 +226,293 @@ export const AttachmentPreview = tsxComponent(function AttachmentPreview(_props:
       );
     }
 
-    const table = text?.table;
-    const kind = table
-      ? info.kind
-      : text
-        ? text.syntax
-          ? `${text.syntax.label} 源码`
-          : '文本文件'
-        : info.kind;
+    const toggleLabels: [string, string] | undefined =
+      content?.kind === 'markdown'
+        ? ['渲染视图', '查看源码']
+        : content?.kind === 'svg'
+          ? ['画布预览', '查看源码']
+          : content?.kind === 'html'
+            ? ['沙箱预览', '查看源码']
+            : content?.kind === 'notebook'
+              ? ['笔记本视图', '原始 JSON']
+              : content?.kind === 'text' && content.table?.rows.length
+                ? ['表格视图', '查看源码']
+                : content?.kind === 'text' && content.structured
+                  ? ['结构树', '查看源码']
+                  : undefined;
+
+    const kindLabel =
+      content?.kind === 'markdown'
+        ? 'Markdown 文档'
+        : content?.kind === 'svg'
+          ? 'SVG 矢量图'
+          : content?.kind === 'html'
+            ? 'HTML 文档'
+            : content?.kind === 'notebook'
+              ? 'Jupyter 笔记本'
+              : content?.kind === 'pdf'
+                ? 'PDF 文档'
+                : content?.kind === 'docx'
+                  ? 'Word 文档'
+                  : content?.kind === 'xlsx'
+                    ? 'Excel 工作簿'
+                    : content?.kind === 'pptx'
+                      ? 'PPT 演示文稿'
+                      : content?.kind === 'archive'
+                        ? '压缩包'
+                        : content?.kind === 'text'
+                          ? content.table
+                            ? info.kind
+                            : content.syntax
+                              ? `${content.syntax.label} 源码`
+                              : '文本文件'
+                          : info.kind;
+
     const highlightHtml =
-      highlight && highlight.text === text?.text && highlight.language === language
+      highlight && highlight.text === rawText && highlight.language === sourceLanguage
         ? highlight.html
         : undefined;
-    const showTable = !!table?.rows.length && !source;
-    const columns = showTable ? Math.max(...table.rows.map((row) => row.length)) : 0;
+
+    const suspenseFallback = (
+      <p class="file-preview-state" role="status">
+        正在加载预览组件…
+      </p>
+    );
+
     return (
-      <Dialog title={title} className="file-preview" onClose={onClose} returnFocus={trigger}>
-        {() => (
-          <>
-            <div class="file-preview-toolbar">
-              <span class="file-preview-type">
-                {kind}
-                {file && ` · ${fileSize(file.size)}`}
-              </span>
-              <div class="file-preview-actions">
-                {!!table?.rows.length && (
-                  <button type="button" onClick={() => setSource(!source)}>
-                    {source ? '查看表格' : '查看原文'}
-                  </button>
-                )}
-                {!!text?.text && !showTable && (
-                  <button type="button" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>
-                    自动换行
-                  </button>
-                )}
-                {!!text?.text && !showTable && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(text.text);
-                        setCopyStatus('已复制');
-                      } catch {
-                        setCopyStatus('复制失败，可选中文字手动复制');
-                      }
-                    }}
-                  >
-                    <Icon name="copy" size={16} />
-                    {text.truncated ? '复制预览' : '复制文本'}
-                  </button>
-                )}
-                {download && (
-                  <button type="button" onClick={download}>
-                    <Icon name="download" size={16} />
-                    下载
-                  </button>
-                )}
+      <>
+        <Dialog title={title} className="file-preview" onClose={onClose} returnFocus={trigger}>
+          {() => (
+            <>
+              <div class="file-preview-toolbar">
+                <span class="file-preview-type">
+                  {kindLabel}
+                  {file && ` · ${fileSize(file.size)}`}
+                </span>
+                <div class="file-preview-actions">
+                  {toggleLabels && (
+                    <button type="button" onClick={() => setAltView(!altView)}>
+                      {showingSource ? toggleLabels[0] : toggleLabels[1]}
+                    </button>
+                  )}
+                  {!!rawText && showingSource && (
+                    <button type="button" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>
+                      自动换行
+                    </button>
+                  )}
+                  {!!rawText && (showingSource || content?.kind === 'markdown') && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(rawText);
+                          setCopyStatus('已复制');
+                        } catch {
+                          setCopyStatus('复制失败，可选中文字手动复制');
+                        }
+                      }}
+                    >
+                      <Icon name="copy" size={16} />
+                      {rawTruncated ? '复制预览' : '复制文本'}
+                    </button>
+                  )}
+                  {download && (
+                    <button type="button" onClick={download}>
+                      <Icon name="download" size={16} />
+                      下载
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-            {copyStatus && (
-              <p class="file-preview-note" role="status">
-                {copyStatus}
-              </p>
-            )}
-            {(text?.truncated || (showTable && table.clipped)) && (
-              <p class="file-preview-note">仅显示部分内容，可下载完整文件。</p>
-            )}
-            <div
-              class="file-preview-content"
-              tabindex={text?.text ? 0 : undefined}
-              role={text?.text ? 'region' : undefined}
-              aria-label={text?.text ? '文件内容' : undefined}
-            >
-              {error ? (
-                <div class="file-preview-state" role="alert">
-                  <p>{error}</p>
-                  <button type="button" onClick={reload}>
-                    重试
-                  </button>
-                </div>
-              ) : !file || !content ? (
-                <p class="file-preview-state" role="status">
-                  正在读取文件…
+              {copyStatus && (
+                <p class="file-preview-note" role="status">
+                  {copyStatus}
                 </p>
-              ) : showTable ? (
-                <table class="file-preview-table" aria-label="表格预览">
-                  <thead>
-                    <tr>
-                      <th scope="col">#</th>
-                      {Array.from({ length: columns }, (_, index) => (
-                        <th scope="col" key={index}>
-                          {index >= 26 && 'A'}
-                          {String.fromCharCode(65 + (index % 26))}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {table.rows.map((row, index) => (
-                      <tr key={index}>
-                        <th scope="row">{index + 1}</th>
-                        {Array.from({ length: columns }, (_, column) => (
-                          <td key={column}>{row[column]}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : text ? (
-                text.text ? (
-                  <SourceText
-                    text={text.text}
-                    highlighted={highlightHtml}
-                    wrap={wrap}
-                    lineNumbers={appearance.value.settings.lineNumbers}
+              )}
+              {rawTruncated && (
+                <p class="file-preview-note">仅显示前部内容，可下载完整文件查看。</p>
+              )}
+              <div
+                class="file-preview-content"
+                tabindex={showingSource && rawText ? 0 : undefined}
+                role={showingSource && rawText ? 'region' : undefined}
+                aria-label={showingSource && rawText ? '文件内容' : undefined}
+              >
+                {error ? (
+                  <div class="file-preview-state" role="alert">
+                    <p>{error}</p>
+                    <button type="button" onClick={reload}>
+                      重试
+                    </button>
+                  </div>
+                ) : !file || !content ? (
+                  <p class="file-preview-state" role="status">
+                    正在读取文件…
+                  </p>
+                ) : showingSource && rawText !== undefined ? (
+                  rawText ? (
+                    <SourceText
+                      text={rawText}
+                      highlighted={highlightHtml}
+                      wrap={wrap}
+                      lineNumbers={appearance.value.settings.lineNumbers}
+                    />
+                  ) : (
+                    <p class="file-preview-state">文件为空。</p>
+                  )
+                ) : content.kind === 'markdown' ? (
+                  <div class="fp-markdown-doc">
+                    <Suspense>
+                      {{
+                        default: () => (
+                          <RichMessage
+                            text={content.text}
+                            threadId={threadId}
+                            documentPath={path}
+                            siblingFiles={siblingFiles}
+                            resolveLocalAsset={resolveLocalAsset}
+                          />
+                        ),
+                        fallback: () => suspenseFallback,
+                      }}
+                    </Suspense>
+                  </div>
+                ) : content.kind === 'svg' ? (
+                  <Suspense>
+                    {{
+                      default: () => <SvgCanvasPreview text={content.text} label={title} />,
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'html' ? (
+                  <Suspense>
+                    {{
+                      default: () => <HtmlSandboxPreview html={content.text} title={title} />,
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'notebook' ? (
+                  <Suspense>
+                    {{
+                      default: () => (
+                        <NotebookPreview
+                          notebook={content.notebook}
+                          threadId={threadId}
+                          documentPath={path}
+                          siblingFiles={siblingFiles}
+                          resolveLocalAsset={resolveLocalAsset}
+                        />
+                      ),
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'text' && content.table?.rows.length ? (
+                  <Suspense>
+                    {{
+                      default: () => (
+                        <SpreadsheetPreview
+                          sheets={[
+                            {
+                              name: title,
+                              rows: content.table!.rows,
+                              clipped: content.table!.clipped,
+                            },
+                          ]}
+                        />
+                      ),
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'text' && content.structured ? (
+                  <Suspense>
+                    {{
+                      default: () => <StructuredTreeView value={content.structured!.value} />,
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'xlsx' ? (
+                  <Suspense>
+                    {{
+                      default: () => (
+                        <SpreadsheetPreview
+                          sheets={content.workbook.sheets}
+                          clippedSheets={content.workbook.clippedSheets}
+                        />
+                      ),
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'pptx' ? (
+                  <Suspense>
+                    {{
+                      default: () => <PresentationPreview presentation={content.presentation} />,
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'pdf' ? (
+                  <Suspense>
+                    {{
+                      default: () => <PdfPreview bytes={content.bytes} url={file.url} />,
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'docx' ? (
+                  <Suspense>
+                    {{
+                      default: () => <DocxPreview buffer={content.buffer} />,
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'archive' ? (
+                  <Suspense>
+                    {{
+                      default: () => (
+                        <ArchivePreview
+                          archive={content.archive}
+                          onOpenEntry={(req) => {
+                            nestedState.value?.cleanup();
+                            setNested(req);
+                          }}
+                        />
+                      ),
+                      fallback: () => suspenseFallback,
+                    }}
+                  </Suspense>
+                ) : content.kind === 'video' ? (
+                  <video
+                    src={file.url}
+                    controls
+                    playsinline
+                    preload="metadata"
+                    onError={() => setError('视频无法播放，请重试')}
                   />
-                ) : (
-                  <p class="file-preview-state">文件为空。</p>
-                )
-              ) : content.kind === 'video' ? (
-                <video
-                  src={file.url}
-                  controls
-                  playsinline
-                  preload="metadata"
-                  onError={() => setError('视频无法播放，请重试')}
-                />
-              ) : content.kind === 'audio' ? (
-                <audio
-                  src={file.url}
-                  controls
-                  preload="metadata"
-                  onError={() => setError('音频无法播放，请重试')}
-                />
-              ) : content.kind === 'pdf' ? (
-                <div class="file-preview-state">
-                  <a href={file.url} target="_blank" rel="noopener noreferrer">
-                    打开 PDF
-                  </a>
-                </div>
-              ) : content.kind === 'unsupported' ? (
-                <p class="file-preview-state">{content.reason}</p>
-              ) : null}
-            </div>
-          </>
+                ) : content.kind === 'audio' ? (
+                  <audio
+                    src={file.url}
+                    controls
+                    preload="metadata"
+                    onError={() => setError('音频无法播放，请重试')}
+                  />
+                ) : content.kind === 'unsupported' ? (
+                  <p class="file-preview-state">{content.reason}</p>
+                ) : null}
+              </div>
+            </>
+          )}
+        </Dialog>
+        {nestedState.value && (
+          <AttachmentPreview
+            key={`nested:${nestedState.value.path}`}
+            path={nestedState.value.path}
+            name={nestedState.value.name}
+            threadId={threadId}
+            load={nestedState.value.load}
+            resolveLocalAsset={nestedState.value.resolveLocalAsset}
+            trigger={null}
+            onClose={closeNested}
+          />
         )}
-      </Dialog>
+      </>
     );
   };
 });

@@ -850,13 +850,18 @@ impl Adapter for Host {
         .await
         .map(|value| (!value.is_null()).then_some(value))
     }
-    async fn media(&self, thread: &str, reference: &str) -> Result<Media> {
+    async fn media(
+        &self,
+        thread: &str,
+        reference: &str,
+        from_document: Option<&str>,
+    ) -> Result<Media> {
+        let mut params = json!({"thread":thread,"reference":reference});
+        if let Some(doc) = from_document {
+            params["fromDocument"] = json!(doc);
+        }
         let reply = self
-            .call(
-                "adapter/media",
-                json!({"thread":thread,"reference":reference}),
-                Duration::from_secs(25),
-            )
+            .call("adapter/media", params, Duration::from_secs(25))
             .await?;
         if reply["kind"] != "verified-file" {
             return self.source(reply).await.map(Media::Download);

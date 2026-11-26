@@ -1634,12 +1634,15 @@ export async function remoteFetch(
   if (init?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   try {
     const match = /^\/api\/threads\/([^/]+)\/media$/.exec(path);
-    const data =
-      match && typeof init?.body === 'string'
-        ? await (
-            await import('./file-client')
-          ).mediaContent(decodeURIComponent(match[1]), JSON.parse(init.body).path, backendId)
-        : await deviceSession.api(path, init, backendId);
+    let data: unknown;
+    if (match && typeof init?.body === 'string') {
+      const parsed = JSON.parse(init.body) as { path: string; fromDocument?: string };
+      data = await (
+        await import('./file-client')
+      ).mediaContent(decodeURIComponent(match[1]), parsed.path, backendId, parsed.fromDocument);
+    } else {
+      data = await deviceSession.api(path, init, backendId);
+    }
     return Response.json(data);
   } catch (error) {
     if (init?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');

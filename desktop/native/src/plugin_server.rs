@@ -216,9 +216,16 @@ impl<A: PluginAdapter> Server<A> {
             }
             "adapter/write" => self.write(params, frame).await,
             "adapter/media" => {
+                let from_document = params["fromDocument"]
+                    .as_str()
+                    .filter(|path| (1..=4096).contains(&path.encode_utf16().count()));
                 let media = self
                     .adapter
-                    .media(field(params, "thread")?, field(params, "reference")?)
+                    .media(
+                        field(params, "thread")?,
+                        field(params, "reference")?,
+                        from_document,
+                    )
                     .await?;
                 match media {
                     Media::Download(source) => stage(&self.directory, source).await,
@@ -602,12 +609,17 @@ impl CodexServer {
             }
             "codex/media" => {
                 let thread = thread_id(&params["thread"])?;
+                let from_document = params["fromDocument"]
+                    .as_str()
+                    .filter(|path| (1..=4096).contains(&path.encode_utf16().count()))
+                    .map(str::to_owned);
                 let source = local
                     .media(
                         self.id.clone(),
                         thread,
                         field(params, "device")?.to_owned(),
                         field(params, "reference")?.to_owned(),
+                        from_document,
                         self.live(params, thread).map(Arc::as_ref),
                     )
                     .await?;

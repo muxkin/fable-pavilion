@@ -40,6 +40,8 @@ mod im_cli;
 mod im_client;
 mod im_crypto;
 mod im_interactions;
+#[cfg(feature = "official-plugins")]
+mod markdown_media;
 mod migration;
 mod offline_security;
 mod offline_security_rpc;

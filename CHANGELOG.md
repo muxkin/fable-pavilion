@@ -1,5 +1,15 @@
 # 更新记录
 
+## 1.0.13 — 2026-11-26
+
+- **前端多格式文件在线预览全面扩充**：在保持现有严格 CSP 与主包体积零增量（按需懒加载）的前提下，将附件预览弹窗扩充至覆盖 Markdown 渲染视图（支持 GFM 表格、KaTeX 公式、Mermaid 图表、代码高亮及源码切换）、PDF 逐页 Canvas 阅读器（缩放/翻页/页码跳转）、Word（`.docx`）语义文档渲染、Excel（`.xlsx`）多工作表表格筛选、PowerPoint（`.pptx`）幻灯片卡片与内嵌图片放大、Jupyter Notebook（`.ipynb`）单元格与图表输出、JSON/JSONL/YAML/TOML 折叠树、ZIP/TAR/GZIP 目录树及包内二次嵌套预览、SVG 棋盘画布与 HTML 零脚本沙箱预览。
+- **AI 发送/引用 `.md` 时本地图片路径全链路适配**：支持渲染 Markdown 中的相对路径（`./`、`../`、无前缀相对路径）、绝对路径、`file://` URI、URL 编码中文/空格以及安全白名单 HTML `<img>` 标签；工作台内通过 1 跳安全授权直读本机关联图片，IM 云端场景自动匹配同消息附带的同名图片附件并对孤立本机路径展示友好占位提示。
+- **终端侧边栏文件管理器接入预览**：点击远程文件可直接打开同款多格式预览弹窗，并自动解析所预览 `.md` 文档内的相对路径本地图片。
+
+## Rust 桌面适配器 1.0.13 — 2026-11-26
+
+- **Markdown 关联本地图片 1 跳安全授权**：新增共享校验模块 `markdown_media.rs`，在 `media.describe` RPC 与 Codex、Antigravity、DSH 三个官方插件中透传可选 `fromDocument` 字段；当目标图片仅在当前会话已授权的 `.md`/`.markdown` 文件内引用时，校验父文档授权、1 跳引用存在性、会话根目录边界、敏感路径拦截及图片魔数后通过现有端到端加密通道安全下发。
+
 ## 1.0.12 — 2026-11-25
 
 - **Antigravity 发消息卡暂停队列与「立即发送」修复**：修复未手动切换模型时 `SendUserCascadeMessage` 未携带 `planModel` 导致 Antigravity 上下文压缩后报 `plan model not specified` 并将消息滞留在「排队消息 · 队列已暂停待发」的问题；同步修复点击「立即发送」在 `queue-remove` 尚处 `dispatching` 时误判未完成而丢弃后续发送的缺陷。

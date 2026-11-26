@@ -648,6 +648,37 @@ fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_pat
         )
         .is_err()
     );
+
+    // Local image referenced only inside report.md succeeds via 1-hop from_document authorization.
+    let figs = brain.join("figs");
+    std::fs::create_dir_all(&figs).unwrap();
+    let plot = figs.join("loss.png");
+    std::fs::write(
+        &plot,
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde",
+    )
+    .unwrap();
+    std::fs::write(&report, "# Report\n\n![loss](./figs/loss.png)\n").unwrap();
+    assert!(
+        media::download_cited(
+            dir.path(),
+            "thread-1",
+            std::slice::from_ref(&workspace),
+            &steps,
+            &plot.to_string_lossy(),
+        )
+        .is_err()
+    );
+    let nested = media::download_cited_with_document(
+        dir.path(),
+        "thread-1",
+        std::slice::from_ref(&workspace),
+        &steps,
+        &plot.to_string_lossy(),
+        Some(&report.to_string_lossy()),
+    )
+    .unwrap();
+    assert_eq!(nested.name, "loss.png");
 }
 
 #[test]

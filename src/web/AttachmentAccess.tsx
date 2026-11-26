@@ -11,6 +11,17 @@ export interface AttachmentResource {
   width?: number;
   height?: number;
 }
+export interface SiblingAttachment {
+  name: string;
+  url: string;
+  mime?: string;
+}
+
+export type LocalAssetResolver = (
+  src: string,
+  signal?: AbortSignal,
+) => Promise<AttachmentResource | null>;
+
 /** Presentation stays shared; the owning module supplies its own authorization and transport. */
 export interface AttachmentAccess {
   load(threadId: string, path: string, signal?: AbortSignal, fullSize?: boolean): Promise<AttachmentResource>;

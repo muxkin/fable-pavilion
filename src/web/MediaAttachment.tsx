@@ -1,15 +1,46 @@
 import { tsxComponent } from './tsx-component';
 import { shallowRef } from 'vue';
 import { writeRef, watchRender } from './render-effects';
-import { useAttachmentAccess } from './AttachmentAccess';
+import {
+  useAttachmentAccess,
+  type LocalAssetResolver,
+  type SiblingAttachment,
+} from './AttachmentAccess';
 import { remoteFetch } from './device-session';
 import { ImagePreview } from './ImagePreview';
 import { AttachmentActions } from './AttachmentActions';
 import { AttachmentIdentity } from './AttachmentIdentity';
-import { attachmentInfo, localReference, attachmentName } from '../shared/attachments';
+import {
+  attachmentInfo,
+  isBareRelativeAssetPath,
+  isExternalUrl,
+  localReference,
+  attachmentName,
+} from '../shared/attachments';
 import { mediaContent, downloadFile } from './file-client';
 import { useVisible } from './useVisible';
 import { copyImage, imageBlob } from './image-clipboard';
+
+function matchSiblingAttachment(
+  src: string,
+  siblings?: ReadonlyArray<SiblingAttachment>,
+): SiblingAttachment | undefined {
+  if (!siblings?.length) return undefined;
+  const cleaned = src.split(/[?#]/)[0];
+  let decoded = cleaned;
+  try {
+    decoded = decodeURIComponent(cleaned);
+  } catch {
+    /* ignore */
+  }
+  const targetName = attachmentName(decoded).toLowerCase();
+  if (!targetName) return undefined;
+  return siblings.find(
+    (item) =>
+      item.name.toLowerCase() === targetName &&
+      (!item.mime || /^(image|audio|video)\//.test(item.mime)),
+  );
+}
 
 export const Media = tsxComponent(function Media(_props: {
   src: string;
@@ -18,6 +49,9 @@ export const Media = tsxComponent(function Media(_props: {
   compact?: boolean;
   onRemove?: () => void;
   mediaType?: 'image' | 'video' | 'audio';
+  fromDocument?: string;
+  siblingFiles?: ReadonlyArray<SiblingAttachment>;
+  resolveLocalAsset?: LocalAssetResolver;
 }) {
   const attachmentAccess = useAttachmentAccess();
   const { ref, visible: intersectionVisible } = useVisible();
@@ -31,18 +65,39 @@ export const Media = tsxComponent(function Media(_props: {
   const setPreview = writeRef(previewState);
   const originalState = shallowRef('');
   const setOriginal = writeRef(originalState);
+  const unavailableNoteState = shallowRef('');
+  const setUnavailableNote = writeRef(unavailableNoteState);
   const expiresAt = { current: 0 };
   const refreshing = { current: false };
   const recovery: { current: { time: number; playing: boolean } | null } = { current: null };
   const watchUrl = watchRender();
-  return ({ src, label, threadId, compact = false, onRemove, mediaType }) => {
+  return ({
+    src,
+    label,
+    threadId,
+    compact = false,
+    onRemove,
+    mediaType,
+    fromDocument,
+    siblingFiles,
+    resolveLocalAsset,
+  }) => {
     const access = attachmentAccess.value;
     const visible = intersectionVisible.value;
+    const isDocumentLocalRef =
+      !!fromDocument && (localReference(src) || isBareRelativeAssetPath(src));
+    const matchedSibling =
+      access && isDocumentLocalRef ? matchSiblingAttachment(src, siblingFiles) : undefined;
+    const accessTarget = matchedSibling ? matchedSibling.url : src;
     // Start external media only after visibility initialization, too. Otherwise a
     // fast failed load can be cleared by the first visibility effect.
-    const cached = access?.peek?.(threadId, src);
+    const cached =
+      access && (!isDocumentLocalRef || matchedSibling)
+        ? access.peek?.(threadId, accessTarget)
+        : undefined;
     const url = urlState.value || cached?.url || '';
     const error = errorState.value;
+    const unavailableNote = unavailableNoteState.value;
     const refresh = refreshState.value;
     const preview = previewState.value;
     const original = originalState.value;
@@ -70,10 +125,48 @@ export const Media = tsxComponent(function Media(_props: {
     }
     watchUrl(() => {
       if (!visible) return;
+      setUnavailableNote('');
+      if (resolveLocalAsset && !isExternalUrl(src)) {
+        const controller = new AbortController();
+        void resolveLocalAsset(src, controller.signal)
+          .then((file) => {
+            if (controller.signal.aborted) return;
+            if (!file) {
+              setUnavailableNote(`本地图片不可用：${attachmentName(src)}`);
+              setError('');
+              return;
+            }
+            expiresAt.current = file.expiresAt;
+            setUrl(file.url);
+            setError('');
+          })
+          .catch((err) => {
+            if (!controller.signal.aborted) setError(err instanceof Error ? err.message : '图片加载失败');
+          })
+          .finally(() => {
+            refreshing.current = false;
+          });
+        return () => controller.abort();
+      }
       if (access) {
+        if (fromDocument && isExternalUrl(src)) {
+          expiresAt.current = 0;
+          setUrl(src);
+          setError('');
+          refreshing.current = false;
+          return;
+        }
+        if (isDocumentLocalRef && !matchedSibling) {
+          expiresAt.current = 0;
+          setUrl('');
+          setError('');
+          setUnavailableNote(`本地图片未随文档上传：${src}`);
+          refreshing.current = false;
+          return;
+        }
         const controller = new AbortController();
         void access
-          .load(threadId, src, controller.signal)
+          .load(threadId, accessTarget, controller.signal)
           .then((file) => {
             if (controller.signal.aborted) return;
             if (!/^(image|audio|video)\//.test(file.mime)) throw Error('此附件不支持媒体预览');
@@ -100,7 +193,7 @@ export const Media = tsxComponent(function Media(_props: {
       void remoteFetch(`/api/threads/${encodeURIComponent(threadId)}/media`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: src }),
+        body: JSON.stringify(fromDocument ? { path: src, fromDocument } : { path: src }),
         signal: controller.signal,
       })
         .then(async (r) => {
@@ -117,13 +210,18 @@ export const Media = tsxComponent(function Media(_props: {
           refreshing.current = false;
         });
       return () => controller.abort();
-    }, [src, threadId, visible, refresh, access]);
+    }, [src, threadId, visible, refresh, access, fromDocument, matchedSibling?.url, resolveLocalAsset]);
     async function download() {
-      if (access) {
-        const file = await access.load(threadId, src, undefined, true);
+      if (resolveLocalAsset && !isExternalUrl(src)) {
+        const file = await resolveLocalAsset(src);
+        if (file) return downloadFile({ ...file, url: file.downloadUrl ?? file.url });
+        throw Error('本地图片不可用');
+      }
+      if (access && (!isDocumentLocalRef || matchedSibling)) {
+        const file = await access.load(threadId, accessTarget, undefined, true);
         return downloadFile({ ...file, url: file.downloadUrl ?? file.url });
       }
-      if (localReference(src)) return downloadFile(await mediaContent(threadId, src));
+      if (localReference(src)) return downloadFile(await mediaContent(threadId, src, undefined, fromDocument));
       const response = await fetch(src, { credentials: 'omit', referrerPolicy: 'no-referrer' });
       if (!response.ok) throw Error('图片下载失败，请重试');
       const temporary = URL.createObjectURL(await response.blob());
@@ -135,13 +233,24 @@ export const Media = tsxComponent(function Media(_props: {
     const name = label || info.name;
     const copyOriginal = () =>
       copyImage(async () => {
-        const file = access
-          ? await access.load(threadId, src, undefined, true)
-          : localReference(src)
-            ? await mediaContent(threadId, src)
-            : { url: src };
+        const file =
+          resolveLocalAsset && !isExternalUrl(src)
+            ? await resolveLocalAsset(src)
+            : access && (!isDocumentLocalRef || matchedSibling)
+              ? await access.load(threadId, accessTarget, undefined, true)
+              : localReference(src)
+                ? await mediaContent(threadId, src, undefined, fromDocument)
+                : { url: src };
+        if (!file) throw Error('图片不可用');
         return imageBlob(file.url);
       });
+    if (unavailableNote) {
+      return (
+        <span class="file-preview-local-image-note" ref={ref} title={src}>
+          <AttachmentIdentity path={src} name={label && label !== '图片' ? `${label}（${unavailableNote}）` : unavailableNote} />
+        </span>
+      );
+    }
     return (
       <AttachmentActions
         path={src}
@@ -191,9 +300,9 @@ export const Media = tsxComponent(function Media(_props: {
                       event.stopPropagation();
                       if (expiresAt.current && Date.now() + 10000 >= expiresAt.current) renew();
                       setPreview(true);
-                      if (access)
+                      if (access && (!isDocumentLocalRef || matchedSibling))
                         void access
-                          .load(threadId, src, undefined, true)
+                          .load(threadId, accessTarget, undefined, true)
                           .then((file) => setOriginal(file.url))
                           .catch(() => setError('原图加载失败，可重试'));
                     }}

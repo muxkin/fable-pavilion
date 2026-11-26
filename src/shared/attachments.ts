@@ -7,6 +7,99 @@ export const localReference = (url: string) =>
     url.startsWith(prefix),
   );
 
+export function isExternalUrl(url: string): boolean {
+  const trimmed = url.trim();
+  return /^(?:https?:|data:|blob:|mailto:|tel:|\/\/)/i.test(trimmed);
+}
+
+export function isBareRelativeAssetPath(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.startsWith('#') || isExternalUrl(trimmed)) return false;
+  if (localReference(trimmed)) return false;
+  if (/[\x00-\x1f]/.test(trimmed)) return false;
+  // Reject unknown URI schemes (e.g. javascript:, ftp:, custom:) while keeping Windows drives out (handled by localReference).
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return false;
+  return true;
+}
+
+function normalizeJoinedPath(baseDir: string, relativePath: string): string {
+  const windows = /^[a-z]:[\\/]/i.test(baseDir);
+  const cleanedBase = baseDir.replace(/\\/g, '/').replace(/\/+$/, '');
+  const cleanedRel = relativePath.replace(/\\/g, '/');
+  const combined = `${cleanedBase}/${cleanedRel}`;
+  const leadingSlash = !windows && combined.startsWith('/');
+  const parts = combined.split('/');
+  const stack: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (windows && stack.length <= 1) continue;
+      if (stack.length > 0) stack.pop();
+      continue;
+    }
+    stack.push(part);
+  }
+  const joined = `${leadingSlash ? '/' : ''}${stack.join('/')}`;
+  return windows ? joined.replace(/\//g, '\\') : joined || '/';
+}
+
+export function documentDirectory(reference: string): string | null {
+  if (!localReference(reference)) return null;
+  if (
+    ['dsh-image:', 'dsh-file:', 'pocket-inline:', 'antigravity-image:'].some((prefix) =>
+      reference.startsWith(prefix),
+    )
+  ) {
+    return null;
+  }
+  const raw = attachmentPath(reference).replace(/[?#].*$/, '').replace(/:\d+(?::\d+)?$/, '');
+  const slash = Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\'));
+  if (slash < 0) return null;
+  if (slash === 0) return '/';
+  if (/^[a-z]:$/i.test(raw.slice(0, slash))) return `${raw.slice(0, slash)}\\`;
+  return raw.slice(0, slash);
+}
+
+/**
+ * Resolves an image/asset reference inside a Markdown document or chat message:
+ * - External URLs & special attachment schemes pass through unchanged.
+ * - Absolute / file: / sandbox: local paths pass through unchanged.
+ * - Relative paths (`./a.png`, `../a.png`, or bare `images/a.png`) resolve against
+ *   `documentPath`'s parent directory when previewing a local `.md` file, or get
+ *   normalized to `./...` so chat-message relative images route through local media API.
+ */
+export function resolveMarkdownAssetPath(rawSrc: string, documentPath?: string): string {
+  const trimmed = rawSrc.trim();
+  if (!trimmed || isExternalUrl(trimmed)) return trimmed;
+  if (
+    ['dsh-image:', 'dsh-file:', 'pocket-inline:', 'antigravity-image:'].some((prefix) =>
+      trimmed.startsWith(prefix),
+    )
+  ) {
+    return trimmed;
+  }
+  const isAbsoluteOrUri =
+    (trimmed.startsWith('/') && !trimmed.startsWith('//')) ||
+    /^[a-z]:[\\/]/i.test(trimmed) ||
+    trimmed.startsWith('file:') ||
+    trimmed.startsWith('sandbox:');
+  if (isAbsoluteOrUri) return trimmed;
+  if (trimmed.startsWith('./') || trimmed.startsWith('../') || isBareRelativeAssetPath(trimmed)) {
+    const cleanRel = trimmed.replace(/[?#].*$/, '');
+    let decodedRel = cleanRel;
+    try {
+      decodedRel = decodeURIComponent(cleanRel);
+    } catch {
+      /* keep raw */
+    }
+    const baseDir = documentPath ? documentDirectory(documentPath) : null;
+    if (baseDir) return normalizeJoinedPath(baseDir, decodedRel);
+    return trimmed.startsWith('./') || trimmed.startsWith('../') ? trimmed : `./${trimmed}`;
+  }
+  return trimmed;
+}
+
 export function attachmentPath(reference: string) {
   let path = reference.replace(/^sandbox:/, '');
   if (path.startsWith('file:')) {
@@ -51,17 +144,24 @@ const imageFormat: FileFormat = {
 };
 const fileFormats: FileFormat[] = [
   imageFormat,
-  { extensions: 'mp4 webm mov m4v', kind: '视频', media: 'video' },
-  { extensions: 'mp3 wav ogg m4a flac', kind: '音频', media: 'audio' },
-  { extensions: 'doc docx', kind: 'Word 文档' },
-  { extensions: 'xls xlsx ods', kind: '电子表格' },
+  { extensions: 'mp4 webm mov m4v', kind: '视频', media: 'video', previewable: true },
+  { extensions: 'mp3 wav ogg m4a flac', kind: '音频', media: 'audio', previewable: true },
+  { extensions: 'docx', kind: 'Word 文档', previewable: true },
+  { extensions: 'doc', kind: 'Word 文档' },
+  { extensions: 'xlsx', kind: '电子表格', previewable: true },
+  { extensions: 'xls ods', kind: '电子表格' },
   { extensions: 'csv tsv', kind: '电子表格', previewable: true },
-  { extensions: 'ppt pptx odp', kind: '演示文稿' },
+  { extensions: 'pptx', kind: '演示文稿', previewable: true },
+  { extensions: 'ppt odp', kind: '演示文稿' },
   { extensions: 'pdf', kind: 'PDF 文档', previewable: true },
+  { extensions: 'ipynb', kind: 'Jupyter 笔记本', previewable: true },
+  { extensions: 'html htm', kind: 'HTML 文档', previewable: true },
+  { extensions: 'xml', kind: 'XML 文档', previewable: true },
   { extensions: 'odt', kind: '文档' },
   { extensions: 'lay laydoc', kind: 'LayMesh 源码', previewable: true },
   { extensions: 'lcss', kind: 'LCSS 源码', previewable: true },
-  { extensions: 'zip gz tgz tar 7z rar xz bz2 tar.gz tar.xz tar.bz2', kind: '压缩包' },
+  { extensions: 'zip gz tgz tar tar.gz', kind: '压缩包', previewable: true },
+  { extensions: '7z rar xz bz2 tar.xz tar.bz2', kind: '压缩包' },
   {
     extensions:
       'txt text md markdown log json jsonl yaml yml toml ini py js jsx ts tsx sh sql tex rs c cpp h',

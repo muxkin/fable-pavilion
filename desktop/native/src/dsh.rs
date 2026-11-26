@@ -985,8 +985,13 @@ impl Adapter for Dsh {
             "plan":if self.read_only {"none"} else {"control"},"fileReferences":true,"exportLog":true,"nativeCommands":!self.read_only,
         }})
     }
-    async fn media(&self, thread: &str, reference: &str) -> Result<Media> {
-        self.attachment(thread, reference).await
+    async fn media(
+        &self,
+        thread: &str,
+        reference: &str,
+        from_document: Option<&str>,
+    ) -> Result<Media> {
+        self.attachment(thread, reference, from_document).await
     }
     async fn export_log(&self, thread: &str) -> Result<crate::history_media::Source> {
         self.session_log(thread).await

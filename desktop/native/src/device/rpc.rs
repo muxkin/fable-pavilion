@@ -445,13 +445,16 @@ impl DeviceSession {
                             .as_str()
                             .filter(|path| (1..=4096).contains(&path.encode_utf16().count()))
                             .context("附件地址无效")?;
+                        let from_document = call["body"]["fromDocument"]
+                            .as_str()
+                            .filter(|path| (1..=4096).contains(&path.encode_utf16().count()));
                         if let Some(manifest) = self
                             .describe_staged_upload(scope.clone(), reference)
                             .await?
                         {
                             return Ok(Some(manifest));
                         }
-                        plugin.media(thread, reference).await?
+                        plugin.media(thread, reference, from_document).await?
                     };
                     let db = self.db.clone();
                     let device = self.device.id.clone();
@@ -522,6 +525,10 @@ impl DeviceSession {
                     .filter(|path| (1..=4096).contains(&path.encode_utf16().count()))
                     .context("附件地址无效")?
                     .to_owned();
+                let from_document = call["body"]["fromDocument"]
+                    .as_str()
+                    .filter(|path| (1..=4096).contains(&path.encode_utf16().count()))
+                    .map(str::to_owned);
                 let scope = codex_file_scope(backend, target)?;
                 if let Some(manifest) = self.describe_staged_upload(scope.clone(), &path).await? {
                     return Ok(Some(manifest));
@@ -537,7 +544,9 @@ impl DeviceSession {
                 let live = self
                     .codex_watch(backend, thread)
                     .and_then(|watch| watch.live.as_ref());
-                let source = connector.media(thread, device.clone(), path, live).await?;
+                let source = connector
+                    .media(thread, device.clone(), path, from_document, live)
+                    .await?;
                 let activity = self.activity.clone();
                 tokio::task::spawn_blocking(move || {
                     let _activity = activity;

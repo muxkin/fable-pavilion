@@ -13,7 +13,14 @@ import { splitWritingBlocks } from './writing-blocks';
 import { defaultUrlTransform, renderMarkdown, type MarkdownComponents } from './markdown';
 import remarkGfm from 'remark-gfm';
 import DOMPurify from 'dompurify';
-import { attachmentInfo, localReference, remarkFileCitations } from '../shared/attachments';
+import {
+  attachmentInfo,
+  isBareRelativeAssetPath,
+  localReference,
+  remarkFileCitations,
+  resolveMarkdownAssetPath,
+} from '../shared/attachments';
+import type { LocalAssetResolver, SiblingAttachment } from './AttachmentAccess';
 import { FileAttachment as LocalLink } from './FileAttachment';
 import { Media } from './MediaAttachment';
 import { useVisible } from './useVisible';
@@ -179,13 +186,25 @@ export default tsxComponent(function RichMessage(_props: {
   streaming?: boolean;
   preserveLineBreaks?: boolean;
   writingBlocks?: boolean;
+  documentPath?: string;
+  siblingFiles?: ReadonlyArray<SiblingAttachment>;
+  resolveLocalAsset?: LocalAssetResolver;
 }) {
   const mathState = shallowRef<typeof import('./math-plugins').default | null>(null);
   const setMath = writeRef(mathState);
   const readComponents = memoizeRender();
   const readParts = memoizeRender();
   const watchMath = watchRender();
-  return ({ text, threadId, streaming = false, preserveLineBreaks = false, writingBlocks = false }) => {
+  return ({
+    text,
+    threadId,
+    streaming = false,
+    preserveLineBreaks = false,
+    writingBlocks = false,
+    documentPath,
+    siblingFiles,
+    resolveLocalAsset,
+  }) => {
     const math = mathState.value;
     watchMath(() => {
       if (/\$|\\[[(]/.test(text)) void import('./math-plugins').then((module) => setMath(module.default));
@@ -210,18 +229,45 @@ export default tsxComponent(function RichMessage(_props: {
             <code>{children}</code>
           );
         },
-        img: ({ src, alt }) => (
-          <Media src={typeof src === 'string' ? src : ''} label={alt ?? '图片'} threadId={threadId} />
-        ),
+        img: ({ src, alt }) => {
+          const raw = typeof src === 'string' ? src : '';
+          const resolved = resolveMarkdownAssetPath(raw, documentPath);
+          return (
+            <Media
+              src={resolved}
+              label={alt ?? '图片'}
+              threadId={threadId}
+              mediaType="image"
+              fromDocument={documentPath}
+              siblingFiles={siblingFiles}
+              resolveLocalAsset={resolveLocalAsset}
+            />
+          );
+        },
         a: ({ href, children, node }) => {
           // Linked Markdown images still open the preview, without nested interactive controls.
           if (node?.children.some((child) => child.type === 'element' && child.tagName === 'img'))
             return <>{children}</>;
           if (!href) return <span>{children}</span>;
-          if (/\.(mp4|webm|mov|m4v|mp3|wav|m4a|ogg|flac)(?:[?#]|$)/i.test(href))
-            return <Media src={href} label={String(children)} threadId={threadId} />;
-          return localReference(href) ? (
-            <LocalLink href={href} threadId={threadId} card={!!node?.properties['data-file-citation']}>
+          const resolvedHref = documentPath ? resolveMarkdownAssetPath(href, documentPath) : href;
+          if (/\.(mp4|webm|mov|m4v|mp3|wav|m4a|ogg|flac)(?:[?#]|$)/i.test(resolvedHref))
+            return (
+              <Media
+                src={resolvedHref}
+                label={String(children)}
+                threadId={threadId}
+                fromDocument={documentPath}
+                siblingFiles={siblingFiles}
+                resolveLocalAsset={resolveLocalAsset}
+              />
+            );
+          return localReference(resolvedHref) ? (
+            <LocalLink
+              href={resolvedHref}
+              threadId={threadId}
+              card={!!node?.properties['data-file-citation']}
+              siblingFiles={siblingFiles}
+            >
               {() => <>{children}</>}
             </LocalLink>
           ) : (
@@ -234,7 +280,11 @@ export default tsxComponent(function RichMessage(_props: {
           const elements = node?.children.filter((child) => child.type !== 'text' || child.value.trim());
           const link = elements?.length === 1 ? elements[0] : undefined;
           if (link?.type === 'element' && link.tagName === 'a') {
-            const href = link.properties.href;
+            const rawHref = link.properties.href;
+            const href =
+              typeof rawHref === 'string' && documentPath
+                ? resolveMarkdownAssetPath(rawHref, documentPath)
+                : rawHref;
             if (typeof href === 'string' && localReference(href) && attachmentInfo(href).media === 'image') {
               const label = link.children
                 .map((child) => (child.type === 'text' ? child.value : ''))
@@ -247,6 +297,9 @@ export default tsxComponent(function RichMessage(_props: {
                     label={label || attachmentInfo(href).name}
                     threadId={threadId}
                     mediaType="image"
+                    fromDocument={documentPath}
+                    siblingFiles={siblingFiles}
+                    resolveLocalAsset={resolveLocalAsset}
                   />
                 </div>
               );
@@ -255,7 +308,7 @@ export default tsxComponent(function RichMessage(_props: {
           return h('div', { class: 'markdown-paragraph' }, Array.isArray(children) ? children : [children]);
         },
       }),
-      [threadId, streaming],
+      [threadId, streaming, documentPath, siblingFiles, resolveLocalAsset],
     );
     function renderText(value: string) {
       return renderMarkdown(markdownSource(value), {
@@ -269,7 +322,8 @@ export default tsxComponent(function RichMessage(_props: {
         rehypePlugins: math
           ? [[math.rehypeKatex, { throwOnError: false, strict: 'ignore', trust: false }], math.rehypeMathCopy]
           : [],
-        urlTransform: (url) => (localReference(url) ? url : defaultUrlTransform(url)),
+        urlTransform: (url) =>
+          localReference(url) || isBareRelativeAssetPath(url) ? url : defaultUrlTransform(url),
         components,
       });
     }

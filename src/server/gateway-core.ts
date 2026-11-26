@@ -86,8 +86,11 @@ export function createGatewayCore(config: Config, deps: { store: Store } & Backe
   });
   app.post('/api/threads/:id/media', async (req, reply) => {
     const { id } = params.parse(req.params);
-    const { path } = z
-      .object({ path: z.string().min(1).max(4096) })
+    const { path, fromDocument } = z
+      .object({
+        path: z.string().min(1).max(4096),
+        fromDocument: z.string().min(1).max(4096).optional(),
+      })
       .strict()
       .parse(req.body);
     const thread = await history.get(id);
@@ -133,10 +136,12 @@ export function createGatewayCore(config: Config, deps: { store: Store } & Backe
           (await uploads.reference(path, req.device.id, id)) ??
           (desktop.attachment
             ? await desktop.attachment(id, path)
-            : await authorizeFile(path, thread.cwd, [
-                ...(desktop.view(id)?.messages ?? []),
-                ...(await history.page(id)).messages,
-              ]));
+            : await authorizeFile(
+                path,
+                thread.cwd,
+                [...(desktop.view(id)?.messages ?? []), ...(await history.page(id)).messages],
+                fromDocument,
+              ));
       } catch (error) {
         const cached = await attachmentCache.lookup(id, path);
         if (!cached) throw error;

@@ -1,8 +1,13 @@
-import { shallowRef } from 'vue';
+import { onUnmounted, shallowRef } from 'vue';
 import { tsxComponent } from '../tsx-component';
 import { watchRender } from '../render-effects';
 import { deviceSession } from '../device-session';
 import { Icon } from '../Icon';
+import { AttachmentPreview } from '../AttachmentPreview';
+import {
+  createTerminalPreviewTarget,
+  type TerminalPreviewTarget,
+} from './terminal-file-preview';
 import {
   TERMINAL_BACKEND_ID,
   type TerminalForwardSummary,
@@ -64,6 +69,10 @@ export const TerminalSidePanel = tsxComponent(function TerminalSidePanel(_props:
   const snipRun = shallowRef(true);
 
   const busy = shallowRef(false);
+  const previewTarget = shallowRef<TerminalPreviewTarget | null>(null);
+  onUnmounted(() => {
+    previewTarget.value?.cleanup();
+  });
   const watchFiles = watchRender();
   const watchForwards = watchRender();
 
@@ -154,6 +163,17 @@ export const TerminalSidePanel = tsxComponent(function TerminalSidePanel(_props:
       } finally {
         busy.value = false;
       }
+    }
+
+    function openFilePreview(entry: TerminalFsEntry) {
+      if (!session) return;
+      previewTarget.value?.cleanup();
+      previewTarget.value = createTerminalPreviewTarget(session.id, entry);
+    }
+
+    function closeFilePreview() {
+      previewTarget.value?.cleanup();
+      previewTarget.value = null;
     }
 
     const allSnippets = [...userSnippets.value, ...BUILTIN_SNIPPETS];
@@ -302,15 +322,16 @@ export const TerminalSidePanel = tsxComponent(function TerminalSidePanel(_props:
                       class="term-fs-row"
                       onDblclick={() => {
                         if (isDir && session) void refreshFiles(session.id, entry.path);
-                        else if (!isDir) void downloadEntry(entry);
+                        else if (!isDir) openFilePreview(entry);
                       }}
                     >
                       <button
                         type="button"
                         class="term-fs-main"
-                        title={entry.path}
+                        title={isDir ? entry.path : `点击预览 ${entry.path}`}
                         onClick={() => {
                           if (isDir && session) void refreshFiles(session.id, entry.path);
+                          else if (!isDir) openFilePreview(entry);
                         }}
                       >
                         <Icon name={isDir ? 'folder' : isImg ? 'image' : 'document'} size={15} />
@@ -728,6 +749,17 @@ export const TerminalSidePanel = tsxComponent(function TerminalSidePanel(_props:
             </>
           )}
         </div>
+        {previewTarget.value && (
+          <AttachmentPreview
+            key={`term:${previewTarget.value.path}`}
+            path={previewTarget.value.path}
+            name={previewTarget.value.name}
+            load={previewTarget.value.load}
+            resolveLocalAsset={previewTarget.value.resolveLocalAsset}
+            trigger={null}
+            onClose={closeFilePreview}
+          />
+        )}
       </aside>
     );
   };

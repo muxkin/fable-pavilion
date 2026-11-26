@@ -281,10 +281,16 @@ if ('serviceWorker' in navigator)
       .then((data) => port.postMessage({ data }, [data.buffer as ArrayBuffer]))
       .catch(() => port.postMessage({ error: '附件读取中断，请恢复电脑连接后重试' }));
   });
-export async function mediaContent(threadId: string, path: string, backendId = session.backendId) {
+export async function mediaContent(
+  threadId: string,
+  path: string,
+  backendId = session.backendId,
+  fromDocument?: string,
+) {
   const check = fileGuard(backendId);
+  const keyInput = fromDocument ? `${path}\0${fromDocument}` : path;
   const cacheKey = session.contentKey(
-    `file:${threadId}:${hashBytes(new TextEncoder().encode(path))}`,
+    `file:${threadId}:${hashBytes(new TextEncoder().encode(keyInput))}`,
     backendId,
   );
   let manifest = await session.cache.get<FileManifest>(cacheKey);
@@ -293,7 +299,7 @@ export async function mediaContent(threadId: string, path: string, backendId = s
       `/threads/${encodeURIComponent(threadId)}/media`,
       {
         method: 'POST',
-        body: JSON.stringify({ path }),
+        body: JSON.stringify(fromDocument ? { path, fromDocument } : { path }),
       },
       backendId,
     );

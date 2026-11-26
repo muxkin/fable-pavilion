@@ -359,17 +359,19 @@ impl Local {
         thread: Uuid,
         device: String,
         reference: String,
+        from_document: Option<String>,
         live: Option<&Thread>,
     ) -> Result<history_media::Source> {
         let history = self.history.clone();
         let view = live.and_then(|live| live.view.borrow().clone());
         tokio::task::spawn_blocking(move || {
-            history_media::description(
+            history_media::description_with_document(
                 &history,
                 &backend,
                 thread,
                 &device,
                 &reference,
+                from_document.as_deref(),
                 view.as_deref(),
             )
         })

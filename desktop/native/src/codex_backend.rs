@@ -538,12 +538,23 @@ impl Backend {
         thread: Uuid,
         device: String,
         reference: String,
+        from_document: Option<String>,
         live: Option<&Live>,
     ) -> Result<Source> {
         let remote = self.inner.as_ref().context("尚未安装 Codex 插件")?;
-        let value = remote.host.call("codex/media", json!({
-                    "thread":thread,"device":device,"reference":reference,"watchId":live.map(Live::watch_id),
-                }), Duration::from_secs(25)).await?;
+        let mut params = json!({
+            "thread": thread,
+            "device": device,
+            "reference": reference,
+            "watchId": live.map(Live::watch_id),
+        });
+        if let Some(doc) = from_document {
+            params["fromDocument"] = json!(doc);
+        }
+        let value = remote
+            .host
+            .call("codex/media", params, Duration::from_secs(25))
+            .await?;
         remote.host.source(value).await
     }
 

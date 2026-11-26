@@ -10,7 +10,11 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{io::Write, path::Path, time::Duration};
+use std::{
+    io::{Read, Seek, Write},
+    path::Path,
+    time::Duration,
+};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 
@@ -136,7 +140,12 @@ impl Dsh {
         Ok(parts)
     }
 
-    pub(crate) async fn attachment(&self, thread: &str, reference: &str) -> Result<Media> {
+    pub(crate) async fn attachment(
+        &self,
+        thread: &str,
+        reference: &str,
+        from_document: Option<&str>,
+    ) -> Result<Media> {
         if let Some(id) = reference
             .strip_prefix("dsh-image:")
             .filter(|id| attachment_digest(id).is_some() || valid_id(id))
@@ -207,10 +216,61 @@ impl Dsh {
         if reference.starts_with("dsh-file:") || reference.starts_with("dsh-image:") {
             return Err(MissingAttachment.into());
         }
-        let path =
-            tokio::time::timeout(Duration::from_secs(12), self.linked_path(thread, reference))
+        match tokio::time::timeout(Duration::from_secs(12), self.linked_path(thread, reference))
+            .await
+        {
+            Ok(Ok(path)) => return self.download_link(&path).await.map(Media::Download),
+            Ok(Err(direct_err)) => {
+                let Some(doc_ref) = from_document else {
+                    return Err(direct_err);
+                };
+                if !crate::markdown_media::is_markdown_reference(doc_ref) {
+                    return Err(direct_err);
+                }
+                let doc_path = tokio::time::timeout(
+                    Duration::from_secs(12),
+                    self.linked_path(thread, doc_ref),
+                )
                 .await??;
-        self.download_link(&path).await.map(Media::Download)
+                let page = self.snapshot(thread).await?;
+                let cwd = page["header"]["cwd"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                let mut doc_source = self.download_link(&doc_path).await?;
+                doc_source.file.seek(std::io::SeekFrom::Start(0))?;
+                let mut doc_bytes = Vec::new();
+                std::io::Read::by_ref(&mut doc_source.file)
+                    .take(crate::markdown_media::MAX_MARKDOWN_BYTES + 1)
+                    .read_to_end(&mut doc_bytes)?;
+                ensure!(
+                    doc_bytes.len() as u64 <= crate::markdown_media::MAX_MARKDOWN_BYTES,
+                    "Markdown 文档过大，无法解析关联图片"
+                );
+                let doc_text = String::from_utf8(doc_bytes)?;
+                let target_path = crate::markdown_media::match_document_image_virtual(
+                    &doc_text,
+                    &doc_path,
+                    reference,
+                    |raw| workspace_path(&cwd, raw),
+                )
+                .context("图片未在当前 Markdown 文档中引用")?;
+                let mut img_source = self.download_link(&target_path).await?;
+                img_source.file.seek(std::io::SeekFrom::Start(0))?;
+                let mut header = [0u8; 1024];
+                let read = img_source.file.read(&mut header)?;
+                img_source.file.seek(std::io::SeekFrom::Start(0))?;
+                ensure!(
+                    crate::markdown_media::is_safe_image_bytes(
+                        Path::new(&img_source.name),
+                        &header[..read]
+                    ),
+                    "Markdown 关联引用仅允许图片文件"
+                );
+                Ok(Media::Download(img_source))
+            }
+            Err(elapsed) => Err(elapsed.into()),
+        }
     }
 
     async fn find_file(&self, thread: &str, id: &str) -> Result<Reference> {

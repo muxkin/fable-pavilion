@@ -129,6 +129,41 @@ pub struct Source {
 }
 
 #[cfg(feature = "official-plugins")]
+pub fn description_with_document(
+    history: &History,
+    backend: &str,
+    thread: Uuid,
+    device: &str,
+    reference: &str,
+    from_document: Option<&str>,
+    live: Option<&crate::codex_live::View>,
+) -> Result<Source> {
+    match description(history, backend, thread, device, reference, live) {
+        Ok(source) => Ok(source),
+        Err(direct_err) => {
+            let Some(doc_ref) = from_document else {
+                return Err(direct_err);
+            };
+            if !crate::markdown_media::is_markdown_reference(doc_ref) {
+                return Err(direct_err);
+            }
+            // Verify the parent Markdown document itself is authorized in this thread (1-hop only).
+            let _ = description(history, backend, thread, device, doc_ref, live)?;
+            let (cwd, _) = history.media_context(thread)?;
+            let doc_path = local_path(doc_ref, &cwd)?;
+            let mut allowed_roots = Vec::new();
+            if cwd.is_absolute() {
+                allowed_roots.push(cwd);
+            }
+            if let Some(parent) = doc_path.parent() {
+                allowed_roots.push(parent.to_path_buf());
+            }
+            crate::markdown_media::resolve_document_image(&doc_path, reference, &allowed_roots)
+        }
+    }
+}
+
+#[cfg(feature = "official-plugins")]
 pub fn description(
     history: &History,
     backend: &str,
@@ -786,6 +821,9 @@ pub(crate) fn links(text: &str) -> impl Iterator<Item = String> {
             Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock) => excluded += 1,
             Event::End(TagEnd::Link | TagEnd::Image | TagEnd::CodeBlock | TagEnd::HtmlBlock) => {
                 excluded = excluded.saturating_sub(1);
+            }
+            Event::Html(html) | Event::InlineHtml(html) => {
+                links.extend(crate::markdown_media::extract_html_img_srcs(&html));
             }
             _ => {}
         }

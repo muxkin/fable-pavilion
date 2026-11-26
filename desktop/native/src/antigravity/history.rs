@@ -896,7 +896,9 @@ mod tests {
             .unwrap();
         assert_eq!(detail["message"]["id"], "antigravity-step-17");
         assert_eq!(detail["message"]["output"].as_str().unwrap().len(), 20_000);
-        let Media::Download(mut source) = backend.media(THREAD, "antigravity-image:99:0").await?
+        let Media::Download(mut source) = backend
+            .media(THREAD, "antigravity-image:99:0", None)
+            .await?
         else {
             panic!("Expected local photo download");
         };

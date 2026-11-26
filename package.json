@@ -1,6 +1,6 @@
 {
   "name": "codex-pocket-remote",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "private": true,
   "type": "module",
   "engines": {
@@ -106,8 +106,10 @@
     "immer": "^11.2.9",
     "ipaddr.js": "2.5.0",
     "katex": "^0.19.1",
+    "mammoth": "^1.13.0",
     "mermaid": "^12.3.0",
     "pacote": "22.0.1",
+    "pdfjs-dist": "^6.5.438",
     "qrcode": "^1.5.4",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",

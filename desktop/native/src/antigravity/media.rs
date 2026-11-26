@@ -275,6 +275,48 @@ fn collect_cited_paths(steps: &[Value], workspace_roots: &[PathBuf]) -> Vec<Path
     cited
 }
 
+pub(super) fn download_cited_with_document(
+    home: &Path,
+    thread: &str,
+    workspace_roots: &[PathBuf],
+    steps: &[Value],
+    reference: &str,
+    from_document: Option<&str>,
+) -> Result<Source> {
+    match download_cited(home, thread, workspace_roots, steps, reference) {
+        Ok(source) => Ok(source),
+        Err(direct_err) => {
+            let Some(doc_ref) = from_document else {
+                return Err(direct_err);
+            };
+            if !crate::markdown_media::is_markdown_reference(doc_ref) {
+                return Err(direct_err);
+            }
+            // Verify the parent Markdown document itself is cited and allowed in this conversation.
+            let _ = download_cited(home, thread, workspace_roots, steps, doc_ref)?;
+            let mut allowed_roots = Vec::new();
+            if let Ok(brain) = home.join("brain").join(thread).canonicalize() {
+                allowed_roots.push(brain);
+            }
+            for root in workspace_roots {
+                if let Ok(canon) = root.canonicalize() {
+                    allowed_roots.push(canon);
+                }
+            }
+            let parsed_doc = parse_reference_path(doc_ref).ok_or(MissingAttachment)?;
+            let doc_path = if parsed_doc.is_absolute() {
+                parsed_doc.canonicalize().map_err(|_| MissingAttachment)?
+            } else {
+                allowed_roots
+                    .iter()
+                    .find_map(|root| root.join(&parsed_doc).canonicalize().ok())
+                    .ok_or(MissingAttachment)?
+            };
+            crate::markdown_media::resolve_document_image(&doc_path, reference, &allowed_roots)
+        }
+    }
+}
+
 pub(super) fn download_cited(
     home: &Path,
     thread: &str,

@@ -3,7 +3,11 @@ import { shallowRef, type VNodeChild } from 'vue';
 import { memoizeRender, writeRef } from './render-effects';
 
 import { attachmentInfo, attachmentPath } from '../shared/attachments';
-import { useAttachmentAccess, type AttachmentResource } from './AttachmentAccess';
+import {
+  useAttachmentAccess,
+  type AttachmentResource,
+  type SiblingAttachment,
+} from './AttachmentAccess';
 import { mediaContent, downloadFile } from './file-client';
 import { AttachmentActions } from './AttachmentActions';
 import { AttachmentPreview } from './AttachmentPreview';
@@ -18,6 +22,7 @@ export const FileAttachment = tsxComponent(function FileAttachment(_props: {
   card?: boolean;
   compact?: boolean;
   name?: string;
+  siblingFiles?: ReadonlyArray<SiblingAttachment>;
   onRemove?: () => void;
 }) {
   const attachmentAccess = useAttachmentAccess();
@@ -25,7 +30,16 @@ export const FileAttachment = tsxComponent(function FileAttachment(_props: {
   const previewState = shallowRef(false);
   const setPreview = writeRef(previewState);
   const readLoad = memoizeRender();
-  return ({ href, threadId, children, card = false, compact = false, name: displayName, onRemove }) => {
+  return ({
+    href,
+    threadId,
+    children,
+    card = false,
+    compact = false,
+    name: displayName,
+    siblingFiles,
+    onRemove,
+  }) => {
     const access = attachmentAccess.value;
 
     const preview = previewState.value;
@@ -89,6 +103,8 @@ export const FileAttachment = tsxComponent(function FileAttachment(_props: {
             key={`${threadId}:${href}`}
             path={href}
             name={name}
+            threadId={threadId}
+            siblingFiles={siblingFiles}
             load={load}
             trigger={trigger.value}
             onClose={() => setPreview(false)}
