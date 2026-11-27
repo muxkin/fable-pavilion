@@ -531,8 +531,14 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
                         const tool = snapshot.backends.find((b) => b.id === thread.backendId);
                         const appearance = tool ? (tool.appearance ?? backendAppearanceDefaults(tool)) : null;
                         const toolName = appearance?.name ?? thread.backendId;
-                        const fullTime =
-                          thread.updatedAt > 0 ? new Date(thread.updatedAt).toLocaleString('zh-CN') : '';
+                        const validUpdatedAt =
+                          typeof thread.updatedAt === 'number' &&
+                          Number.isFinite(thread.updatedAt) &&
+                          thread.updatedAt > 0 &&
+                          Math.abs(thread.updatedAt) <= 8.64e15;
+                        const fullTime = validUpdatedAt
+                          ? new Date(thread.updatedAt).toLocaleString('zh-CN')
+                          : '';
                         return (
                           <button
                             key={JSON.stringify([thread.backendId, thread.id])}
@@ -546,7 +552,7 @@ export const BackendChooser = tsxComponent(function BackendChooser(_props: {
                               />
                             </span>
                             <span class="computer-recent-title">{thread.title || '未命名会话'}</span>
-                            {thread.updatedAt > 0 && (
+                            {validUpdatedAt && (
                               <time
                                 class="computer-recent-time"
                                 datetime={new Date(thread.updatedAt).toISOString()}

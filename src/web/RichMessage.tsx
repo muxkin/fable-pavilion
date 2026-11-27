@@ -205,10 +205,11 @@ export default tsxComponent(function RichMessage(_props: {
     siblingFiles,
     resolveLocalAsset,
   }) => {
+    const safeText = typeof text === 'string' ? text : '';
     const math = mathState.value;
     watchMath(() => {
-      if (/\$|\\[[(]/.test(text)) void import('./math-plugins').then((module) => setMath(module.default));
-    }, [text]);
+      if (/\$|\\[[(]/.test(safeText)) void import('./math-plugins').then((module) => setMath(module.default));
+    }, [safeText]);
     const components = readComponents<MarkdownComponents>(
       () => ({
         pre: ({ children }) => <>{children}</>,
@@ -327,7 +328,7 @@ export default tsxComponent(function RichMessage(_props: {
         components,
       });
     }
-    const parts = writingBlocks ? readParts(() => splitWritingBlocks(text), [text]) : undefined;
+    const parts = writingBlocks ? readParts(() => splitWritingBlocks(safeText), [safeText]) : undefined;
     return (
       <div
         class="markdown"
@@ -342,7 +343,7 @@ export default tsxComponent(function RichMessage(_props: {
                 renderText(part.text)
               ),
             )
-          : renderText(text)}
+          : renderText(safeText)}
       </div>
     );
   };

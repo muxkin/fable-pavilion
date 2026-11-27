@@ -1,4 +1,4 @@
-import { defineComponent, onBeforeUnmount, onErrorCaptured, onMounted, shallowRef } from 'vue';
+import { defineComponent, onBeforeUnmount, onErrorCaptured, onMounted, shallowRef, watch } from 'vue';
 import { recordDiagnostic } from '../diagnostics';
 import { assetFailureStatus, pageFailure, type PageFailure } from './page-failure';
 import type { AppPage } from './routes';
@@ -33,6 +33,7 @@ export const PageBoundary = defineComponent(
       page: AppPage;
       onBack: () => void;
       backLabel: string;
+      resetKey?: string | number;
     },
     { slots },
   ) => {
@@ -41,6 +42,12 @@ export const PageBoundary = defineComponent(
     const connection = () => {
       online.value = navigator.onLine;
     };
+    watch(
+      () => props.resetKey,
+      () => {
+        if (currentFailure.value) currentFailure.value = undefined;
+      },
+    );
     onMounted(() => {
       window.addEventListener('online', connection);
       window.addEventListener('offline', connection);
@@ -50,6 +57,7 @@ export const PageBoundary = defineComponent(
       window.removeEventListener('offline', connection);
     });
     onErrorCaptured((error) => {
+      console.error(`[PageBoundary:${props.page}]`, error);
       const failure = pageFailure(error);
       currentFailure.value = failure;
       recordDiagnostic({
@@ -85,5 +93,5 @@ export const PageBoundary = defineComponent(
       );
     };
   },
-  { props: ['page', 'onBack', 'backLabel'] },
+  { props: ['page', 'onBack', 'backLabel', 'resetKey'] },
 );

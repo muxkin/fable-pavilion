@@ -108,6 +108,13 @@ export function renderMarkdown(
       if (isVNode(child)) return cloneVNode(child, { key });
       return h(Fragment, { key }, Array.isArray(child) ? child : [child]);
     }
+    if (type === Fragment) {
+      return h(
+        Fragment,
+        { ...props, key },
+        Array.isArray(children) ? children : children != null ? [children] : [],
+      );
+    }
     return h(type, { ...props, key }, children as VNodeChild[]);
   }) as NonNullable<Parameters<typeof toJsxRuntime>[1]['jsx']>;
   return toJsxRuntime(tree, {

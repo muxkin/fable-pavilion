@@ -30,10 +30,11 @@ export const TranscriptMessages = tsxComponent(function TranscriptMessages(_prop
           (request.id === `async:${message.id}` ||
             (!!message.nativeItemId && request.id === `async:${message.nativeItemId}`)),
       );
-      if (question) {
-        const suffix = question.questions!.map((q) => q.question).join('\n\n');
-        if (message.text.endsWith(suffix))
-          message = { ...message, text: message.text.slice(0, -suffix.length).trimEnd() };
+      if (question && Array.isArray(question.questions) && question.questions.length > 0) {
+        const suffix = question.questions.map((q) => q.question).join('\n\n');
+        const text = typeof message.text === 'string' ? message.text : '';
+        if (suffix && text.endsWith(suffix))
+          message = { ...message, text: text.slice(0, -suffix.length).trimEnd() };
         if (!message.text && !message.attachments?.length && !message.codex) continue;
       }
       const metadata = message.codex;
@@ -51,7 +52,11 @@ export const TranscriptMessages = tsxComponent(function TranscriptMessages(_prop
       else groups.push({ key: message.id, kind, messages: [message] });
     }
     const render = (m: Message) => {
-      const hasTime = typeof m.createdAt === 'number' && Number.isFinite(m.createdAt) && m.createdAt > 0;
+      const hasTime =
+        typeof m.createdAt === 'number' &&
+        Number.isFinite(m.createdAt) &&
+        m.createdAt > 0 &&
+        Math.abs(m.createdAt) <= 8.64e15;
       const timeLabel = hasTime ? formatMessageTime(m.createdAt!) : '';
       const timeTitle = hasTime ? new Date(m.createdAt!).toLocaleString('zh-CN') : '';
       const timeIso = hasTime ? new Date(m.createdAt!).toISOString() : undefined;
@@ -196,6 +201,7 @@ function CompactionNotice({ activity }: { activity: Extract<CodexActivity, { kin
 const agentIcons = ['grid', 'target', 'branch', 'bot'] as const;
 type SubagentActivity = Extract<CodexActivity, { kind: 'subagent' }>;
 function subagentName(name: string) {
+  if (typeof name !== 'string' || !name) return '';
   return /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(name)
     ? name[0].toUpperCase() + name.slice(1).replaceAll('_', ' ')
     : name;

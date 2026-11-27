@@ -299,7 +299,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
     const antigravity = backend?.product === 'antigravity';
     const canAttach = !backend || capabilityEnabled(backend.capabilities.attachments);
     const imagesOnly = presentation?.attachmentMode === 'image';
-    const emptyCreation = presentation?.creation.empty ?? false;
+    const emptyCreation = presentation?.creation?.empty ?? false;
     const controlPlan = presentation?.plan === 'control';
     const agentName = backend?.name ?? 'Agent';
     const api = <T,>(path: string, init?: RequestInit) => deviceSession.api<T>(path, init, backendId);
@@ -639,16 +639,17 @@ export default tsxComponent(function AgentWorkspace(_props: {
         if (filter) query.set('project', filter);
         if (!next && !quiet && !threadsState.value.length) {
           const cached = await deviceSession.cached<ThreadPage>(`/threads?${query}`, backendId);
-          if (cached && current()) applyRecent(cached, false);
+          if (cached && Array.isArray(cached.threads) && current()) applyRecent(cached, false);
           const cachedProjects = await deviceSession.cached<typeof projects>('/projects', backendId);
-          if (cachedProjects && current()) setProjects(cachedProjects);
+          if (cachedProjects && Array.isArray(cachedProjects.projects) && current()) setProjects(cachedProjects);
         }
         if (!next && !deviceSession.online) return;
         if (!next && !quiet) {
           const catalog = ++listRequest.projects;
           void api<typeof projects>('/projects')
             .then((result) => {
-              if (catalog === listRequest.projects) setProjects({ ...result });
+              if (catalog === listRequest.projects && result && Array.isArray(result.projects))
+                setProjects({ ...result });
             })
             .catch(() => {});
         }
@@ -1361,19 +1362,20 @@ export default tsxComponent(function AgentWorkspace(_props: {
       // Use the normal send journal only after the desktop is ready.
       if (readyToSend) await act('send');
     }
-    const currentIds = codex ? undefined : new Set(view?.messages.map((message) => message.id));
-    const firstLiveStep = antigravity ? antigravityStep(view?.messages[0]) : undefined;
+    const viewMessages = Array.isArray(view?.messages) ? view.messages : [];
+    const currentIds = codex ? undefined : new Set(viewMessages.map((message) => message.id));
+    const firstLiveStep = antigravity ? antigravityStep(viewMessages[0]) : undefined;
     const messages = !view
       ? []
       : codex
-        ? mergeCodexHistory(codexMessages(older), codexMessages(view.messages, view.activeTurnId))
+        ? mergeCodexHistory(codexMessages(older), codexMessages(viewMessages, view.activeTurnId))
         : [
             ...older.filter((message) =>
               firstLiveStep === undefined
                 ? !currentIds?.has(message.id)
                 : (antigravityStep(message) ?? firstLiveStep) < firstLiveStep,
             ),
-            ...view.messages,
+            ...viewMessages,
           ];
     const activeMessage = messages.findLast((message) => message.turnId === view?.activeTurnId);
     const activity = view?.codexActivity ??
@@ -1418,7 +1420,9 @@ export default tsxComponent(function AgentWorkspace(_props: {
       ) ||
         (outgoingOperation.state === 'accepted' &&
           !!outgoing?.draft.text.trim() &&
-          !!view?.queuedMessages?.some((item) => item.text.trim() === outgoing.draft.text.trim())));
+          !!view?.queuedMessages?.some(
+            (item) => typeof item?.text === 'string' && item.text.trim() === outgoing.draft.text.trim(),
+          )));
     watchOutgoingOperation(() => {
       if (outgoingOperation?.state === 'accepted' && echoed) drafts.clearOutgoing(outgoingOperation);
     }, [outgoingOperation, echoed]);
@@ -1877,12 +1881,13 @@ export default tsxComponent(function AgentWorkspace(_props: {
                     </div>
                     <ul class="composer-queue-list">
                       {view.queuedMessages.map((item) => {
+                        const itemText = typeof item?.text === 'string' ? item.text : '';
                         const canFlush =
                           !view.activeTurnId &&
                           view.canSend &&
                           !!view.queueFingerprint &&
                           !item.hasAttachments &&
-                          !!item.text.trim() &&
+                          !!itemText.trim() &&
                           !busy &&
                           !pending &&
                           stream;

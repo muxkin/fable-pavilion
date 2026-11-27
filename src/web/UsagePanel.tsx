@@ -19,7 +19,12 @@ import './usage.css';
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric' });
 
+function isValidTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && Math.abs(value) <= 8.64e15;
+}
+
 function resetTime(value: number) {
+  if (!isValidTimestamp(value)) return '';
   return new Date(value).toDateString() === new Date().toDateString()
     ? `今天 ${timeFormat.format(value)} 自动重置`
     : `${dateFormat.format(value)} ${timeFormat.format(value)} 自动重置`;
@@ -37,7 +42,7 @@ function remaining(used: number) {
 }
 
 function normalizeToken(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return (typeof value === 'string' ? value : '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 function matchUsageBucket(
@@ -86,11 +91,11 @@ function matchUsageBucket(
 }
 
 function selectSummaryWindow(bucket: UsageBucket | undefined): UsageWindow | undefined {
-  if (!bucket?.windows.length) return undefined;
+  if (!Array.isArray(bucket?.windows) || !bucket.windows.length) return undefined;
   return (
     bucket.windows.find(
       ({ durationMinutes, label }) =>
-        durationMinutes === 300 || /(?:^|\s)5\s*(?:小时|h)\b/i.test(label),
+        durationMinutes === 300 || /(?:^|\s)5\s*(?:小时|h)\b/i.test(label ?? ''),
     ) ??
     bucket.windows
       .filter((w) => typeof w.durationMinutes === 'number' && w.durationMinutes > 0)
@@ -101,9 +106,10 @@ function selectSummaryWindow(bucket: UsageBucket | undefined): UsageWindow | und
 
 function compactWindowLabel(window: UsageWindow | undefined): string {
   if (!window) return '用量';
-  if (window.durationMinutes === 300 || /(?:^|\s)5\s*(?:小时|h)\b/i.test(window.label)) return '5h';
-  if (window.durationMinutes === 10080 || /每周|周/.test(window.label)) return '每周';
-  return window.label.replace(/用量$/, '').trim() || '余量';
+  const label = typeof window.label === 'string' ? window.label : '';
+  if (window.durationMinutes === 300 || /(?:^|\s)5\s*(?:小时|h)\b/i.test(label)) return '5h';
+  if (window.durationMinutes === 10080 || /每周|周/.test(label)) return '每周';
+  return label.replace(/用量$/, '').trim() || '余量';
 }
 
 export const UsagePanel = tsxComponent(function UsagePanel(_props: {
@@ -480,15 +486,17 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
                     {bucket.plan && <span> · {bucket.plan}</span>}
                   </h3>
                 )}
-                {bucket.windows.map((window, i) => {
+                {(Array.isArray(bucket.windows) ? bucket.windows : []).map((window, i) => {
                   const left = remaining(window.usedPercent);
-                  const label = window.label.replace(/用量$/, '') || window.label;
+                  const rawLabel = typeof window.label === 'string' ? window.label : '';
+                  const label = rawLabel.replace(/用量$/, '') || rawLabel;
+                  const resetLabel = isValidTimestamp(window.resetsAt) ? resetTime(window.resetsAt) : '';
                   return (
                     <div class="usage-window" key={i}>
                       <div class="usage-window-line">
                         <div>
                           <strong class="usage-window-label">{label}</strong>
-                          {window.resetsAt && <small>{resetTime(window.resetsAt)}</small>}
+                          {resetLabel && <small>{resetLabel}</small>}
                         </div>
                         <div class="usage-remaining">
                           <strong>{left}%</strong>
@@ -516,7 +524,7 @@ export const UsagePanel = tsxComponent(function UsagePanel(_props: {
         ) : state === 'unavailable' ? (
           <p class="usage-empty">{value?.reason ?? '此实例暂未提供用量信息'}</p>
         ) : null}
-        {value?.available && (
+        {value?.available && isValidTimestamp(value.updatedAt) && (
           <footer>
             {state === 'current' ? '更新于 ' : '上次更新于 '}
             <time

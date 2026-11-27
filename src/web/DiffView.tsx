@@ -11,7 +11,7 @@ export const DiffView = tsxComponent(function DiffView(_props: { changes: FileDi
               {change.path}
             </summary>
             <pre aria-label={`Diff ${change.path}`}>
-              {change.diff.split('\n').map((line, index) => (
+              {(typeof change.diff === 'string' ? change.diff : '').split('\n').map((line, index) => (
                 <span
                   key={index}
                   class={

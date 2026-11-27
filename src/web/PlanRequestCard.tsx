@@ -69,7 +69,7 @@ export const PlanRequestCard = tsxComponent(function PlanRequestCard(_props: {
                 fallback: () => <pre>{request.description}</pre>,
                 default: () => (
                   <>
-                    <RichMessage text={request.description} threadId={threadId} />
+                    <RichMessage text={request.description ?? ''} threadId={threadId} />
                   </>
                 ),
               }}

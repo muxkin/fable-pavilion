@@ -58,7 +58,9 @@ export const OutgoingMessageCard = tsxComponent(function OutgoingMessageCard(_pr
       <OutgoingStatus activity={operationActivity(operation)}>
         {() => (
           <>
-            {operation.createdAt > 0 && (
+            {Number.isFinite(operation.createdAt) &&
+              operation.createdAt > 0 &&
+              Math.abs(operation.createdAt) <= 8.64e15 && (
               <time
                 class="message-time"
                 datetime={new Date(operation.createdAt).toISOString()}

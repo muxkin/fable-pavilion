@@ -64,7 +64,7 @@ export const TurnNavigation = tsxComponent(function TurnNavigation(_props: {
     if (turns.length < 2) return null;
     const selected = turns.find((m) => m.id === preview?.id);
     const label = (m: Message) =>
-      m.text.trim().replace(/\s+/g, ' ').slice(0, 140) ||
+      (typeof m.text === 'string' ? m.text : '').trim().replace(/\s+/g, ' ').slice(0, 140) ||
       m.attachments?.map((f) => f.name).join('、') ||
       '附件消息';
     return (

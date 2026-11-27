@@ -181,7 +181,8 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
       const { signal } = controller;
       // The catalog has counts; each project's first page has its latest activity.
       const known = new Set(threads.map((thread) => thread.projectId));
-      const missing = projects.projects.filter((project) => project.count > 0 && !known.has(project.id));
+      const projectList = Array.isArray(projects?.projects) ? projects.projects : [];
+      const missing = projectList.filter((project) => project.count > 0 && !known.has(project.id));
       const update = async () => {
         const latest = new Map<string, number>();
         for (let offset = 0; offset < missing.length && !signal.aborted; offset += 3) {
@@ -313,7 +314,7 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
             <strong>{t.title || '未命名会话'}</strong>
             <small>
               {grouped
-                ? t.cwd.split(/[\\/]/).filter(Boolean).at(-1) || '本地会话'
+                ? (t.cwd ?? '').split(/[\\/]/).filter(Boolean).at(-1) || '本地会话'
                 : (t.projectName ?? '未分类')}
             </small>
           </span>
@@ -331,11 +332,11 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
     }
     const latest = (project: ProjectSummary) =>
       latestByProject.get(project.id) ?? (project.count ? (activity.get(project.id) ?? 0) : 0);
-    const groups = [...projects.projects];
+    const groups = Array.isArray(projects?.projects) ? [...projects.projects] : [];
     if (order === 'name') groups.sort((a, b) => projectNames.compare(a.name, b.name));
     if (order === 'activity')
       groups.sort((a, b) => latest(b) - latest(a) || projectNames.compare(a.name, b.name));
-    groups.push({ id: 'none', name: '未分类', count: projects.ungrouped });
+    groups.push({ id: 'none', name: '未分类', count: projects?.ungrouped ?? 0 });
     return (
       <aside id={panelId} class="sidebar">
         <header class="sidebar-head">
@@ -681,7 +682,7 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
   };
 });
 function relativeTime(ms: number) {
-  if (!ms || ms <= 0) return '';
+  if (!Number.isFinite(ms) || ms <= 0 || Math.abs(ms) > 8.64e15) return '';
   const date = new Date(ms);
   const now = new Date();
   if (date.toDateString() === now.toDateString()) {

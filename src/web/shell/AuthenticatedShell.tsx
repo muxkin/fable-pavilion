@@ -495,44 +495,49 @@ export default tsxComponent(function AuthenticatedShell() {
                   matchingHost &&
                   selectedBackend === backendId && (
                     <section class="workspace-module" hidden={!showWorkspace} aria-label="工作台模块">
-                      <Suspense timeout={0}>
-                        {{
-                          fallback: () => <PageLoading label="正在打开工作台…" page="workbench" />,
-                          default: () => (
-                            <>
-                              <PageBoundary
-                                page="workbench"
-                                backLabel="返回消息"
-                                onBack={() => navigate(resumeMessages())}
-                              >
-                                {() => (
-                                  <>
-                                    {backendId === TERMINAL_BACKEND_ID ? (
-                                      <TerminalWorkspace
-                                        key={`${hostId || 'unpaired'}:${backendId}`}
-                                        active={showWorkspace}
-                                        route={workspaceRoute}
-                                        navigate={navigate}
-                                      />
-                                    ) : (
-                                      <AgentWorkspace
-                                        key={workspaceRoute.page === 'pair'
-                                          ? `pair:${pairingLinkRevision.value}`
-                                          : `${hostId || 'unpaired'}:${backendId}`}
-                                        active={showWorkspace}
-                                        route={workspaceRoute}
-                                        navigate={navigate}
-                                        onBusy={setBusy}
-                                        onUpdateBlocked={setWorkbenchUpdateBlocked}
-                                      />
-                                    )}
-                                  </>
-                                )}
-                              </PageBoundary>
-                            </>
-                          ),
+                      <PageBoundary
+                        key={workspaceRoute.page === 'pair'
+                          ? `pair:${pairingLinkRevision.value}`
+                          : `${hostId || 'unpaired'}:${backendId}`}
+                        resetKey={`${hostId || 'unpaired'}:${backendId}:${workspaceRoute.thread ?? ''}:${showWorkspace}`}
+                        page="workbench"
+                        backLabel="返回工作台"
+                        onBack={() => {
+                          workbenchRoute.current = { page: 'workbench' };
+                          navigate({ page: 'workbench' });
                         }}
-                      </Suspense>
+                      >
+                        {() => (
+                          <Suspense timeout={0}>
+                            {{
+                              fallback: () => <PageLoading label="正在打开工作台…" page="workbench" />,
+                              default: () => (
+                                <>
+                                  {backendId === TERMINAL_BACKEND_ID ? (
+                                    <TerminalWorkspace
+                                      key={`${hostId || 'unpaired'}:${backendId}`}
+                                      active={showWorkspace}
+                                      route={workspaceRoute}
+                                      navigate={navigate}
+                                    />
+                                  ) : (
+                                    <AgentWorkspace
+                                      key={workspaceRoute.page === 'pair'
+                                        ? `pair:${pairingLinkRevision.value}`
+                                        : `${hostId || 'unpaired'}:${backendId}`}
+                                      active={showWorkspace}
+                                      route={workspaceRoute}
+                                      navigate={navigate}
+                                      onBusy={setBusy}
+                                      onUpdateBlocked={setWorkbenchUpdateBlocked}
+                                    />
+                                  )}
+                                </>
+                              ),
+                            }}
+                          </Suspense>
+                        )}
+                      </PageBoundary>
                     </section>
                   )}
                 {activeWorkspace && !ready && (
