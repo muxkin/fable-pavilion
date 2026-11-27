@@ -2214,5 +2214,7 @@
   "创建文件夹失败": "Failed to create folder",
   "添加项目失败": "Failed to add project",
   "允许在网页执行操作": "Allow Executing Actions on URL",
-  "编辑实例外观": "Edit Instance Appearance"
+  "编辑实例外观": "Edit Instance Appearance",
+  "已追加，等待接入": "Queued for next step",
+  "已加入队列": "Queued"
 }

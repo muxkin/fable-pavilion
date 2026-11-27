@@ -73,7 +73,15 @@ export const OutgoingMessageCard = tsxComponent(function OutgoingMessageCard(_pr
                 })}
               </time>
             )}
-            {operation.state === 'accepted' && <span>{t('已发送', 'Sent')}</span>}
+            {operation.state === 'accepted' && (
+              <span>
+                {operation.kind === 'steer'
+                  ? t('已追加，等待接入', 'Queued for next step')
+                  : operation.kind === 'queue'
+                    ? t('已加入队列', 'Queued')
+                    : t('已发送', 'Sent')}
+              </span>
+            )}
             <OperationFeedback operation={operation} onCheck={onCheck} onRetry={onRetry} />
             {hasFailure && (
               <div class="outgoing-actions">

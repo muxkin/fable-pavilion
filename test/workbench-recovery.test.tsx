@@ -36,7 +36,9 @@ import { DiffView } from '../src/web/DiffView';
 import { TurnNavigation } from '../src/web/TurnNavigation';
 import { PlanRequestCard } from '../src/web/PlanRequestCard';
 import RichMessage from '../src/web/RichMessage';
-import type { ConversationRequest, Message } from '../src/shared/types';
+import { useChatDrafts } from '../src/web/chat-drafts';
+import { OutgoingMessageCard } from '../src/web/workspace/OutgoingMessageCard';
+import type { ConversationRequest, Message, Operation } from '../src/shared/types';
 
 type MockNode = {
   type: 'element' | 'text' | 'comment';
@@ -260,5 +262,87 @@ describe('workbench PageBoundary recovery and defensive rendering', () => {
       }),
     );
     expect(navHtml).toContain('附件消息');
+  });
+
+  it('keeps accepted steer outgoing messages visible until cleared after echo', async () => {
+    const store = new Map<string, string>();
+    const prevStorage = (globalThis as { localStorage?: unknown }).localStorage;
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+    };
+    const steerOp: Operation = {
+      id: 'op-steer-1',
+      threadId: 't1',
+      kind: 'steer',
+      state: 'received',
+      turnId: 'turn-1',
+      error: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    let latestDrafts: ReturnType<ReturnType<typeof useChatDrafts>> | undefined;
+    const Probe = defineComponent({
+      setup() {
+        const readDrafts = useChatDrafts();
+        return () => {
+          latestDrafts = readDrafts('dev:antigravity-local', 't1');
+          return h('div', latestDrafts.outgoing?.operation.state ?? 'none');
+        };
+      },
+    });
+    const { renderer, container } = createTestRenderer();
+    const app = renderer.createApp(Probe);
+    app.provide(ssrContextKey, { modules: new Set() });
+    try {
+      app.mount(container);
+      await nextTick();
+      latestDrafts!.submit(
+        steerOp,
+        { text: '好吧还是失败', uploads: [{ id: 'u1', name: 'image.png' }], skills: [], plugins: [] },
+        false,
+      );
+      await nextTick();
+      expect(latestDrafts!.outgoing?.operation.state).toBe('received');
+
+      const accepted: Operation = { ...steerOp, state: 'accepted' };
+      latestDrafts!.settle(accepted);
+      await nextTick();
+      expect(latestDrafts!.outgoing?.operation.state).toBe('accepted');
+      expect(latestDrafts!.outgoing?.draft.text).toBe('好吧还是失败');
+
+      const cardHtml = await renderToString(
+        createSSRApp({
+          render: () => (
+            <OutgoingMessageCard
+              threadId="t1"
+              codex={false}
+              operation={accepted}
+              draft={latestDrafts!.outgoing!.draft}
+              hasFailure={false}
+              draftHasContent={false}
+              onCheck={async () => {}}
+              onMoveToDraft={() => {}}
+              onDismiss={() => {}}
+            />
+          ),
+        }),
+      );
+      expect(cardHtml).toMatch(/已追加，等待接入|Queued for next step/);
+
+      latestDrafts!.clearOutgoing(accepted);
+      await nextTick();
+      expect(latestDrafts!.outgoing).toBeUndefined();
+    } finally {
+      app.unmount();
+      await nextTick();
+      if (prevStorage === undefined) delete (globalThis as { localStorage?: unknown }).localStorage;
+      else (globalThis as { localStorage?: unknown }).localStorage = prevStorage;
+    }
   });
 });

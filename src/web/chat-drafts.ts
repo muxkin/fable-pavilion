@@ -117,7 +117,7 @@ export function useChatDrafts() {
           if (outgoing?.operation.id !== operation.id) return current;
           if (
             ['completed', 'interrupted'].includes(operation.state) ||
-            (operation.state === 'accepted' && operation.kind !== 'send')
+            (operation.state === 'accepted' && !['send', 'steer', 'queue'].includes(operation.kind))
           )
             return { draft: current.draft };
           return { ...current, outgoing: { ...outgoing, operation } };

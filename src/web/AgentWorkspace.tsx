@@ -1419,10 +1419,13 @@ export default tsxComponent(function AgentWorkspace(_props: {
               message.turnId === outgoingOperation.turnId)),
       ) ||
         (outgoingOperation.state === 'accepted' &&
-          !!outgoing?.draft.text.trim() &&
-          !!view?.queuedMessages?.some(
-            (item) => typeof item?.text === 'string' && item.text.trim() === outgoing.draft.text.trim(),
-          )));
+          ((!!outgoing?.draft.text.trim() &&
+            !!view?.queuedMessages?.some(
+              (item) => typeof item?.text === 'string' && item.text.trim() === outgoing.draft.text.trim(),
+            )) ||
+            (!outgoing?.draft.text.trim() &&
+              !!outgoing?.draft.uploads.length &&
+              !!view?.queuedMessages?.some((item) => item?.hasAttachments === true)))));
     watchOutgoingOperation(() => {
       if (outgoingOperation?.state === 'accepted' && echoed) drafts.clearOutgoing(outgoingOperation);
     }, [outgoingOperation, echoed]);
