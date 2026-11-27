@@ -8,9 +8,10 @@ use image::ImageFormat;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs::File,
     io::{Read, Seek},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
@@ -202,31 +203,127 @@ pub(super) fn download(home: &Path, thread: &str, media: &Value) -> Result<Sourc
 const MAX_CITED_FILE: u64 = 256 * 1024 * 1024;
 
 fn parse_reference_path(reference: &str) -> Option<PathBuf> {
-    let trimmed = reference.trim();
-    if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+    let raw = reference
+        .trim()
+        .strip_prefix("sandbox:")
+        .unwrap_or(reference.trim());
+    let mut stripped = raw;
+    for _ in 0..2 {
+        let Some((base, number)) = stripped.rsplit_once(':') else {
+            break;
+        };
+        if !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) {
+            stripped = base;
+        } else {
+            break;
+        }
+    }
+    let path = if stripped.starts_with("file:") {
+        let url = url::Url::parse(stripped).ok()?;
+        if url.host_str().is_some_and(|host| host != "localhost") {
+            return None;
+        }
+        url.to_file_path().ok()?
+    } else {
+        let decoded = percent_encoding::percent_decode_str(stripped)
+            .decode_utf8()
+            .ok()?;
+        let value = decoded.as_ref();
+        let path = Path::new(value);
+        if value.is_empty()
+            || value.chars().any(char::is_control)
+            || (!path.is_absolute() && value.contains(':'))
+            || value.starts_with("//")
+        {
+            return None;
+        }
+        path.to_owned()
+    };
+    if path
+        .components()
+        .any(|part| matches!(part, Component::ParentDir))
+    {
         return None;
     }
-    if trimmed.starts_with("file:") {
-        return url::Url::parse(trimmed).ok()?.to_file_path().ok();
-    }
-    Some(PathBuf::from(trimmed))
+    Some(path.components().collect())
 }
 
-fn collect_cited_paths(steps: &[Value], workspace_roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut cited = Vec::new();
+fn search_roots(home: &Path, thread: &str, workspace_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(brain) = home.join("brain").join(thread).canonicalize() {
+        roots.push(brain);
+    }
+    for root in workspace_roots {
+        if let Ok(canon) = root.canonicalize() {
+            roots.push(canon);
+        }
+    }
+    roots
+}
+
+fn resolve_reference(parsed: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    if parsed.is_absolute() {
+        parsed.canonicalize().ok()
+    } else {
+        roots
+            .iter()
+            .find_map(|root| root.join(parsed).canonicalize().ok())
+    }
+}
+
+fn validate_cited_path(
+    home: &Path,
+    thread: &str,
+    workspace_roots: &[PathBuf],
+    candidate: &Path,
+) -> Result<()> {
+    ensure!(
+        !candidate
+            .components()
+            .any(|part| part.as_os_str().eq_ignore_ascii_case("native-uploads")),
+        "此附件属于其他设备或会话"
+    );
+    ensure!(
+        !super::export::is_secret_path(candidate),
+        "敏感文件不允许下载"
+    );
+    #[cfg(unix)]
+    {
+        const SYSTEM_ROOTS: &[&str] = &["/etc", "/private/etc", "/proc", "/sys", "/dev"];
+        ensure!(
+            !SYSTEM_ROOTS.iter().any(|root| candidate.starts_with(root)),
+            "系统目录文件不允许下载"
+        );
+    }
+    if let Ok(canonical_home) = home.canonicalize()
+        && candidate.starts_with(&canonical_home)
+    {
+        let thread_brain = home.join("brain").join(thread).canonicalize().ok();
+        let in_thread_brain = thread_brain
+            .as_ref()
+            .is_some_and(|brain| candidate.starts_with(brain));
+        if !in_thread_brain {
+            let reserved = ["brain", "daemon", "conversations", "annotations"]
+                .iter()
+                .any(|dir| candidate.starts_with(canonical_home.join(dir)));
+            let in_workspace = !reserved
+                && workspace_roots
+                    .iter()
+                    .filter_map(|root| root.canonicalize().ok())
+                    .any(|root| candidate.starts_with(&root));
+            ensure!(in_workspace, "不允许访问 Antigravity 内部数据目录");
+        }
+    }
+    Ok(())
+}
+
+fn collect_cited_paths(steps: &[Value], roots: &[PathBuf]) -> HashSet<PathBuf> {
+    let mut cited = HashSet::new();
     let mut push_raw = |raw: &str| {
-        if let Some(path) = parse_reference_path(raw) {
-            if path.is_absolute() {
-                if let Ok(canon) = path.canonicalize() {
-                    cited.push(canon);
-                }
-            } else {
-                for root in workspace_roots {
-                    if let Ok(canon) = root.join(&path).canonicalize() {
-                        cited.push(canon);
-                    }
-                }
-            }
+        if let Some(path) = parse_reference_path(raw)
+            && let Some(canon) = resolve_reference(&path, roots)
+        {
+            cited.insert(canon);
         }
     };
     for step in steps {
@@ -240,15 +337,41 @@ fn collect_cited_paths(steps: &[Value], workspace_roots: &[PathBuf]) -> Vec<Path
                 push_raw(&link);
             }
         }
+        if let Some(user) = step.get("userInput") {
+            let text = user["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let text = if text.is_empty() {
+                user["userResponse"].as_str().unwrap_or("")
+            } else {
+                &text
+            };
+            let (_, attachments) = crate::files::message_attachment_text(text);
+            for item in attachments {
+                if let Some(raw) = item["path"].as_str() {
+                    push_raw(raw);
+                }
+            }
+        }
         for (section, field) in [
             ("viewFile", "absolutePathUri"),
             ("viewFile", "absolutePath"),
+            ("viewFileOutline", "absolutePathUri"),
+            ("viewFileOutline", "absolutePath"),
+            ("viewCodeItem", "file"),
             ("writeToFile", "targetFile"),
             ("writeToFile", "targetFileUri"),
+            ("writeToFile", "path"),
             ("replaceFileContent", "targetFile"),
             ("replaceFileContent", "targetFileUri"),
+            ("replaceFileContent", "path"),
             ("multiReplaceFileContent", "targetFile"),
             ("multiReplaceFileContent", "targetFileUri"),
+            ("multiReplaceFileContent", "path"),
             ("generateImage", "imagePath"),
             ("generateImage", "outputPath"),
             ("generateImage", "artifactPath"),
@@ -264,15 +387,43 @@ fn collect_cited_paths(steps: &[Value], workspace_roots: &[PathBuf]) -> Vec<Path
                 push_raw(raw);
             }
         }
-        if let Some(paths) = step["notifyUser"]["pathsToReview"].as_array() {
-            for item in paths {
-                if let Some(raw) = item.as_str() {
-                    push_raw(raw);
+        if let Some(notify) = step.get("notifyUser") {
+            if let Some(paths) = notify["pathsToReview"].as_array() {
+                for item in paths {
+                    if let Some(raw) = item.as_str() {
+                        push_raw(raw);
+                    }
+                }
+            }
+            for field in ["notificationContent", "message"] {
+                if let Some(text) = notify[field].as_str() {
+                    for link in crate::history_media::links(text) {
+                        push_raw(&link);
+                    }
                 }
             }
         }
     }
     cited
+}
+
+fn resolve_cited_candidate(
+    home: &Path,
+    thread: &str,
+    workspace_roots: &[PathBuf],
+    steps: &[Value],
+    reference: &str,
+) -> Result<PathBuf> {
+    let parsed = parse_reference_path(reference).ok_or(MissingAttachment)?;
+    let roots = search_roots(home, thread, workspace_roots);
+    let candidate = resolve_reference(&parsed, &roots).ok_or(MissingAttachment)?;
+    validate_cited_path(home, thread, workspace_roots, &candidate)?;
+    let cited = collect_cited_paths(steps, &roots);
+    ensure!(
+        cited.contains(&candidate),
+        "文件未在当前 Antigravity 会话中引用"
+    );
+    Ok(candidate)
 }
 
 pub(super) fn download_cited_with_document(
@@ -292,26 +443,16 @@ pub(super) fn download_cited_with_document(
             if !crate::markdown_media::is_markdown_reference(doc_ref) {
                 return Err(direct_err);
             }
-            // Verify the parent Markdown document itself is cited and allowed in this conversation.
-            let _ = download_cited(home, thread, workspace_roots, steps, doc_ref)?;
-            let mut allowed_roots = Vec::new();
-            if let Ok(brain) = home.join("brain").join(thread).canonicalize() {
-                allowed_roots.push(brain);
+            // Verify the parent Markdown document itself is cited and allowed in this conversation (1-hop only).
+            let doc_path = resolve_cited_candidate(home, thread, workspace_roots, steps, doc_ref)?;
+            let mut allowed_roots = search_roots(home, thread, workspace_roots);
+            let canonical_home = home.canonicalize().ok();
+            if let Some(parent) = doc_path.parent()
+                && parent.parent().is_some()
+                && canonical_home.as_deref() != Some(parent)
+            {
+                allowed_roots.push(parent.to_path_buf());
             }
-            for root in workspace_roots {
-                if let Ok(canon) = root.canonicalize() {
-                    allowed_roots.push(canon);
-                }
-            }
-            let parsed_doc = parse_reference_path(doc_ref).ok_or(MissingAttachment)?;
-            let doc_path = if parsed_doc.is_absolute() {
-                parsed_doc.canonicalize().map_err(|_| MissingAttachment)?
-            } else {
-                allowed_roots
-                    .iter()
-                    .find_map(|root| root.join(&parsed_doc).canonicalize().ok())
-                    .ok_or(MissingAttachment)?
-            };
             crate::markdown_media::resolve_document_image(&doc_path, reference, &allowed_roots)
         }
     }
@@ -324,37 +465,7 @@ pub(super) fn download_cited(
     steps: &[Value],
     reference: &str,
 ) -> Result<Source> {
-    let parsed = parse_reference_path(reference).ok_or(MissingAttachment)?;
-    let mut allowed_roots = Vec::new();
-    if let Ok(brain) = home.join("brain").join(thread).canonicalize() {
-        allowed_roots.push(brain);
-    }
-    for root in workspace_roots {
-        if let Ok(canon) = root.canonicalize() {
-            allowed_roots.push(canon);
-        }
-    }
-    let candidate = if parsed.is_absolute() {
-        parsed.canonicalize().map_err(|_| MissingAttachment)?
-    } else {
-        allowed_roots
-            .iter()
-            .find_map(|root| root.join(&parsed).canonicalize().ok())
-            .ok_or(MissingAttachment)?
-    };
-    ensure!(
-        allowed_roots.iter().any(|root| candidate.starts_with(root)),
-        "文件不在当前 Antigravity 会话工作区或制品目录内"
-    );
-    ensure!(
-        !super::export::is_secret_path(&candidate),
-        "敏感文件不允许下载"
-    );
-    let cited = collect_cited_paths(steps, workspace_roots);
-    ensure!(
-        cited.iter().any(|path| path == &candidate),
-        "文件未在当前 Antigravity 会话中引用"
-    );
+    let candidate = resolve_cited_candidate(home, thread, workspace_roots, steps, reference)?;
     let file = File::open(&candidate).map_err(|_| MissingAttachment)?;
     let metadata = file.metadata()?;
     ensure!(

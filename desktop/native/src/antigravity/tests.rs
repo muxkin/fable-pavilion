@@ -579,15 +579,25 @@ fn rich_step_projection_emits_diffs_tool_actions_turn_boundary_and_activity() {
 }
 
 #[test]
-fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_paths() {
+fn workspace_file_references_and_cited_downloads_allow_cited_siblings_and_block_secrets_and_uncited() {
     let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("antigravity-home");
     let workspace = dir.path().join("workspace");
-    let brain = dir.path().join("brain").join("thread-1");
-    let outside = dir.path().join("outside");
+    let brain = home.join("brain").join("thread-1");
+    let other_brain = home.join("brain").join("thread-2");
+    let daemon_dir = home.join("daemon");
+    let sibling = dir.path().join("sibling-media");
+    let sibling_figs = sibling.join("figs");
+    let uploads = dir.path().join("native-uploads").join("u1");
+    let ssh_dir = dir.path().join(".ssh");
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::create_dir_all(workspace.join(".git")).unwrap();
     fs::create_dir_all(&brain).unwrap();
-    fs::create_dir_all(&outside).unwrap();
+    fs::create_dir_all(&other_brain).unwrap();
+    fs::create_dir_all(&daemon_dir).unwrap();
+    fs::create_dir_all(&sibling_figs).unwrap();
+    fs::create_dir_all(&uploads).unwrap();
+    fs::create_dir_all(&ssh_dir).unwrap();
 
     fs::write(workspace.join("src/main.rs"), "fn main() {}\n").unwrap();
     fs::write(workspace.join(".env"), "SECRET=1\n").unwrap();
@@ -595,21 +605,47 @@ fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_pat
     fs::write(workspace.join(".git/config"), "[core]\n").unwrap();
     let report = brain.join("report.md");
     fs::write(&report, "# Report\n").unwrap();
-    let outside_file = outside.join("secret.txt");
-    fs::write(&outside_file, "nope\n").unwrap();
+    let other_thread_note = other_brain.join("other.md");
+    fs::write(&other_thread_note, "# Other thread\n").unwrap();
+    let daemon_file = daemon_dir.join("hub_1234.json");
+    fs::write(&daemon_file, "{}\n").unwrap();
+    let sibling_html = sibling.join("ep00-demo.html");
+    fs::write(&sibling_html, "<!doctype html><h1>Demo</h1>\n").unwrap();
+    let sibling_md = sibling.join("script.md");
+    let sibling_img = sibling_figs.join("chart.png");
+    fs::write(
+        &sibling_img,
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde",
+    )
+    .unwrap();
+    fs::write(&sibling_md, "# Script\n\n![chart](./figs/chart.png)\n").unwrap();
+    let uncited_sibling = sibling.join("uncited.txt");
+    fs::write(&uncited_sibling, "do not serve\n").unwrap();
+    let upload_file = uploads.join("attachment.txt");
+    fs::write(&upload_file, "other device\n").unwrap();
+    let ssh_key = ssh_dir.join("id_ed25519");
+    fs::write(&ssh_key, "PRIVATE KEY\n").unwrap();
 
     let listed = export::list_workspace_files(std::slice::from_ref(&workspace), "");
     assert_eq!(listed, vec![json!({"name":"main.rs","path":"src/main.rs"})]);
 
     let report_uri = url::Url::from_file_path(&report).unwrap();
-    let outside_uri = url::Url::from_file_path(&outside_file).unwrap();
+    let sibling_html_uri = url::Url::from_file_path(&sibling_html).unwrap();
+    let sibling_md_uri = url::Url::from_file_path(&sibling_md).unwrap();
+    let other_thread_uri = url::Url::from_file_path(&other_thread_note).unwrap();
+    let daemon_uri = url::Url::from_file_path(&daemon_file).unwrap();
+    let upload_uri = url::Url::from_file_path(&upload_file).unwrap();
+    let ssh_uri = url::Url::from_file_path(&ssh_key).unwrap();
     let steps = vec![
-        json!({"plannerResponse":{"response":format!("See [report]({report_uri}) and [outside]({outside_uri})")}}),
+        json!({"plannerResponse":{"response":format!(
+            "See [report]({report_uri}), [demo]({sibling_html_uri}), [other]({other_thread_uri}), [daemon]({daemon_uri}), [upload]({upload_uri}), [ssh]({ssh_uri})"
+        )}}),
+        json!({"notifyUser":{"notificationContent":format!("Script at [script]({sibling_md_uri})")}}),
         json!({"type":"CORTEX_STEP_TYPE_VIEW_FILE","viewFile":{"absolutePath":workspace.join("src/main.rs")}}),
         json!({"type":"CORTEX_STEP_TYPE_VIEW_FILE","viewFile":{"absolutePath":workspace.join(".env")}}),
     ];
     let cited_report = media::download_cited(
-        dir.path(),
+        &home,
         "thread-1",
         std::slice::from_ref(&workspace),
         &steps,
@@ -619,35 +655,59 @@ fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_pat
     assert_eq!(cited_report.name, "report.md");
 
     let cited_src = media::download_cited(
-        dir.path(),
+        &home,
         "thread-1",
         std::slice::from_ref(&workspace),
         &steps,
-        "src/main.rs",
+        "src/main.rs:12:4",
     )
     .unwrap();
     assert_eq!(cited_src.name, "main.rs");
 
-    assert!(
-        media::download_cited(
-            dir.path(),
-            "thread-1",
-            std::slice::from_ref(&workspace),
-            &steps,
-            ".env",
-        )
-        .is_err()
-    );
-    assert!(
-        media::download_cited(
-            dir.path(),
-            "thread-1",
-            std::slice::from_ref(&workspace),
-            &steps,
-            &outside_file.to_string_lossy(),
-        )
-        .is_err()
-    );
+    // Cited files created in a sibling directory outside workspace_roots succeed (matching Codex).
+    let cited_sibling = media::download_cited(
+        &home,
+        "thread-1",
+        std::slice::from_ref(&workspace),
+        &steps,
+        &format!("sandbox:{}", sibling_html.to_string_lossy()),
+    )
+    .unwrap();
+    assert_eq!(cited_sibling.name, "ep00-demo.html");
+
+    // 1-hop local image inside a cited sibling Markdown document succeeds.
+    let sibling_nested = media::download_cited_with_document(
+        &home,
+        "thread-1",
+        std::slice::from_ref(&workspace),
+        &steps,
+        "./figs/chart.png",
+        Some(&sibling_md.to_string_lossy()),
+    )
+    .unwrap();
+    assert_eq!(sibling_nested.name, "chart.png");
+
+    // Uncited sibling file, secrets, native-uploads, other thread's brain, and daemon files stay blocked.
+    for blocked in [
+        ".env".to_owned(),
+        uncited_sibling.to_string_lossy().into_owned(),
+        other_thread_note.to_string_lossy().into_owned(),
+        daemon_file.to_string_lossy().into_owned(),
+        upload_file.to_string_lossy().into_owned(),
+        ssh_key.to_string_lossy().into_owned(),
+    ] {
+        assert!(
+            media::download_cited(
+                &home,
+                "thread-1",
+                std::slice::from_ref(&workspace),
+                &steps,
+                &blocked,
+            )
+            .is_err(),
+            "expected {blocked} to be rejected"
+        );
+    }
 
     // Local image referenced only inside report.md succeeds via 1-hop from_document authorization.
     let figs = brain.join("figs");
@@ -661,7 +721,7 @@ fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_pat
     std::fs::write(&report, "# Report\n\n![loss](./figs/loss.png)\n").unwrap();
     assert!(
         media::download_cited(
-            dir.path(),
+            &home,
             "thread-1",
             std::slice::from_ref(&workspace),
             &steps,
@@ -670,7 +730,7 @@ fn workspace_file_references_and_cited_downloads_exclude_secrets_and_outside_pat
         .is_err()
     );
     let nested = media::download_cited_with_document(
-        dir.path(),
+        &home,
         "thread-1",
         std::slice::from_ref(&workspace),
         &steps,

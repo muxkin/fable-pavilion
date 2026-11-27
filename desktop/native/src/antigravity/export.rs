@@ -142,8 +142,9 @@ pub(super) fn workspace_roots(uris: &[Value]) -> Vec<PathBuf> {
 }
 
 pub(super) fn is_secret_path(path: &Path) -> bool {
-    path.components().any(|component| {
-        let name = component.as_os_str().to_string_lossy();
-        name == ".git" || secret_filename(&name)
-    })
+    crate::markdown_media::is_sensitive_path(path)
+        || path.components().any(|component| {
+            let name = component.as_os_str().to_string_lossy();
+            name == ".git" || secret_filename(&name)
+        })
 }

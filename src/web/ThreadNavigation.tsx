@@ -301,29 +301,44 @@ export const ThreadNavigation = tsxComponent(function ThreadNavigation(_props: {
         if (epoch === searchGeneration.current) setSearching(false);
       }
     }
+    const liveThreads = new Map<string, ThreadSummary>();
+    for (const thread of threads) liveThreads.set(thread.id, thread);
+    if (selected) liveThreads.set(selected.id, selected);
     const rows = (items: ThreadSummary[], grouped = false) =>
-      items.map((t) => (
-        <button
-          key={t.id}
-          class={`thread-button ${selected?.id === t.id ? 'selected' : ''}${menu?.thread?.id === t.id ? ' context-active' : ''}`}
-          onClick={() => onSelect(t)}
-          onContextmenu={(event: MouseEvent) => openContextMenu(event, t)}
-        >
-          {grouped && <span class="thread-node" />}
-          <span class="thread-label">
-            <strong>{t.title || '未命名会话'}</strong>
-            <small>
-              {grouped
-                ? (t.cwd ?? '').split(/[\\/]/).filter(Boolean).at(-1) || '本地会话'
-                : (t.projectName ?? '未分类')}
-            </small>
-          </span>
-          <span class="thread-meta">
-            <time>{relativeTime(t.updatedAt)}</time>
-            {t.id === selected?.id && pendingQuestions > 0 && <small class="awaiting">待回答</small>}
-          </span>
-        </button>
-      ));
+      items.map((item) => {
+        const live = liveThreads.get(item.id);
+        const t = live
+          ? {
+              ...item,
+              title: live.title || item.title,
+              updatedAt: Math.max(item.updatedAt ?? 0, live.updatedAt ?? 0),
+              projectId: live.projectId ?? item.projectId,
+              projectName: live.projectName ?? item.projectName,
+            }
+          : item;
+        return (
+          <button
+            key={t.id}
+            class={`thread-button ${selected?.id === t.id ? 'selected' : ''}${menu?.thread?.id === t.id ? ' context-active' : ''}`}
+            onClick={() => onSelect(t)}
+            onContextmenu={(event: MouseEvent) => openContextMenu(event, t)}
+          >
+            {grouped && <span class="thread-node" />}
+            <span class="thread-label">
+              <strong>{t.title || '未命名会话'}</strong>
+              <small>
+                {grouped
+                  ? (t.cwd ?? '').split(/[\\/]/).filter(Boolean).at(-1) || '本地会话'
+                  : (t.projectName ?? '未分类')}
+              </small>
+            </span>
+            <span class="thread-meta">
+              <time>{relativeTime(t.updatedAt)}</time>
+              {t.id === selected?.id && pendingQuestions > 0 && <small class="awaiting">待回答</small>}
+            </span>
+          </button>
+        );
+      });
     const activity = activityState.value;
     const latestByProject = new Map<string, number>();
     for (const thread of threads) {

@@ -1,5 +1,14 @@
 # 更新记录
 
+## 1.0.14 — 2026-11-27
+
+- **Antigravity 工作台稳定性与追问体验优化**：修复空 Markdown 节点触发 Vue `Fragment` 渲染异常以及工作台 `PageBoundary` 无法自动恢复的问题；修复运行中会话通过 `steer` / `queue` 追加消息并被受理后乐观卡片短暂消失的问题（保持「已追加，等待接入 / 已加入队列」状态直至回显）；同步修复侧边栏「项目」分组与搜索结果未跟随实时会话标题更新的问题。
+- **Antigravity 会话引用文件跨目录在线预览**：参考 Codex 插件的会话引用授权模型，放行工作区外同级目录中由当前 Antigravity 会话显式引用的文件及 1 跳 Markdown 本地图片预览，并保持严格的未引用拦截与敏感路径防护。
+
+## Rust 桌面适配器 1.0.14 — 2026-11-27
+
+- **Antigravity 引用文件授权对齐 Codex 策略**：升级 `antigravity/media.rs` 与 `antigravity/export.rs`，采用与 Codex `history_media.rs` 一致的路径规范化（支持 `sandbox:`、`:line:col`、`file://` 与百分号解码，拒绝 `..` 与控制字符）及严格会话引用白名单校验，支持预览同级或外部目录中被当前会话显式引用（含 `plannerResponse`、`notifyUser`、工具读写与附件）的文件及其 Markdown 内嵌 1 跳图片，同时加固 `native-uploads`、`.ssh`/`.gnupg`/`.aws`/`.kube`/`.git`/密钥文件、非当前会话 `brain/` 与 Antigravity 内部数据目录及系统目录防护。
+
 ## 1.0.13 — 2026-11-26
 
 - **前端多格式文件在线预览全面扩充**：在保持现有严格 CSP 与主包体积零增量（按需懒加载）的前提下，将附件预览弹窗扩充至覆盖 Markdown 渲染视图（支持 GFM 表格、KaTeX 公式、Mermaid 图表、代码高亮及源码切换）、PDF 逐页 Canvas 阅读器（缩放/翻页/页码跳转）、Word（`.docx`）语义文档渲染、Excel（`.xlsx`）多工作表表格筛选、PowerPoint（`.pptx`）幻灯片卡片与内嵌图片放大、Jupyter Notebook（`.ipynb`）单元格与图表输出、JSON/JSONL/YAML/TOML 折叠树、ZIP/TAR/GZIP 目录树及包内二次嵌套预览、SVG 棋盘画布与 HTML 零脚本沙箱预览。
