@@ -255,9 +255,10 @@ pub(super) fn board_cited_paths(home: &Path, thread: &str) -> Vec<String> {
             // Also pick up backtick-quoted absolute paths commonly posted on Swarm boards.
             for segment in body.split('`').skip(1).step_by(2) {
                 let candidate = segment.trim();
-                if (candidate.starts_with('/') && !candidate.starts_with("//"))
-                    || candidate.starts_with("file:///")
-                {
+                let is_abs = Path::new(candidate).is_absolute()
+                    && !candidate.starts_with("//")
+                    && !candidate.starts_with("\\\\");
+                if is_abs || candidate.starts_with("file:") {
                     out.push(candidate.to_owned());
                 }
             }
