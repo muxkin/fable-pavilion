@@ -149,6 +149,7 @@ export interface ThreadView extends ThreadSummary {
   pendingRequests: number;
   requests?: ConversationRequest[];
   boundedQuestionAvailable?: boolean;
+  hasSwarm?: boolean;
   mode?: string;
   queuedMessages?: {
     id: string;

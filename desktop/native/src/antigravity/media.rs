@@ -418,7 +418,14 @@ fn resolve_cited_candidate(
     let roots = search_roots(home, thread, workspace_roots);
     let candidate = resolve_reference(&parsed, &roots).ok_or(MissingAttachment)?;
     validate_cited_path(home, thread, workspace_roots, &candidate)?;
-    let cited = collect_cited_paths(steps, &roots);
+    let mut cited = collect_cited_paths(steps, &roots);
+    for raw in super::swarm::board_cited_paths(home, thread) {
+        if let Some(path) = parse_reference_path(&raw)
+            && let Some(canon) = resolve_reference(&path, &roots)
+        {
+            cited.insert(canon);
+        }
+    }
     ensure!(
         cited.contains(&candidate),
         "文件未在当前 Antigravity 会话中引用"

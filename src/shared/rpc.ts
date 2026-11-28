@@ -11,6 +11,8 @@ export const RPC_ROUTES = {
   'control.execute': ['POST', '/api/threads/:id/control'],
   'log.export': ['POST', '/api/threads/:id/export'],
   'references.list': ['GET', '/api/threads/:id/references'],
+  'swarm.read': ['GET', '/api/threads/:id/swarm'],
+  'swarm.member.read': ['GET', '/api/threads/:id/swarm/member'],
   'backends.list': ['GET', '/api/backends'],
   'backends.appearance.read': ['GET', '/api/backends/:id/appearance'],
   'backends.appearance.update': ['POST', '/api/backends/:id/appearance'],

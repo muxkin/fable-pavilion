@@ -37,6 +37,8 @@ const READS: &[&str] = &[
     "models.list",
     "controls.read",
     "references.list",
+    "swarm.read",
+    "swarm.member.read",
     "usage.read",
     "skills.list",
     "plugins.list",

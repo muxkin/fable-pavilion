@@ -31,6 +31,7 @@ import { ModelSettings, modelLabel, settingsUpdate, type ModelUpdate } from './M
 import { RequestCards, type RequestResponse } from './RequestCards';
 import { NewConversation, type NewConversationInput } from './NewConversation';
 import { FolderPickerDialog } from './FolderPickerDialog';
+import { SwarmAccessProvider, type SwarmOpenOptions } from './SwarmAccess';
 import { TranscriptMessages } from './TranscriptMessages';
 import { TurnNavigation } from './TurnNavigation';
 import { ThreadTools } from './ThreadTools';
@@ -79,6 +80,7 @@ import {
 } from './workspace/codex-text-send';
 
 const CodexVoice = defineAsyncComponent(() => import('./CodexVoice'));
+const SwarmPanelDialog = defineAsyncComponent(() => import('./SwarmPanelDialog'));
 const subscribeConnection = (notify: () => void) => deviceSession.onChange(notify);
 const connectionSnapshot = () => deviceSession.online;
 
@@ -139,6 +141,10 @@ export default tsxComponent(function AgentWorkspace(_props: {
   const setNewOpen = writeRef(newOpenState);
   const folderPickerOpenState = shallowRef(false);
   const setFolderPickerOpen = writeRef(folderPickerOpenState);
+  const swarmDialogState = shallowRef<({ open: true } & SwarmOpenOptions) | { open: false }>({
+    open: false,
+  });
+  const setSwarmDialog = writeRef(swarmDialogState);
   const newProjectState = shallowRef<string>();
   const setNewProject = writeRef(newProjectState);
   const newDirtyState = shallowRef(false);
@@ -376,6 +382,7 @@ export default tsxComponent(function AgentWorkspace(_props: {
       setControlRequest(undefined);
       setToolsOpen(false);
       setThreadAction(undefined);
+      setSwarmDialog({ open: false });
     }, [selected?.id, deviceId, backendId]);
     function setSelected(thread: ThreadSummary | null, replace = false) {
       creationRequest.current = undefined;
@@ -1642,6 +1649,25 @@ export default tsxComponent(function AgentWorkspace(_props: {
                   currentModel={messageModel?.id ?? view?.model ?? undefined}
                   currentModelName={messageModel?.name ?? view?.modelName ?? undefined}
                 />
+                {antigravity &&
+                  selected &&
+                  selected.id !== 'new' &&
+                  (view?.hasSwarm ||
+                    messages.some(
+                      (m) => typeof m.text === 'string' && m.text.includes('sidecar://swarm/'),
+                    )) && (
+                    <button
+                      type="button"
+                      class="icon-button"
+                      aria-label="Swarm 协作面板"
+                      aria-haspopup="dialog"
+                      title="Swarm 协作面板"
+                      disabled={!stream}
+                      onClick={() => setSwarmDialog({ open: true })}
+                    >
+                      <Icon name="grid" size={20} />
+                    </button>
+                  )}
                 {active && voiceHost && selected && selected.id !== 'new' && voiceMode && (
                   <button
                     class="icon-button"
@@ -1777,26 +1803,37 @@ export default tsxComponent(function AgentWorkspace(_props: {
                     ) : (
                       <p class="muted center">{stream ? '正在读取会话…' : '连接电脑后可读取会话'}</p>
                     ))}
-                  <TranscriptMessages
-                    agent={{ name: agentName }}
-                    messages={messages}
-                    threadId={selected.id}
-                    activeTurnId={view?.activeTurnId}
-                    requests={view?.requests}
-                    codex={codex}
-                    onFork={
-                      status?.capabilities.forkFromTurn
-                        ? (lastTurnId) =>
-                            setThreadAction({
-                              kind: 'fork',
-                              threadId: selected.id,
-                              title: selected.title,
-                              lastTurnId,
-                            })
-                        : undefined
+                  <SwarmAccessProvider
+                    value={
+                      antigravity && selected && selected.id !== 'new'
+                        ? {
+                            openSwarm: (options) =>
+                              setSwarmDialog({ open: true, ...(options ?? {}) }),
+                          }
+                        : null
                     }
-                    forkDisabled={!stream || busy || pending}
-                  />
+                  >
+                    <TranscriptMessages
+                      agent={{ name: agentName }}
+                      messages={messages}
+                      threadId={selected.id}
+                      activeTurnId={view?.activeTurnId}
+                      requests={view?.requests}
+                      codex={codex}
+                      onFork={
+                        status?.capabilities.forkFromTurn
+                          ? (lastTurnId) =>
+                              setThreadAction({
+                                kind: 'fork',
+                                threadId: selected.id,
+                                title: selected.title,
+                                lastTurnId,
+                              })
+                          : undefined
+                      }
+                      forkDisabled={!stream || busy || pending}
+                    />
+                  </SwarmAccessProvider>
                   {outgoing && !echoed && (
                     <OutgoingMessageCard
                       threadId={selected.id}
@@ -2443,6 +2480,16 @@ export default tsxComponent(function AgentWorkspace(_props: {
             </>
           )}
         </main>
+        {swarmDialogState.value.open && antigravity && selected && selected.id !== 'new' && (
+          <SwarmPanelDialog
+            threadId={selected.id}
+            backendId={backendId}
+            online={stream}
+            initialTab={swarmDialogState.value.tab}
+            initialMember={swarmDialogState.value.member}
+            onClose={() => setSwarmDialog({ open: false })}
+          />
+        )}
         {folderPickerOpenState.value && presentation?.creation?.createProject === true && (
           <FolderPickerDialog
             open={folderPickerOpenState.value}

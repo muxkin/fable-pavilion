@@ -1,5 +1,16 @@
 # 更新记录
 
+## 1.0.15 — 2026-11-28
+
+- **Antigravity Swarm 协作面板与 Worker 轨迹同步查看**：
+  - 自动识别回复末尾的 `sidecar://swarm/...` 入口链接并渲染为可点击的「查看 Swarm 面板」按钮，同时在存在活跃 Swarm 的会话顶栏提供常驻快捷入口。
+  - 新增按需懒加载的 `SwarmPanelDialog`（适配手机端与深浅主题，支持 5 秒自动轮询刷新），完整展示 **公告板（Board）**（Markdown 渲染、`@mention` 高亮、按成员筛选/搜索、长文折叠与引用文件直开预览）、**成员（Members）**（实时状态、角色、模型、步数、未读数与当前活动）与 **总览（Overview）**（目标、工作分组、里程碑与风险）。
+  - 支持点击任意成员卡片或发言者名称，在面板内直接查看该 Worker 的完整只读对话轨迹（含任务派发、工具活动、文件读取与公告板回复）。
+
+## Rust 桌面适配器 1.0.15 — 2026-11-28
+
+- **Antigravity Swarm 只读同步 RPC**：新增 `antigravity/swarm.rs` 与 `swarm.read` / `swarm.member.read` 只读 RPC（在 `plugin_host.rs` 与 `antigravity/adapter.rs` 注册），严格校验当前会话归属并读取 `brain/<thread>/.system_generated/swarm/` 下的 `members.json`、`board.jsonl`、`plan.json`、`view.json` 与成员紧凑轨迹 `transcript.jsonl`，同时将 Swarm 公告板引用的文件纳入当前会话的引用文件白名单校验；查看 Worker 轨迹时仅通过 `members.json` 映射并优先读取实时 daemon 轨迹（降级至 `transcript.jsonl`），完整还原 `post_message` 与工具调用记录。
+
 ## 1.0.14 — 2026-11-27
 
 - **Antigravity 工作台稳定性与追问体验优化**：修复空 Markdown 节点触发 Vue `Fragment` 渲染异常以及工作台 `PageBoundary` 无法自动恢复的问题；修复运行中会话通过 `steer` / `queue` 追加消息并被受理后乐观卡片短暂消失的问题（保持「已追加，等待接入 / 已加入队列」状态直至回显）；同步修复侧边栏「项目」分组与搜索结果未跟随实时会话标题更新的问题。

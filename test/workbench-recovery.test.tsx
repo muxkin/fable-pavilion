@@ -36,6 +36,7 @@ import { DiffView } from '../src/web/DiffView';
 import { TurnNavigation } from '../src/web/TurnNavigation';
 import { PlanRequestCard } from '../src/web/PlanRequestCard';
 import RichMessage from '../src/web/RichMessage';
+import { SwarmAccessProvider } from '../src/web/SwarmAccess';
 import { useChatDrafts } from '../src/web/chat-drafts';
 import { OutgoingMessageCard } from '../src/web/workspace/OutgoingMessageCard';
 import type { ConversationRequest, Message, Operation } from '../src/shared/types';
@@ -344,5 +345,29 @@ describe('workbench PageBoundary recovery and defensive rendering', () => {
       if (prevStorage === undefined) delete (globalThis as { localStorage?: unknown }).localStorage;
       else (globalThis as { localStorage?: unknown }).localStorage = prevStorage;
     }
+  });
+
+  it('renders Antigravity sidecar://swarm/ links as interactive Swarm panel buttons when SwarmAccess is provided', async () => {
+    const sample = '已启动渲染。\n\n[Open the Swarm UI](sidecar://swarm/swarm_board/?auto_open=false)';
+    const withProvider = await renderToString(
+      createSSRApp({
+        render: () => (
+          <SwarmAccessProvider value={{ openSwarm: () => {} }}>
+            <RichMessage text={sample} threadId="t1" />
+          </SwarmAccessProvider>
+        ),
+      }),
+    );
+    expect(withProvider).toContain('sidecar-pill-action');
+    expect(withProvider).toContain('查看 Swarm 面板');
+    expect(withProvider).not.toContain('href="sidecar://');
+
+    const withoutProvider = await renderToString(
+      createSSRApp({
+        render: () => <RichMessage text={sample} threadId="t1" />,
+      }),
+    );
+    expect(withoutProvider).toContain('sidecar-pill-readonly');
+    expect(withoutProvider).not.toContain('href="sidecar://');
   });
 });

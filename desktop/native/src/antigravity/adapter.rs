@@ -37,6 +37,14 @@ impl Adapter for Backend {
             )
             .await
             .map(Some),
+            "swarm.read" => swarm::read_swarm(self, thread_id(params)?).await.map(Some),
+            "swarm.member.read" => swarm::read_member(
+                self,
+                thread_id(params)?,
+                query["member"].as_str().context("Swarm 成员名无效")?,
+            )
+            .await
+            .map(Some),
             "skills.list" => {
                 let skills = if query["creation"] == "1" || params["id"] == "new" {
                     self.creation_skills(query["projectId"].as_str()).await?

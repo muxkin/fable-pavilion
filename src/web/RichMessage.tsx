@@ -23,6 +23,7 @@ import {
 import type { LocalAssetResolver, SiblingAttachment } from './AttachmentAccess';
 import { FileAttachment as LocalLink } from './FileAttachment';
 import { Media } from './MediaAttachment';
+import { useSwarmAccess } from './SwarmAccess';
 import { useVisible } from './useVisible';
 import { highlightedCode } from './highlighted-code';
 import { SourceText } from './SourceText';
@@ -192,6 +193,7 @@ export default tsxComponent(function RichMessage(_props: {
 }) {
   const mathState = shallowRef<typeof import('./math-plugins').default | null>(null);
   const setMath = writeRef(mathState);
+  const swarmAccess = useSwarmAccess();
   const readComponents = memoizeRender();
   const readParts = memoizeRender();
   const watchMath = watchRender();
@@ -250,6 +252,28 @@ export default tsxComponent(function RichMessage(_props: {
           if (node?.children.some((child) => child.type === 'element' && child.tagName === 'img'))
             return <>{children}</>;
           if (!href) return <span>{children}</span>;
+          if (href.startsWith('sidecar://')) {
+            const swarmHandler = swarmAccess.value;
+            if (href.startsWith('sidecar://swarm/') && swarmHandler) {
+              return (
+                <button
+                  type="button"
+                  class="sidecar-pill sidecar-pill-action"
+                  onClick={() => swarmHandler.openSwarm()}
+                >
+                  <Icon name="grid" size={15} />
+                  <span>查看 Swarm 面板</span>
+                </button>
+              );
+            }
+            return (
+              <span class="sidecar-pill sidecar-pill-readonly" title="仅支持在电脑端 Antigravity 打开">
+                <Icon name="grid" size={14} />
+                <span>{children}</span>
+                <small>桌面端面板</small>
+              </span>
+            );
+          }
           const resolvedHref = documentPath ? resolveMarkdownAssetPath(href, documentPath) : href;
           if (/\.(mp4|webm|mov|m4v|mp3|wav|m4a|ogg|flac)(?:[?#]|$)/i.test(resolvedHref))
             return (
@@ -309,7 +333,7 @@ export default tsxComponent(function RichMessage(_props: {
           return h('div', { class: 'markdown-paragraph' }, Array.isArray(children) ? children : [children]);
         },
       }),
-      [threadId, streaming, documentPath, siblingFiles, resolveLocalAsset],
+      [threadId, streaming, documentPath, siblingFiles, resolveLocalAsset, swarmAccess.value],
     );
     function renderText(value: string) {
       return renderMarkdown(markdownSource(value), {
@@ -324,7 +348,9 @@ export default tsxComponent(function RichMessage(_props: {
           ? [[math.rehypeKatex, { throwOnError: false, strict: 'ignore', trust: false }], math.rehypeMathCopy]
           : [],
         urlTransform: (url) =>
-          localReference(url) || isBareRelativeAssetPath(url) ? url : defaultUrlTransform(url),
+          url.startsWith('sidecar://') || localReference(url) || isBareRelativeAssetPath(url)
+            ? url
+            : defaultUrlTransform(url),
         components,
       });
     }

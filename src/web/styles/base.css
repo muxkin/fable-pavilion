@@ -497,6 +497,35 @@ h2 {
 .markdown-paragraph {
   margin: 0.55em 0;
 }
+.sidecar-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1.3;
+  vertical-align: middle;
+}
+.sidecar-pill-action {
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: var(--soft);
+  color: var(--on-soft);
+  font-weight: 500;
+  cursor: pointer;
+}
+.sidecar-pill-action:hover {
+  border-color: var(--accent);
+}
+.sidecar-pill-readonly {
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  color: var(--muted);
+}
+.sidecar-pill-readonly small {
+  font-size: 11px;
+  opacity: 0.8;
+}
 .markdown h1,
 .markdown h2,
 .markdown h3 {

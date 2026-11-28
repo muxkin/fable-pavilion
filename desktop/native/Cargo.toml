@@ -1,6 +1,6 @@
 [package]
 name = "agent-space-native"
-version = "1.0.14"
+version = "1.0.15"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"

@@ -29,6 +29,7 @@ mod projection;
 mod queue;
 mod steps;
 mod stream;
+mod swarm;
 #[cfg(test)]
 mod tests;
 use projection::*;
@@ -706,6 +707,9 @@ impl Backend {
         thread["historyStepCount"] = json!(page.total_steps());
         thread["revision"] = json!(0);
         thread["mode"] = json!("default");
+        if swarm::has_swarm(&self.home, id) {
+            thread["hasSwarm"] = json!(true);
+        }
         let observations = if live_tail {
             let status = page.status();
             let active = matches!(
@@ -899,6 +903,9 @@ impl Backend {
                 .unwrap_or("Antigravity 模型")
         );
         view["mode"] = json!("default");
+        if swarm::has_swarm(&self.home, id) {
+            view["hasSwarm"] = json!(true);
+        }
         view["pendingRequests"] = json!(requests.len());
         view["requests"] = json!(requests);
         view["canSend"] = json!(!self.read_only && idle && requests.is_empty());

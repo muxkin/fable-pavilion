@@ -1150,3 +1150,148 @@ fn subagent_url_permission_view_and_reply_preserve_subagent_target() {
         })
     );
 }
+
+#[test]
+fn swarm_reads_board_members_plan_and_projects_worker_trajectories() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("antigravity-home");
+    let coord_id = "356b9efd-de22-4e3c-82e5-2324e19f3eff";
+    let worker_id = "2be52ae3-3689-455d-bb19-448a338cb959";
+    let swarm_dir = home
+        .join("brain")
+        .join(coord_id)
+        .join(".system_generated")
+        .join("swarm");
+    let worker_logs = home
+        .join("brain")
+        .join(worker_id)
+        .join(".system_generated")
+        .join("logs");
+    let sibling = dir.path().join("sibling");
+    fs::create_dir_all(&swarm_dir).unwrap();
+    fs::create_dir_all(&worker_logs).unwrap();
+    fs::create_dir_all(&sibling).unwrap();
+
+    let board_file = sibling.join("script.md");
+    fs::write(&board_file, "# Script\n").unwrap();
+
+    fs::write(
+        swarm_dir.join("swarm.json"),
+        json!({"version":1,"backend":"local","swarm_id":coord_id,"created_at":"2026-11-28T00:36:35Z"})
+            .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        swarm_dir.join("members.json"),
+        json!({
+            "title": "EP01 导演审查",
+            "members": {
+                "coordinator": {
+                    "conversation_id": coord_id,
+                    "role": "coordinator",
+                    "applied_model": "gemini-4-neon-high",
+                    "wake_mode": "working",
+                    "last_read_seq": 2,
+                    "killed": false
+                },
+                "opus-director": {
+                    "conversation_id": worker_id,
+                    "role": "worker",
+                    "applied_model": "claude-opus-5-5-medium",
+                    "wake_mode": "mentions",
+                    "last_read_seq": 1,
+                    "killed": false
+                },
+                "retired-worker": {
+                    "conversation_id": "11111111-1111-4111-8111-111111111111",
+                    "role": "worker",
+                    "applied_model": "gemini-4-flash",
+                    "killed": true
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        swarm_dir.join("plan.json"),
+        json!({
+            "goal": {"title": "EP01 重构", "line": "产出可执行分镜方案"},
+            "tasks": {"opus-director": "审查脚本与画面"},
+            "threads": [{"id": "t1", "title": "视觉重构", "goal": "统一色板与镜头", "tasks": ["opus-director"]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        swarm_dir.join("board.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"seq":1,"agent":"coordinator","text":format!("@opus-director 请审阅 `{}`", board_file.display()),"time":"2026-11-28 08:36:37","kind":"brief"}),
+            json!({"seq":2,"agent":"opus-director","text":"@coordinator [done] 审阅完成，建议统一色板。","time":"2026-11-28 08:38:52"})
+        ),
+    )
+    .unwrap();
+    fs::write(
+        worker_logs.join("transcript.jsonl"),
+        format!(
+            "{}\n{}\n{}\n",
+            json!({"step_index":0,"type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-28T00:36:37Z","content":"<SYSTEM_MESSAGE>content=You have just started. Brief #1</SYSTEM_MESSAGE>"}),
+            json!({"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-28T00:38:50Z","tool_calls":[{"name":"post_message","args":{"text":"\"@coordinator [done] 审阅完成\""}},{"name":"swarm_wait","args":{"since":"1"}}]}),
+            json!({"step_index":2,"type":"GENERIC","status":"DONE","created_at":"2026-11-28T00:38:52Z","content":"Waiting for a message that calls on you by name."})
+        ),
+    )
+    .unwrap();
+
+    assert!(swarm::has_swarm(&home, coord_id));
+    let snapshot = swarm::read_swarm_sync(&home, coord_id).unwrap();
+    let s = &snapshot["swarm"];
+    assert_eq!(s["title"], "EP01 导演审查");
+    assert_eq!(s["head"], 2);
+    assert_eq!(s["counts"]["working"], 1);
+    assert_eq!(s["counts"]["waiting"], 1);
+    assert_eq!(s["counts"]["killed"], 1);
+    assert_eq!(s["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(s["messages"][0]["mentions"], json!(["opus-director"]));
+    let members = s["members"].as_array().unwrap();
+    assert_eq!(members[0]["name"], "coordinator");
+    assert_eq!(members[0]["status"], "working");
+    assert_eq!(members[1]["name"], "opus-director");
+    assert_eq!(members[1]["status"], "waiting");
+    assert_eq!(members[1]["unread"], 1);
+    assert_eq!(members[1]["task"], "审查脚本与画面");
+    assert_eq!(members[2]["name"], "retired-worker");
+    assert_eq!(members[2]["status"], "killed");
+
+    // Board-cited file is downloadable via media::download_cited with empty main steps.
+    let downloaded = media::download_cited(
+        &home,
+        coord_id,
+        &[],
+        &[],
+        &board_file.to_string_lossy(),
+    )
+    .unwrap();
+    assert_eq!(downloaded.name, "script.md");
+
+    // Worker transcript fallback projects assignment + posted message + swarm_wait cleanly.
+    let tx_messages = swarm::project_worker_transcript_jsonl(&home, worker_id);
+    assert_eq!(tx_messages.len(), 3);
+    assert_eq!(tx_messages[0]["role"], "user");
+    assert_eq!(tx_messages[1]["role"], "assistant");
+    assert_eq!(tx_messages[1]["text"], "@coordinator [done] 审阅完成");
+    assert_eq!(tx_messages[2]["role"], "tool");
+
+    // Worker daemon steps project post_message tool calls as assistant messages.
+    let daemon_steps = vec![
+        json!({"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE","status":"CORTEX_STEP_STATUS_DONE","systemMessage":{"content":"<SYSTEM_MESSAGE>content=[swarm] new board message #1</SYSTEM_MESSAGE>"}}),
+        json!({"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE","status":"CORTEX_STEP_STATUS_DONE","plannerResponse":{"toolCalls":[{"name":"post_message","argumentsJson":"{\"text\":\"@coordinator 已完成诊断\"}"}]}}),
+        json!({"type":"CORTEX_STEP_TYPE_GENERIC","status":"CORTEX_STEP_STATUS_DONE","metadata":{"toolCall":{"name":"swarm_wait"}}}),
+    ];
+    let projected = swarm::project_worker_daemon_steps(&daemon_steps);
+    assert_eq!(projected.len(), 2);
+    assert_eq!(projected[0]["role"], "assistant");
+    assert_eq!(projected[0]["text"], "@coordinator 已完成诊断");
+    assert_eq!(projected[1]["role"], "tool");
+    assert_eq!(projected[1]["text"], "等待公告板新消息");
+}
